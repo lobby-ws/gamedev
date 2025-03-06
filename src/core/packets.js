@@ -27,6 +27,8 @@ const names = [
   'ping',
   'pong',
   'blueprintRemoved',
+  'evmConnect',
+  'evmDisconnect',
 ]
 
 const byName = {}

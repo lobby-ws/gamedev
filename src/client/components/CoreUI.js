@@ -15,8 +15,26 @@ import { ControlPriorities } from '../../core/extras/ControlPriorities'
 // import { AppsPane } from './AppsPane'
 // import { MenuMain } from './MenuMain'
 // import { MenuApp } from './MenuApp'
-import { ChevronDoubleUpIcon, HandIcon } from './Icons'
 import { Sidebar } from './Sidebar'
+
+import { AppsPane } from './AppsPane'
+import { MenuMain } from './MenuMain'
+import { MenuApp } from './MenuApp'
+import {
+  ChatIcon,
+  ChevronDoubleUpIcon,
+  CircleUpIcon,
+  HandIcon,
+  KeyboardIcon,
+  MenuIcon,
+  MicIcon,
+  MicOffIcon,
+  SettingsIcon,
+  VRIcon,
+} from './Icons'
+
+import { EVM } from './EVM'
+import { HyperliquidPane } from './HyperliquidPane'
 
 export function CoreUI({ world }) {
   const ref = useRef()
@@ -30,6 +48,7 @@ export function CoreUI({ world }) {
   const [disconnected, setDisconnected] = useState(false)
   const [apps, setApps] = useState(false)
   const [kicked, setKicked] = useState(null)
+  const [hyperliquid, setHyperliquid] = useState(false)
   useEffect(() => {
     world.on('ready', setReady)
     world.on('player', setPlayer)
@@ -41,6 +60,7 @@ export function CoreUI({ world }) {
     world.on('avatar', setAvatar)
     world.on('kick', setKicked)
     world.on('disconnect', setDisconnected)
+    world.on('hyperliquid', setHyperliquid)
     return () => {
       world.off('ready', setReady)
       world.off('player', setPlayer)
@@ -52,6 +72,7 @@ export function CoreUI({ world }) {
       world.off('avatar', setAvatar)
       world.off('kick', setKicked)
       world.off('disconnect', setDisconnected)
+      world.off('hyperliquid', setHyperliquid)
     }
   }, [])
 
@@ -68,6 +89,19 @@ export function CoreUI({ world }) {
     elem.addEventListener('touchstart', onEvent)
     // elem.addEventListener('touchmove', onEvent)
     // elem.addEventListener('touchend', onEvent)
+
+    // Add keyboard listener for SHIFT+P
+    const handleKeyDown = (e) => {
+      // Check for Shift+P
+      if (e.shiftKey && e.code === 'KeyP') {
+        world.ui.toggleHyperliquid()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+    }
   }, [])
   useEffect(() => {
     document.documentElement.style.fontSize = `${16 * world.prefs.ui}px`
@@ -101,11 +135,13 @@ export function CoreUI({ world }) {
       {avatar && <AvatarPane key={avatar.hash} world={world} info={avatar} />}
       {/* {apps && <AppsPane world={world} close={() => world.ui.toggleApps()} />} */}
       {!ready && <LoadingOverlay world={world} />}
+      {hyperliquid && <HyperliquidPane world={world} close={() => world.ui.toggleHyperliquid()} />}
       {kicked && <KickedOverlay code={kicked} />}
       {ready && isTouch && <TouchBtns world={world} />}
       {ready && isTouch && <TouchStick world={world} />}
       {confirm && <Confirm options={confirm} />}
       <div id='core-ui-portal' />
+      {ready && <EVM world={world} />}
     </div>
   )
 }

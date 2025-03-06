@@ -75,7 +75,9 @@
     "@fastify/websocket": "^11.0.1",
     "@firebolt-dev/css": "^0.4.3",
     "@firebolt-dev/jsx": "^0.4.3",
+    "@nktkas/hyperliquid": "^0.17.4",
     "@pixiv/three-vrm": "^3.3.3",
+    "@tanstack/react-query": "^5.65.1",
     "better-sqlite3": "^11.7.2",
     "d3": "^7.9.0",
     "dotenv-flow": "^4.1.0",
@@ -105,6 +107,8 @@
     "source-map-support": "^0.5.21",
     "three": "^0.173.0",
     "three-mesh-bvh": "^0.8.3",
+    "viem": "2.x",
+    "wagmi": "^2.14.9",
     "yoga-layout": "^3.2.1"
   },
   "devDependencies": {

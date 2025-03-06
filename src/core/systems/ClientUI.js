@@ -16,6 +16,10 @@ export class ClientUI extends System {
       reticleSuppressors: 0,
     }
     this.lastAppPane = 'app'
+    this.visible = true
+    this.menu = null
+    this.apps = false
+    this.hyperliquid = false
     this.control = null
   }
 
@@ -114,5 +118,12 @@ export class ClientUI extends System {
   destroy() {
     this.control?.release()
     this.control = null
+  }
+
+  toggleHyperliquid(value) {
+    value = isBoolean(value) ? value : !this.hyperliquid
+    if (this.hyperliquid === value) return
+    this.hyperliquid = value
+    this.world.emit('hyperliquid', this.hyperliquid)
   }
 }

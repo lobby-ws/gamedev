@@ -32,7 +32,7 @@ const clientHtmlDest = path.join(rootDir, 'build/public/index.html')
     format: 'esm',
     bundle: true,
     treeShaking: true,
-    minify: !dev,
+    minify: true,
     sourcemap: true,
     metafile: true,
     jsx: 'automatic',

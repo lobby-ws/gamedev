@@ -233,6 +233,13 @@ export class PlayerRemote extends Entity {
       this.data.rank = data.rank
       this.world.emit('rank', { playerId: this.data.id, rank: this.data.rank })
     }
+    if (data.hasOwnProperty('evm')) {
+      this.data.evm = data.evm
+      this.world.events.emit('evm', { playerId: this.data.id, evm: data.evm })
+    }
+    if (data.hasOwnProperty('roles')) {
+      this.data.roles = data.roles
+    }
     if (avatarChanged) {
       this.applyAvatar()
     }

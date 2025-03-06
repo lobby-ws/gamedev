@@ -237,6 +237,10 @@ export class Apps extends System {
         const newUrl = window.location.pathname + '?' + urlParams.toString()
         window.history.replaceState({}, '', newUrl)
       },
+      evm() {
+        const { world: _, ...evm } = world.evm
+        return evm
+      },
     }
   }
 

@@ -57,6 +57,9 @@ export function createPlayerProxy(entity, player) {
     get destroyed() {
       return !!player.destroyed
     },
+    get evm() {
+      return player.data.evm
+    },
     teleport(position, rotationY) {
       if (player.data.owner === world.network.id) {
         // if player is local we can set directly
@@ -193,5 +196,11 @@ export function createPlayerProxy(entity, player) {
         voiceMod = world.livekit.removeModifier(voiceMod)
       }
     },
+    connect() {
+      return world.evm.connect(player)
+    },
+    disconnect() {
+      return world.evm.disconnect(player)
+    }
   }
 }
