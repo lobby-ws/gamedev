@@ -48,6 +48,6 @@ export function createClientWorld() {
   world.register('wind', Wind)
   world.register('xr', XR)
   world.register('ai', ClientAI)
-  world.register('appServerClient', AppServerClient)
+  if(env.PUBLIC_DEV_SERVER) world.register('appServerClient', AppServerClient)
   return world
 }
