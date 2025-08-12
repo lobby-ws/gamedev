@@ -1,8 +1,17 @@
 {
-  "name": "hyperfy",
+  "name": "@drama-haus/hyperfy",
   "version": "0.16.0",
   "type": "module",
-  "main": "index.js",
+  "main": "index.node.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./index.node.js",
+      "require": "./index.node.js",
+      "default": "./index.node.js"
+    },
+    "./app-runtime": "./types/app-runtime.d.ts"
+  },
   "homepage": "https://github.com/hyperfy-xyz/hyperfy#readme",
   "bugs": {
     "url": "https://github.com/hyperfy-xyz/hyperfy/issues"
@@ -21,6 +30,7 @@
     "dev": "node scripts/build.mjs --dev",
     "build": "node scripts/build.mjs",
     "start": "node build/index.js",
+    "prepublishOnly": "npm run build",
     "world:backup": "node scripts/backup-world.mjs",
     "viewer:dev": "node scripts/build-viewer.mjs --dev",
     "viewer:build": "node scripts/build-viewer.mjs",
