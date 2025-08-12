@@ -13,8 +13,12 @@ export class AssetsLocal {
     this.dir = path.join(worldDir, '/assets')
     // ensure assets directory exists
     await fs.ensureDir(this.dir)
-    // copy over built-in assets
-    await fs.copy(path.join(rootDir, 'src/world/assets'), this.dir)
+    // copy over built-in assets (from published build)
+    const builtInAssetsDir = path.join(rootDir, 'build/world/assets')
+    const exists = await fs.pathExists(builtInAssetsDir)
+    if (exists) {
+      await fs.copy(builtInAssetsDir, this.dir)
+    }
   }
 
   async upload(file) {

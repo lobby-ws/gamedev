@@ -323,10 +323,10 @@ const migrations = [
         .where('key', 'settings')
         .update({ value: JSON.stringify(settings) })
     }
-    // otherwise create the scene app from src/world/scene.hyp
+    // otherwise create the scene app from built-in scene
     else {
       const rootDir = path.join(__dirname, '../')
-      const scenePath = path.join(rootDir, 'src/world/scene.hyp')
+      const scenePath = path.join(rootDir, 'build/world/scene.hyp')
       const buffer = await fs.readFile(scenePath)
       const file = new File([buffer], 'scene.hyp', {
         type: 'application/octet-stream',

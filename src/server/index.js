@@ -19,7 +19,8 @@ import { collections } from './collections'
 import { cleaner } from './cleaner'
 
 const rootDir = path.join(__dirname, '../')
-const worldDir = path.join(rootDir, process.env.WORLD)
+// Resolve world directory relative to the consumer project (cwd), not the package root
+const worldDir = path.resolve(process.cwd(), process.env.WORLD)
 const port = process.env.PORT
 
 // check envs

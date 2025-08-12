@@ -14,8 +14,11 @@ class Collections {
     this.dir = path.join(worldDir, '/collections')
     // ensure collections directory exists
     await fs.ensureDir(this.dir)
-    // copy over built-in collections
-    await fs.copy(path.join(rootDir, 'src/world/collections'), this.dir)
+    // copy over built-in collections (from published build)
+    const builtInCollectionsDir = path.join(rootDir, 'build/world/collections')
+    if (await fs.pathExists(builtInCollectionsDir)) {
+      await fs.copy(builtInCollectionsDir, this.dir)
+    }
     // ensure all collections apps are installed
     let folderNames = fs.readdirSync(this.dir)
     folderNames.sort((a, b) => {
