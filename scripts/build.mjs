@@ -153,3 +153,27 @@ let spawn
     await serverCtx.rebuild()
   }
 }
+
+/**
+ * Build Node Client
+ */
+
+{
+  const nodeClientCtx = await esbuild.context({
+    entryPoints: ['src/node-client/index.js'],
+    outfile: 'build/world-node-client.js',
+    platform: 'node',
+    format: 'esm',
+    bundle: true,
+    treeShaking: true,
+    minify: false,
+    sourcemap: true,
+    packages: 'external',
+    loader: {},
+  })
+  if (dev) {
+    await nodeClientCtx.watch()
+  } else {
+    await nodeClientCtx.rebuild()
+  }
+}

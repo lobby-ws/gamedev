@@ -10,4 +10,11 @@ export async function server(env = {}) {
   await import('./build/index.js')
 }
 
+export async function nodeClient() {
+  const { createNodeClientWorld } = await import('./build/world-node-client.js')
+  return createNodeClientWorld()
+}
+
+export { createNodeClientWorld } from './build/world-node-client.js'
+
 

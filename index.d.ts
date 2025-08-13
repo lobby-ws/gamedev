@@ -5,6 +5,8 @@
 export * as AppRuntime from './types/app-runtime'
 
 export declare function server(env?: Record<string, string | number | boolean | undefined>): Promise<void>
+export declare function nodeClient(): Promise<unknown>
+export { createNodeClientWorld } from './src/core/createNodeClientWorld'
 /*
  Hyperfy App Runtime TypeScript bindings
 
