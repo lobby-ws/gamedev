@@ -8,7 +8,7 @@ on:
       - 'main'
       - 'dev'
       - 'solana-v2'
-      - 'ai'
+      - 'plat'
     tags:
       - 'v*.*.*'
 
