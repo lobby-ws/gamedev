@@ -2,7 +2,6 @@ import * as THREE from './extras/three'
 import EventEmitter from 'eventemitter3'
 
 import { Settings } from './systems/Settings'
-import { Collections } from './systems/Collections'
 import { Apps } from './systems/Apps'
 import { Anchors } from './systems/Anchors'
 import { Avatars } from './systems/Avatars'
@@ -37,7 +36,6 @@ export class World extends EventEmitter {
     this.rig.add(this.camera)
 
     this.register('settings', Settings)
-    this.register('collections', Collections)
     this.register('apps', Apps)
     this.register('anchors', Anchors)
     this.register('avatars', Avatars)

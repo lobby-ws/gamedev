@@ -15,7 +15,6 @@ import { createServerWorld } from '../core/createServerWorld'
 import { getDB } from './db'
 import { Storage } from './Storage'
 import { assets } from './assets'
-import { collections } from './collections'
 import { cleaner } from './cleaner'
 
 const rootDir = path.join(__dirname, '../')
@@ -69,9 +68,6 @@ await fs.ensureDir(worldDir)
 // init assets
 await assets.init({ rootDir, worldDir })
 
-// init collections
-await collections.init({ rootDir, worldDir })
-
 // init db
 const db = await getDB({ worldDir })
 
@@ -89,7 +85,6 @@ await world.init({
   db,
   assets,
   storage,
-  collections: collections.list,
 })
 
 fastify.register(cors)

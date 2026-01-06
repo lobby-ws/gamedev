@@ -3,7 +3,6 @@ import moment from 'moment'
 import fs from 'fs-extra'
 import path from 'path'
 import { uuid } from '../core/utils'
-import { importApp } from '../core/extras/appTools'
 import { defaults } from 'lodash-es'
 import { Ranks } from '../core/extras/ranks'
 import { assets } from './assets'
@@ -269,7 +268,7 @@ const migrations = [
     const now = moment().toISOString()
     const record = await db('config').where('key', 'settings').first()
     const settings = JSON.parse(record?.value || '{}')
-    // if using a settings model, we'll convert this to the scene app
+    // if using a settings model, we'll convert this to scene app
     if (settings.model) {
       // create blueprint and entity
       const blueprintId = '$scene' // singleton
@@ -317,38 +316,52 @@ const migrations = [
         updatedAt: now,
       }
       await db('entities').insert(entity)
-      // clear the settings.model
+      // clear settings.model
       delete settings.model
       await db('config')
         .where('key', 'settings')
         .update({ value: JSON.stringify(settings) })
     }
-    // otherwise create the scene app from built-in scene
+    // otherwise create the default scene from built-in assets
     else {
-      const rootDir = path.join(__dirname, '../')
-      const scenePath = path.join(rootDir, 'build/world/scene.hyp')
-      const buffer = await fs.readFile(scenePath)
-      const file = new File([buffer], 'scene.hyp', {
-        type: 'application/octet-stream',
-      })
-      const app = await importApp(file)
-      // upload the asset
-      for (const asset of app.assets) {
-        const filename = asset.url.split('asset://').pop()
-        const buffer = Buffer.from(await asset.file.arrayBuffer())
-        const file = new File([buffer], filename, {
-          type: 'application/octet-stream',
-        })
-        // const dest = path.join(worldDir, '/assets', filename)
-        // await fs.writeFile(dest, buffer)
-        await assets.upload(file)
-      }
-      // create blueprint and entity
-      app.blueprint.id = '$scene' // singleton
-      app.blueprint.preload = true
+      const blueprintId = '$scene'
       const blueprint = {
-        id: app.blueprint.id,
-        data: JSON.stringify(app.blueprint),
+        id: blueprintId,
+        data: JSON.stringify({
+          id: blueprintId,
+          version: 0,
+          name: 'The Meadow',
+          image: null,
+          author: null,
+          url: null,
+          desc: null,
+          model: 'asset://builtin/1aa2381f0fb25ba2fe9941b62eb2cad1fe2c77afa0316df8828ba5eba5d3d374.glb',
+          script: 'asset://builtin/3d64ad66587920f17ac09164b42c4e441d5fc1320bc597bd1e6fd0b7a3631994.js',
+          props: {
+            hour: 4,
+            period: 'pm',
+            intensity: 1,
+            sky: {
+              url: 'asset://builtin/179d71586e675efc4af04185e1b2d3e6b7f4a5b707f1ef5e9b6497c5660ecab7.webp',
+            },
+            hdr: {
+              url: 'asset://builtin/62db0ffbcea86b5e9ba23fb5da739b160e8abfd3b390235fed5ac436750e1e2e.hdr',
+            },
+            verticalRotation: 40,
+            horizontalRotation: 230,
+            rotationY: 0,
+            fogNear: 450,
+            fogFar: 1000,
+            fogColor: '#97b4d3',
+          },
+          preload: true,
+          public: false,
+          locked: false,
+          frozen: false,
+          unique: false,
+          scene: true,
+          disabled: false,
+        }),
         createdAt: now,
         updatedAt: now,
       }

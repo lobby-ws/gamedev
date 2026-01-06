@@ -8,7 +8,6 @@ import { System } from './System'
 import { hashFile } from '../utils-client'
 import { uuid } from '../utils'
 import { ControlPriorities } from '../extras/ControlPriorities'
-import { importApp } from '../extras/appTools'
 import { DEG2RAD, RAD2DEG } from '../extras/general'
 import { createNode } from '../extras/createNode'
 
@@ -1049,107 +1048,12 @@ export class ClientBuilder extends System {
       this.toggle(true)
     }
     const transform = this.getSpawnTransform()
-    if (ext === 'hyp') {
-      this.addApp(file, transform)
-    }
     if (ext === 'glb') {
       this.addModel(file, transform)
     }
     if (ext === 'vrm') {
       const canPlace = this.canBuild()
       this.addAvatar(file, transform, canPlace)
-    }
-  }
-
-  async addApp(file, transform) {
-    const info = await importApp(file)
-    for (const asset of info.assets) {
-      this.world.loader.insert(asset.type, asset.url, asset.file)
-    }
-    // if scene, update existing scene
-    if (info.blueprint.scene) {
-      const confirmed = await this.world.ui.confirm({
-        title: 'Scene',
-        message: 'Do you want to replace your current scene with this one?',
-        confirmText: 'Replace',
-        cancelText: 'Cancel',
-      })
-      if (!confirmed) return
-      // modify blueprint optimistically
-      const blueprint = this.world.blueprints.getScene()
-      const change = {
-        id: blueprint.id,
-        version: blueprint.version + 1,
-        name: info.blueprint.name,
-        image: info.blueprint.image,
-        author: info.blueprint.author,
-        url: info.blueprint.url,
-        desc: info.blueprint.desc,
-        model: info.blueprint.model,
-        script: info.blueprint.script,
-        props: info.blueprint.props,
-        preload: info.blueprint.preload,
-        public: info.blueprint.public,
-        locked: info.blueprint.locked,
-        frozen: info.blueprint.frozen,
-        unique: info.blueprint.unique,
-        scene: info.blueprint.scene,
-        disabled: info.blueprint.disabled,
-      }
-      this.world.blueprints.modify(change)
-      // upload assets
-      const promises = info.assets.map(asset => {
-        return this.world.network.upload(asset.file)
-      })
-      await Promise.all(promises)
-      // publish blueprint change for all
-      this.world.network.send('blueprintModified', change)
-      return
-    }
-    // otherwise spawn the app
-    const blueprint = {
-      id: uuid(),
-      version: 0,
-      name: info.blueprint.name,
-      image: info.blueprint.image,
-      author: info.blueprint.author,
-      url: info.blueprint.url,
-      desc: info.blueprint.desc,
-      model: info.blueprint.model,
-      script: info.blueprint.script,
-      props: info.blueprint.props,
-      preload: info.blueprint.preload,
-      public: info.blueprint.public,
-      locked: info.blueprint.locked,
-      frozen: info.blueprint.frozen,
-      unique: info.blueprint.unique,
-      scene: info.blueprint.scene,
-      disabled: info.blueprint.disabled,
-    }
-    const data = {
-      id: uuid(),
-      type: 'app',
-      blueprint: blueprint.id,
-      position: transform.position,
-      quaternion: transform.quaternion,
-      scale: [1, 1, 1],
-      mover: null,
-      uploader: this.world.network.id,
-      pinned: false,
-      state: {},
-    }
-    this.world.blueprints.add(blueprint, true)
-    const app = this.world.entities.add(data, true)
-    const promises = info.assets.map(asset => {
-      return this.world.network.upload(asset.file)
-    })
-    try {
-      await Promise.all(promises)
-      app.onUploaded()
-    } catch (err) {
-      console.error('failed to upload .hyp assets')
-      console.error(err)
-      app.destroy()
     }
   }
 

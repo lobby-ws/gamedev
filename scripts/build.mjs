@@ -125,14 +125,6 @@ let spawn
             const builtInAssetsSrc = path.join(rootDir, 'src/world/assets')
             const builtInAssetsDest = path.join(rootDir, 'build/world/assets')
             await fs.copy(builtInAssetsSrc, builtInAssetsDest)
-            // copy built-in world collections to build folder to be publishable
-            const builtInCollectionsSrc = path.join(rootDir, 'src/world/collections')
-            const builtInCollectionsDest = path.join(rootDir, 'build/world/collections')
-            await fs.copy(builtInCollectionsSrc, builtInCollectionsDest)
-            // copy built-in scene.hyp to build folder to be publishable
-            const builtInSceneSrc = path.join(rootDir, 'src/world/scene.hyp')
-            const builtInSceneDest = path.join(rootDir, 'build/world/scene.hyp')
-            await fs.copy(builtInSceneSrc, builtInSceneDest)
             // start the server or stop here
             if (dev) {
               // (re)start server

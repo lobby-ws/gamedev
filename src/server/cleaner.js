@@ -1,5 +1,4 @@
 import { assets } from './assets'
-import { collections } from './collections'
 
 class Cleaner {
   constructor() {
@@ -57,10 +56,6 @@ class Cleaner {
           await db('blueprints').where('id', blueprint.id).delete()
         }
       }
-    }
-    // append all collection blueprints so we keep all their assets
-    for (const blueprint of collections.blueprints) {
-      blueprints.add(blueprint)
     }
     // keep all assets associated with remaining active blueprints
     for (const blueprint of blueprints) {

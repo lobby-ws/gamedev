@@ -53,9 +53,9 @@ import {
 import { HintContext, HintProvider } from './Hint'
 import { useFullscreen } from './useFullscreen'
 import { downloadFile } from '../../core/extras/downloadFile'
-import { exportApp } from '../../core/extras/appTools'
 import { hashFile } from '../../core/utils-client'
 import { cloneDeep, isArray, isBoolean, sortBy } from 'lodash-es'
+import { BUILTIN_APP_TEMPLATES } from '../builtinApps'
 import { storage } from '../../core/storage'
 import { ScriptEditor } from './ScriptEditor'
 import { NodeHierarchy } from './NodeHierarchy'
@@ -210,7 +210,7 @@ export function Sidebar({ world, ui }) {
               >
                 <CirclePlusIcon size='1.25rem' />
               </Btn>
-              {env.PUBLIC_DEV_SERVER === 'true' && 
+              {env.PUBLIC_DEV_SERVER === 'true' && (
                 <Btn
                   active={activePane === 'devtools'}
                   suspended={ui.pane === 'devtools' && !activePane}
@@ -218,7 +218,7 @@ export function Sidebar({ world, ui }) {
                 >
                   <SettingsIcon size='1.25rem' />
                 </Btn>
-              }
+              )}
             </Section>
           )}
           {ui.app && (
@@ -906,12 +906,11 @@ function Apps({ world, hidden }) {
 }
 
 function Add({ world, hidden }) {
-  // note: multiple collections are supported by the engine but for now we just use the 'default' collection.
-  const collection = world.collections.get('default')
+  const templates = BUILTIN_APP_TEMPLATES
   const span = 4
   const gap = '0.5rem'
-  const add = blueprint => {
-    blueprint = cloneDeep(blueprint)
+  const add = template => {
+    const blueprint = cloneDeep(template)
     blueprint.id = uuid()
     blueprint.version = 0
     world.blueprints.add(blueprint, true)
@@ -993,15 +992,15 @@ function Add({ world, hidden }) {
         </div>
         <div className='add-content noscrollbar'>
           <div className='add-items'>
-            {collection.blueprints.map(blueprint => (
-              <div className='add-item' key={blueprint.id} onClick={() => add(blueprint)}>
+            {templates.map(template => (
+              <div className='add-item' key={template.name} onClick={() => add(template)}>
                 <div
                   className='add-item-image'
                   css={css`
-                    background-image: url(${world.resolveURL(blueprint.image?.url)});
+                    background-image: url(${world.resolveURL(template.image?.url)});
                   `}
                 ></div>
-                <div className='add-item-name'>{blueprint.name}</div>
+                <div className='add-item-name'>{template.name}</div>
               </div>
             ))}
           </div>
@@ -1044,7 +1043,7 @@ function App({ world, hidden }) {
         setIsLinked(false)
       }
     }
-    
+
     // Check if app is already linked on mount
     const checkInitialLinkStatus = async () => {
       try {
@@ -1054,9 +1053,9 @@ function App({ world, hidden }) {
         console.warn('Failed to check initial link status:', error)
       }
     }
-    
+
     checkInitialLinkStatus()
-    
+
     world.blueprints.on('modify', onModify)
     world.on('app_linked', onAppLinked)
     world.on('app_unlinked', onAppUnlinked)
@@ -1066,15 +1065,7 @@ function App({ world, hidden }) {
       world.off('app_unlinked', onAppUnlinked)
     }
   }, [])
-  const frozen = blueprint.frozen // TODO: disable code editor, model change, metadata editing, flag editing etc
-  const download = async () => {
-    try {
-      const file = await exportApp(app.blueprint, world.loader.loadFile)
-      downloadFile(file)
-    } catch (err) {
-      console.error(err)
-    }
-  }
+  const frozen = blueprint.frozen
   const changeModel = async file => {
     if (!file) return
     const ext = file.name.split('.').pop().toLowerCase()
@@ -1112,9 +1103,9 @@ function App({ world, hidden }) {
 
   const toggleLinkToDevServer = async () => {
     if (isLinking) return
-    
+
     setIsLinking(true)
-    
+
     try {
       if (isLinked) {
         await world.appServerClient.unlinkApps(blueprint.name)
@@ -1220,14 +1211,6 @@ function App({ world, hidden }) {
       >
         <div className='app-head'>
           <div className='app-title'>{app.blueprint.name}</div>
-          <div
-            className='app-btn'
-            onClick={download}
-            onPointerEnter={() => setHint('Download this app')}
-            onPointerLeave={() => setHint(null)}
-          >
-            <DownloadIcon size='1.125rem' />
-          </div>
           <div
             className={`app-btn ${isLinked ? 'active' : ''} ${isLinking ? 'loading' : ''}`}
             onClick={toggleLinkToDevServer}

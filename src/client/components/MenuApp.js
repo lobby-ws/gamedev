@@ -15,7 +15,6 @@ import {
   MenuLine,
   MenuSection,
 } from './Menu'
-import { exportApp } from '../../core/extras/appTools'
 import { downloadFile } from '../../core/extras/downloadFile'
 import { hashFile } from '../../core/utils-client'
 import { isArray, isBoolean } from 'lodash-es'
@@ -86,14 +85,6 @@ function MenuAppIndex({ world, app, blueprint, pop, push }) {
     // broadcast blueprint change to server + other clients
     world.network.send('blueprintModified', { id: blueprint.id, version, model: url })
   }
-  const download = async () => {
-    try {
-      const file = await exportApp(app.blueprint, world.loader.loadFile)
-      downloadFile(file)
-    } catch (err) {
-      console.error(err)
-    }
-  }
   return (
     <>
       <MenuItemFields world={world} app={app} blueprint={blueprint} />
@@ -110,7 +101,6 @@ function MenuAppIndex({ world, app, blueprint, pop, push }) {
       {!frozen && <MenuItemBtn label='Code' hint='View or edit the code for this app' onClick={world.ui.toggleCode} />}
       {!frozen && <MenuItemBtn label='Flags' hint='View/edit flags for this app' onClick={() => push('flags')} nav />}
       <MenuItemBtn label='Metadata' hint='View/edit metadata for this app' onClick={() => push('metadata')} nav />
-      <MenuItemBtn label='Download' hint='Download this app as a .hyp file' onClick={download} />
       <MenuItemBtn
         label='Delete'
         hint='Delete this app instance'
