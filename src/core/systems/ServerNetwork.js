@@ -13,6 +13,8 @@ const PING_RATE = 10 // seconds
 const defaultSpawn = '{ "position": [0, 0, 0], "quaternion": [0, 0, 0, 1] }'
 
 const HEALTH_MAX = 100
+const PUBLIC_ADMIN_URL =
+  process.env.PUBLIC_ADMIN_URL || (process.env.PUBLIC_API_URL || '').replace(/\/api\/?$/, '')
 
 /**
  * Server Network System
@@ -283,6 +285,7 @@ export class ServerNetwork extends System {
         serverTime: performance.now(),
         assetsUrl: process.env.ASSETS_BASE_URL,
         apiUrl: process.env.PUBLIC_API_URL,
+        adminUrl: PUBLIC_ADMIN_URL,
         maxUploadSize: process.env.PUBLIC_MAX_UPLOAD_SIZE,
         settings: this.world.settings.serialize(),
         chat: this.world.chat.serialize(),
@@ -427,30 +430,38 @@ export class ServerNetwork extends System {
     this.world.livekit.setMuted(data.playerId, data.muted)
   }
 
-  onBlueprintAdded = (socket, blueprint) => {
-    if (!socket.player.isBuilder()) {
-      return console.error('player attempted to add blueprint without builder permission')
-    }
+  applyBlueprintAdded(blueprint, { ignoreNetworkId } = {}) {
     this.world.blueprints.add(blueprint)
-    this.send('blueprintAdded', blueprint, socket.id)
+    this.send('blueprintAdded', blueprint, ignoreNetworkId)
     this.dirtyBlueprints.add(blueprint.id)
+    return { ok: true }
+  }
+
+  applyBlueprintModified(change, { ignoreNetworkId } = {}) {
+    const blueprint = this.world.blueprints.get(change.id)
+    if (!blueprint) {
+      return { ok: false, error: 'not_found' }
+    }
+    // if new version is greater than current version, allow it
+    if (change.version > blueprint.version) {
+      this.world.blueprints.modify(change)
+      this.send('blueprintModified', change, ignoreNetworkId)
+      this.dirtyBlueprints.add(change.id)
+      return { ok: true }
+    }
+    // otherwise, send a revert back to client, because someone else modified before them
+    if (ignoreNetworkId) {
+      this.sendTo(ignoreNetworkId, 'blueprintModified', blueprint)
+    }
+    return { ok: false, error: 'version_mismatch', current: blueprint }
+  }
+
+  onBlueprintAdded = (socket, blueprint) => {
+    console.warn('rejected blueprint add over /ws', { playerId: socket.id })
   }
 
   onBlueprintModified = (socket, data) => {
-    if (!socket.player.isBuilder()) {
-      return console.error('player attempted to modify blueprint without builder permission')
-    }
-    const blueprint = this.world.blueprints.get(data.id)
-    // if new version is greater than current version, allow it
-    if (data.version > blueprint.version) {
-      this.world.blueprints.modify(data)
-      this.send('blueprintModified', data, socket.id)
-      this.dirtyBlueprints.add(data.id)
-    }
-    // otherwise, send a revert back to client, because someone else modified before them
-    else {
-      socket.send('blueprintModified', blueprint)
-    }
+    console.warn('rejected blueprint modify over /ws', { playerId: socket.id })
   }
 
   onEntityAdded = (socket, data) => {

@@ -90,14 +90,11 @@ export class ServerAI extends System {
     const url = `asset://${filename}`
     // upload new script asset
     await this.assets.upload(file)
-    // modify blueprint locally
+    // apply blueprint change
     const blueprint = this.world.blueprints.get(blueprintId)
     const version = blueprint.version + 1
     const change = { id: blueprint.id, version, script: url }
-    this.world.blueprints.modify(change)
-    // send blueprint update to all clients
-    this.world.network.send('blueprintModified', change)
-    this.world.network.dirtyBlueprints.add(change.id)
+    this.world.network.applyBlueprintModified(change)
   }
 
   async edit({ blueprintId, appId, prompt }) {
@@ -126,14 +123,11 @@ export class ServerAI extends System {
     const url = `asset://${filename}`
     // upload new script asset
     await this.assets.upload(file)
-    // modify blueprint locally
+    // apply blueprint change
     blueprint = this.world.blueprints.get(blueprintId)
     const version = blueprint.version + 1
     const change = { id: blueprint.id, version, script: url }
-    this.world.blueprints.modify(change)
-    // send blueprint update to all clients
-    this.world.network.send('blueprintModified', change)
-    this.world.network.dirtyBlueprints.add(change.id)
+    this.world.network.applyBlueprintModified(change)
   }
 
   async fix({ blueprintId, appId, error }) {
@@ -161,27 +155,21 @@ export class ServerAI extends System {
     const url = `asset://${filename}`
     // upload new script asset
     await this.assets.upload(file)
-    // modify blueprint locally
+    // apply blueprint change
     blueprint = this.world.blueprints.get(blueprintId)
     const version = blueprint.version + 1
     const change = { id: blueprint.id, version, script: url }
-    this.world.blueprints.modify(change)
-    // send blueprint update to all clients
-    this.world.network.send('blueprintModified', change)
-    this.world.network.dirtyBlueprints.add(change.id)
+    this.world.network.applyBlueprintModified(change)
   }
 
   async classify({ blueprintId, prompt }) {
     // get a name for the object
     const name = await this.client.classify(prompt)
-    // update name
+    // apply name change
     const blueprint = this.world.blueprints.get(blueprintId)
     const version = blueprint.version + 1
     const change = { id: blueprint.id, version, name }
-    this.world.blueprints.modify(change)
-    // send blueprint update to all clients
-    this.world.network.send('blueprintModified', change)
-    this.world.network.dirtyBlueprints.add(change.id)
+    this.world.network.applyBlueprintModified(change)
   }
 }
 

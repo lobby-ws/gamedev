@@ -483,7 +483,7 @@ export function FieldFile({ world, label, hint, kind: kindName, value, onChange 
     }
     setLoading(newValue)
     // upload file
-    await world.network.upload(file)
+    await world.admin.upload(file)
     // ignore if new value/upload
     if (nRef.current !== n) return
     // cache file locally so this client can insta-load it

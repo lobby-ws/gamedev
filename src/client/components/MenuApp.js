@@ -81,9 +81,9 @@ function MenuAppIndex({ world, app, blueprint, pop, push }) {
     const version = blueprint.version + 1
     world.blueprints.modify({ id: blueprint.id, version, model: url })
     // upload model
-    await world.network.upload(file)
+    await world.admin.upload(file)
     // broadcast blueprint change to server + other clients
-    world.network.send('blueprintModified', { id: blueprint.id, version, model: url })
+    world.admin.blueprintModify({ id: blueprint.id, version, model: url }, { ignoreNetworkId: world.network.id })
   }
   return (
     <>
@@ -131,7 +131,7 @@ function MenuItemFields({ world, app, blueprint }) {
     const version = bp.version + 1
     world.blueprints.modify({ id, version, props: newProps })
     // broadcast blueprint change to server + other clients
-    world.network.send('blueprintModified', { id, version, props: newProps })
+    world.admin.blueprintModify({ id, version, props: newProps }, { ignoreNetworkId: world.network.id })
   }
   return fields.map(field => (
     <MenuItemField key={field.key} world={world} props={props} field={field} value={props[field.key]} modify={modify} />
@@ -272,7 +272,7 @@ function MenuAppFlags({ world, app, blueprint, pop, push }) {
     if (blueprint[key] === value) return
     const version = blueprint.version + 1
     world.blueprints.modify({ id: blueprint.id, version, [key]: value })
-    world.network.send('blueprintModified', { id: blueprint.id, version, [key]: value })
+    world.admin.blueprintModify({ id: blueprint.id, version, [key]: value }, { ignoreNetworkId: world.network.id })
   }
   return (
     <>
@@ -304,7 +304,7 @@ function MenuAppMetadata({ world, app, blueprint, pop, push }) {
   const set = async (key, value) => {
     const version = blueprint.version + 1
     world.blueprints.modify({ id: blueprint.id, version, [key]: value })
-    world.network.send('blueprintModified', { id: blueprint.id, version, [key]: value })
+    world.admin.blueprintModify({ id: blueprint.id, version, [key]: value }, { ignoreNetworkId: world.network.id })
   }
   return (
     <>

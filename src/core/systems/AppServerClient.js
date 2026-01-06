@@ -161,7 +161,7 @@ export class AppServerClient extends System {
 
     // Upload script to server
     if (this.world.network) {
-      await this.world.network.upload(file)
+      await this.world.admin.upload(file)
     }
 
     return url
@@ -176,7 +176,7 @@ export class AppServerClient extends System {
       if (cachedFile) {
         // Upload to server if network available
         if (this.world.network) {
-          await this.world.network.upload(cachedFile)
+          await this.world.admin.upload(cachedFile)
         }
         return assetUrl
       } else {
@@ -201,7 +201,7 @@ export class AppServerClient extends System {
 
             // Upload to server
             if (this.world.network) {
-              await this.world.network.upload(file)
+              await this.world.admin.upload(file)
             }
 
             return assetUrl
@@ -278,7 +278,7 @@ export class AppServerClient extends System {
             } else {
               const cachedFile = this.world.loader.getFile(value.url)
               if (cachedFile && this.world.network) {
-                await this.world.network.upload(cachedFile)
+                await this.world.admin.upload(cachedFile)
               }
             }
 
@@ -325,10 +325,10 @@ export class AppServerClient extends System {
     const entityData = this.createEntityData(appData)
 
     // Add blueprint and entity locally
-    this.world.blueprints.add(blueprint, true)
+    this.world.blueprints.add(blueprint)
     this.world.entities.add(entityData, true)
 
-    this.world.network.send('blueprintAdded', blueprint)
+    this.world.admin.blueprintAdd(blueprint, { ignoreNetworkId: this.world.network.id })
     this.world.network.send('entityAdded', entityData)
 
     // Auto-link this freshly deployed app to the dev server
@@ -364,7 +364,7 @@ export class AppServerClient extends System {
 
     // Send to main server via network system
     if (this.world.network) {
-      this.world.network.send('blueprintModified', updatedBlueprint)
+      this.world.admin.blueprintModify(updatedBlueprint, { ignoreNetworkId: this.world.network.id })
     }
 
   }

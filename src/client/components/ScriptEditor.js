@@ -35,9 +35,9 @@ export function ScriptEditor({ app, onHandle }) {
     const version = blueprint.version + 1
     world.blueprints.modify({ id: blueprint.id, version, script: url })
     // upload script
-    await world.network.upload(file)
+    await world.admin.upload(file)
     // broadcast blueprint change to server + other clients
-    world.network.send('blueprintModified', { id: blueprint.id, version, script: url })
+    world.admin.blueprintModify({ id: blueprint.id, version, script: url }, { ignoreNetworkId: world.network.id })
   }
   const saveState = () => {
     if (editor) {

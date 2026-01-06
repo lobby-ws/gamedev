@@ -280,7 +280,8 @@ export class ClientBuilder extends System {
           scene: entity.blueprint.scene,
           disabled: entity.blueprint.disabled,
         }
-        this.world.blueprints.add(blueprint, true)
+        this.world.blueprints.add(blueprint)
+        this.world.admin.blueprintAdd(blueprint, { ignoreNetworkId: this.world.network.id })
         // assign new blueprint
         entity.modify({ blueprint: blueprint.id })
         this.world.network.send('entityModified', { id: entity.data.id, blueprint: blueprint.id })
@@ -395,7 +396,8 @@ export class ClientBuilder extends System {
             scene: entity.blueprint.scene,
             disabled: entity.blueprint.disabled,
           }
-          this.world.blueprints.add(blueprint, true)
+          this.world.blueprints.add(blueprint)
+          this.world.admin.blueprintAdd(blueprint, { ignoreNetworkId: this.world.network.id })
           blueprintId = blueprint.id
         }
         const data = {
@@ -1086,7 +1088,8 @@ export class ClientBuilder extends System {
       disabled: false,
     }
     // register blueprint
-    this.world.blueprints.add(blueprint, true)
+    this.world.blueprints.add(blueprint)
+    this.world.admin.blueprintAdd(blueprint, { ignoreNetworkId: this.world.network.id })
     // spawn the app moving
     // - mover: follows this clients cursor until placed
     // - uploader: other clients see a loading indicator until its fully uploaded
@@ -1104,7 +1107,7 @@ export class ClientBuilder extends System {
     }
     const app = this.world.entities.add(data, true)
     // upload the glb
-    await this.world.network.upload(file)
+    await this.world.admin.upload(file)
     // mark as uploaded so other clients can load it in
     app.onUploaded()
   }
@@ -1146,7 +1149,8 @@ export class ClientBuilder extends System {
           disabled: false,
         }
         // register blueprint
-        this.world.blueprints.add(blueprint, true)
+        this.world.blueprints.add(blueprint)
+        this.world.admin.blueprintAdd(blueprint, { ignoreNetworkId: this.world.network.id })
         // spawn the app moving
         // - mover: follows this clients cursor until placed
         // - uploader: other clients see a loading indicator until its fully uploaded
@@ -1164,7 +1168,7 @@ export class ClientBuilder extends System {
         }
         const app = this.world.entities.add(data, true)
         // upload the glb
-        await this.world.network.upload(file)
+        await this.world.admin.upload(file)
         // mark as uploaded so other clients can load it in
         app.onUploaded()
       },
@@ -1178,7 +1182,7 @@ export class ClientBuilder extends System {
         player.modify({ avatar: url, sessionAvatar: null })
         // upload
         try {
-          await this.world.network.upload(file)
+          await this.world.admin.upload(file)
         } catch (err) {
           console.error(err)
           // revert

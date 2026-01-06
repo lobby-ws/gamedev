@@ -55,7 +55,8 @@ export class ClientAI extends System {
       unique: false,
       disabled: false,
     }
-    this.world.blueprints.add(blueprint, true)
+    this.world.blueprints.add(blueprint)
+    this.world.admin.blueprintAdd(blueprint, { ignoreNetworkId: this.world.network.id })
     const transform = this.world.builder.getSpawnTransform(true)
     this.world.builder.toggle(true)
     this.world.builder.control.pointer.lock()

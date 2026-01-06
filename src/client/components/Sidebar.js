@@ -913,7 +913,8 @@ function Add({ world, hidden }) {
     const blueprint = cloneDeep(template)
     blueprint.id = uuid()
     blueprint.version = 0
-    world.blueprints.add(blueprint, true)
+    world.blueprints.add(blueprint)
+    world.admin.blueprintAdd(blueprint, { ignoreNetworkId: world.network.id })
     const transform = world.builder.getSpawnTransform(true)
     world.builder.toggle(true)
     world.builder.control.pointer.lock()
@@ -1083,16 +1084,16 @@ function App({ world, hidden }) {
     const version = blueprint.version + 1
     world.blueprints.modify({ id: blueprint.id, version, model: url })
     // upload model
-    await world.network.upload(file)
+    await world.admin.upload(file)
     // broadcast blueprint change to server + other clients
-    world.network.send('blueprintModified', { id: blueprint.id, version, model: url })
+    world.admin.blueprintModify({ id: blueprint.id, version, model: url }, { ignoreNetworkId: world.network.id })
   }
   const toggleKey = async (key, value) => {
     value = isBoolean(value) ? value : !blueprint[key]
     if (blueprint[key] === value) return
     const version = blueprint.version + 1
     world.blueprints.modify({ id: blueprint.id, version, [key]: value })
-    world.network.send('blueprintModified', { id: blueprint.id, version, [key]: value })
+    world.admin.blueprintModify({ id: blueprint.id, version, [key]: value }, { ignoreNetworkId: world.network.id })
   }
   const togglePinned = () => {
     const pinned = !app.data.pinned
@@ -1411,7 +1412,7 @@ function AppFields({ world, app, blueprint }) {
     const version = bp.version + 1
     world.blueprints.modify({ id, version, props: newProps })
     // broadcast blueprint change to server + other clients
-    world.network.send('blueprintModified', { id, version, props: newProps })
+    world.admin.blueprintModify({ id, version, props: newProps }, { ignoreNetworkId: world.network.id })
   }
   return fields.map(field => (
     <AppField key={field.key} world={world} props={props} field={field} value={props[field.key]} modify={modify} />
@@ -1697,7 +1698,7 @@ function Meta({ world, hidden }) {
   const set = async (key, value) => {
     const version = blueprint.version + 1
     world.blueprints.modify({ id: blueprint.id, version, [key]: value })
-    world.network.send('blueprintModified', { id: blueprint.id, version, [key]: value })
+    world.admin.blueprintModify({ id: blueprint.id, version, [key]: value }, { ignoreNetworkId: world.network.id })
   }
   return (
     <Pane hidden={hidden}>

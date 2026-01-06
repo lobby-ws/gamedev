@@ -16,6 +16,7 @@ import { getDB } from './db'
 import { Storage } from './Storage'
 import { assets } from './assets'
 import { cleaner } from './cleaner'
+import { admin } from './admin'
 
 const rootDir = path.join(__dirname, '../')
 // Resolve world directory relative to the consumer project (cwd), not the package root
@@ -131,6 +132,7 @@ fastify.register(multipart, {
 })
 fastify.register(ws)
 fastify.register(worldNetwork)
+fastify.register(admin, { world, assets })
 
 const publicEnvs = {}
 for (const key in process.env) {
@@ -148,24 +150,11 @@ fastify.get('/env.js', async (req, reply) => {
 })
 
 fastify.post('/api/upload', async (req, reply) => {
-  const mp = await req.file()
-  // collect into buffer
-  const chunks = []
-  for await (const chunk of mp.file) {
-    chunks.push(chunk)
-  }
-  const buffer = Buffer.concat(chunks)
-  // convert to file
-  const file = new File([buffer], mp.filename, {
-    type: mp.mimetype || 'application/octet-stream',
-  })
-  // upload
-  await assets.upload(file)
+  return reply.code(403).send({ error: 'admin_required', message: 'Use /admin/upload' })
 })
 
 fastify.get('/api/upload-check', async (req, reply) => {
-  const exists = await assets.exists(req.query.filename)
-  return { exists }
+  return reply.code(403).send({ error: 'admin_required', message: 'Use /admin/upload-check' })
 })
 
 fastify.get('/health', async (request, reply) => {

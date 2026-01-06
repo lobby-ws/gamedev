@@ -142,6 +142,7 @@ export class ClientNetwork extends System {
     this.world.entities.deserialize(data.entities)
     this.world.livekit?.deserialize(data.livekit)
     storage.set('authToken', data.authToken)
+    this.world.admin?.onSnapshot?.(data)
   }
 
   onSettingsModified = data => {

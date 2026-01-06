@@ -6,6 +6,7 @@ import { ClientPointer } from './systems/ClientPointer'
 import { ClientPrefs } from './systems/ClientPrefs'
 import { ClientControls } from './systems/ClientControls'
 import { ClientNetwork } from './systems/ClientNetwork'
+import { AdminClient } from './systems/AdminClient'
 import { ClientLoader } from './systems/ClientLoader'
 import { ClientGraphics } from './systems/ClientGraphics'
 import { ClientEnvironment } from './systems/ClientEnvironment'
@@ -32,6 +33,7 @@ export function createClientWorld() {
   world.register('prefs', ClientPrefs)
   world.register('controls', ClientControls)
   world.register('network', ClientNetwork)
+  world.register('admin', AdminClient)
   world.register('loader', ClientLoader)
   world.register('graphics', ClientGraphics)
   world.register('environment', ClientEnvironment)

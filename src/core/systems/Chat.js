@@ -59,6 +59,9 @@ export class Chat extends System {
     if (callback) {
       return callback({ playerId, cmd, value, args })
     }
+    if (cmd === 'admin' && value) {
+      this.world.admin?.setCode?.(value)
+    }
     if (cmd !== 'admin') {
       this.world.events.emit('command', { playerId, cmd, value, args })
     }

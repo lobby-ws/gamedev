@@ -135,7 +135,7 @@ export function AppsList({ world, query, perf, refresh, setRefresh }) {
     const version = blueprint.version + 1
     const disabled = !blueprint.disabled
     world.blueprints.modify({ id: blueprint.id, version, disabled })
-    world.network.send('blueprintModified', { id: blueprint.id, version, disabled })
+    world.admin.blueprintModify({ id: blueprint.id, version, disabled }, { ignoreNetworkId: world.network.id })
     setRefresh(n => n + 1)
   }
   return (
