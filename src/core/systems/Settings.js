@@ -82,7 +82,11 @@ export class Settings extends System {
   set(key, value, broadcast) {
     this.modify(key, value)
     if (broadcast) {
-      this.world.network.send('settingsModified', { key, value })
+      if (this.world.network.isClient && this.world.admin?.settingsModify) {
+        this.world.admin.settingsModify({ key, value }, { ignoreNetworkId: this.world.network.id })
+      } else {
+        this.world.network.send('settingsModified', { key, value })
+      }
     }
   }
 }

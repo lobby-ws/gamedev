@@ -326,10 +326,10 @@ export class AppServerClient extends System {
 
     // Add blueprint and entity locally
     this.world.blueprints.add(blueprint)
-    this.world.entities.add(entityData, true)
+    this.world.entities.add(entityData)
 
     this.world.admin.blueprintAdd(blueprint, { ignoreNetworkId: this.world.network.id })
-    this.world.network.send('entityAdded', entityData)
+    this.world.admin.entityAdd(entityData, { ignoreNetworkId: this.world.network.id })
 
     // Auto-link this freshly deployed app to the dev server
     try {

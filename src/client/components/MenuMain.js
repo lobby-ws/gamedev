@@ -313,14 +313,14 @@ function MenuMainWorld({ world, pop, push }) {
         label='Set Spawn'
         hint='Sets the location players spawn to the location you are currently standing'
         onClick={() => {
-          world.network.send('spawnModified', 'set')
+          world.admin.spawnModify('set', { networkId: world.network.id })
         }}
       />
       <MenuItemBtn
         label='Clear Spawn'
         hint='Resets the spawn point to origin'
         onClick={() => {
-          world.network.send('spawnModified', 'clear')
+          world.admin.spawnModify('clear', { networkId: world.network.id })
         }}
       />
     </Menu>

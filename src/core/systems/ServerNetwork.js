@@ -456,34 +456,24 @@ export class ServerNetwork extends System {
     return { ok: false, error: 'version_mismatch', current: blueprint }
   }
 
-  onBlueprintAdded = (socket, blueprint) => {
-    console.warn('rejected blueprint add over /ws', { playerId: socket.id })
-  }
-
-  onBlueprintModified = (socket, data) => {
-    console.warn('rejected blueprint modify over /ws', { playerId: socket.id })
-  }
-
-  onEntityAdded = (socket, data) => {
-    if (!socket.player.isBuilder()) {
-      return console.error('player attempted to add entity without builder permission')
-    }
+  applyEntityAdded(data, { ignoreNetworkId } = {}) {
     const entity = this.world.entities.add(data)
-    this.send('entityAdded', data, socket.id)
-    if (entity.isApp) this.dirtyApps.add(entity.data.id)
+    this.send('entityAdded', data, ignoreNetworkId)
+    if (entity?.isApp) {
+      this.dirtyApps.add(entity.data.id)
+    }
+    return { ok: true }
   }
 
-  onEntityModified = async (socket, data) => {
+  applyEntityModified = async (data, { ignoreNetworkId } = {}) => {
     const entity = this.world.entities.get(data.id)
-    if (!entity) return console.error('onEntityModified: no entity found', data)
+    if (!entity) return { ok: false, error: 'not_found' }
     entity.modify(data)
-    this.send('entityModified', data, socket.id)
+    this.send('entityModified', data, ignoreNetworkId)
     if (entity.isApp) {
-      // mark for saving
       this.dirtyApps.add(entity.data.id)
     }
     if (entity.isPlayer) {
-      // persist player name and avatar changes
       const changes = {}
       let changed
       if (data.hasOwnProperty('name')) {
@@ -498,6 +488,73 @@ export class ServerNetwork extends System {
         await this.db('users').where('id', entity.data.userId).update(changes)
       }
     }
+    return { ok: true }
+  }
+
+  applyEntityRemoved(id, { ignoreNetworkId } = {}) {
+    const entity = this.world.entities.get(id)
+    this.world.entities.remove(id)
+    this.send('entityRemoved', id, ignoreNetworkId)
+    if (entity?.isApp) {
+      this.dirtyApps.add(id)
+    }
+    return { ok: true }
+  }
+
+  applySettingsModified(data, { ignoreNetworkId } = {}) {
+    this.world.settings.set(data.key, data.value)
+    this.send('settingsModified', data, ignoreNetworkId)
+    return { ok: true }
+  }
+
+  applySpawnModified = async ({ op, networkId }) => {
+    if (op === 'set') {
+      const player = this.world.entities.get(networkId)
+      if (!player || !player.isPlayer) return { ok: false, error: 'player_not_found' }
+      this.spawn = { position: player.data.position.slice(), quaternion: player.data.quaternion.slice() }
+    } else if (op === 'clear') {
+      this.spawn = { position: [0, 0, 0], quaternion: [0, 0, 0, 1] }
+    } else {
+      return { ok: false, error: 'invalid_op' }
+    }
+    const value = JSON.stringify(this.spawn)
+    await this.db('config')
+      .insert({
+        key: 'spawn',
+        value,
+      })
+      .onConflict('key')
+      .merge({
+        value,
+      })
+    return { ok: true }
+  }
+
+  onBlueprintAdded = (socket, blueprint) => {
+    console.warn('rejected blueprint add over /ws', { playerId: socket.id })
+  }
+
+  onBlueprintModified = (socket, data) => {
+    console.warn('rejected blueprint modify over /ws', { playerId: socket.id })
+  }
+
+  onEntityAdded = (socket, data) => {
+    console.warn('rejected entity add over /ws', { playerId: socket.id })
+  }
+
+  onEntityModified = async (socket, data) => {
+    const entity = this.world.entities.get(data.id)
+    if (!entity) return console.error('onEntityModified: no entity found', data)
+    if (!entity.isPlayer) {
+      return console.warn('rejected entity modify over /ws', { playerId: socket.id, entityId: data.id })
+    }
+    if (entity.data.id !== socket.id) {
+      return console.warn('rejected entity modify over /ws for non-owner', {
+        playerId: socket.id,
+        entityId: data.id,
+      })
+    }
+    await this.applyEntityModified(data, { ignoreNetworkId: socket.id })
   }
 
   onEntityEvent = (socket, event) => {
@@ -507,49 +564,15 @@ export class ServerNetwork extends System {
   }
 
   onEntityRemoved = (socket, id) => {
-    if (!socket.player.isBuilder()) return console.error('player attempted to remove entity without builder permission')
-    const entity = this.world.entities.get(id)
-    this.world.entities.remove(id)
-    this.send('entityRemoved', id, socket.id)
-    if (entity.isApp) this.dirtyApps.add(id)
+    console.warn('rejected entity remove over /ws', { playerId: socket.id })
   }
 
   onSettingsModified = (socket, data) => {
-    if (!socket.player.isBuilder())
-      return console.error('player attempted to modify settings without builder permission')
-    this.world.settings.set(data.key, data.value)
-    this.send('settingsModified', data, socket.id)
+    console.warn('rejected settings modify over /ws', { playerId: socket.id })
   }
 
   onSpawnModified = async (socket, op) => {
-    if (!socket.player.isBuilder()) {
-      return console.error('player attempted to modify spawn without builder permission')
-    }
-    const player = socket.player
-    if (op === 'set') {
-      this.spawn = { position: player.data.position.slice(), quaternion: player.data.quaternion.slice() }
-    } else if (op === 'clear') {
-      this.spawn = { position: [0, 0, 0], quaternion: [0, 0, 0, 1] }
-    } else {
-      return
-    }
-    const data = JSON.stringify(this.spawn)
-    await this.db('config')
-      .insert({
-        key: 'spawn',
-        value: data,
-      })
-      .onConflict('key')
-      .merge({
-        value: data,
-      })
-    socket.send('chatAdded', {
-      id: uuid(),
-      from: null,
-      fromId: null,
-      body: op === 'set' ? 'Spawn updated' : 'Spawn cleared',
-      createdAt: moment().toISOString(),
-    })
+    console.warn('rejected spawn modify over /ws', { playerId: socket.id })
   }
 
   onPlayerTeleport = (socket, data) => {

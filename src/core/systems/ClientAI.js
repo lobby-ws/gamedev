@@ -75,7 +75,7 @@ export class ClientAI extends System {
       pinned: false,
       state: {},
     }
-    const app = this.world.entities.add(appData, true)
+    const app = this.world.entities.add(appData)
     // this.world.builder.select(app)
 
     // send to server
@@ -86,6 +86,7 @@ export class ClientAI extends System {
       prompt,
     }
     console.log('[ai] creating', action)
+    this.world.admin.entityAdd(appData, { ignoreNetworkId: this.world.network.id })
     this.world.network.send('ai', action)
   }
 

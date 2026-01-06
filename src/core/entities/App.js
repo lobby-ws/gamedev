@@ -265,7 +265,11 @@ export class App extends Entity {
 
   onUploaded() {
     this.data.uploader = null
-    this.world.network.send('entityModified', { id: this.data.id, uploader: null })
+    if (this.world.network.isClient && this.world.admin?.entityModify) {
+      this.world.admin.entityModify({ id: this.data.id, uploader: null }, { ignoreNetworkId: this.world.network.id })
+    } else {
+      this.world.network.send('entityModified', { id: this.data.id, uploader: null })
+    }
   }
 
   modify(data) {
@@ -331,7 +335,11 @@ export class App extends Entity {
     this.world.entities.remove(this.data.id)
     // if removed locally we need to broadcast to server/clients
     if (local) {
-      this.world.network.send('entityRemoved', this.data.id)
+      if (this.world.network.isClient && this.world.admin?.entityRemove) {
+        this.world.admin.entityRemove(this.data.id, { ignoreNetworkId: this.world.network.id })
+      } else {
+        this.world.network.send('entityRemoved', this.data.id)
+      }
     }
   }
 

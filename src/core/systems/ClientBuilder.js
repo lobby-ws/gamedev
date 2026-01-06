@@ -284,7 +284,10 @@ export class ClientBuilder extends System {
         this.world.admin.blueprintAdd(blueprint, { ignoreNetworkId: this.world.network.id })
         // assign new blueprint
         entity.modify({ blueprint: blueprint.id })
-        this.world.network.send('entityModified', { id: entity.data.id, blueprint: blueprint.id })
+        this.world.admin.entityModify(
+          { id: entity.data.id, blueprint: blueprint.id },
+          { ignoreNetworkId: this.world.network.id }
+        )
         // toast
         this.world.emit('toast', 'Unlinked')
       }
@@ -294,10 +297,13 @@ export class ClientBuilder extends System {
       const entity = this.selected || this.getEntityAtBeam()
       if (entity?.isApp) {
         entity.data.pinned = !entity.data.pinned
-        this.world.network.send('entityModified', {
-          id: entity.data.id,
-          pinned: entity.data.pinned,
-        })
+        this.world.admin.entityModify(
+          {
+            id: entity.data.id,
+            pinned: entity.data.pinned,
+          },
+          { ignoreNetworkId: this.world.network.id }
+        )
         this.world.emit('toast', entity.data.pinned ? 'Pinned' : 'Un-pinned')
         this.select(null)
       }
@@ -412,7 +418,8 @@ export class ClientBuilder extends System {
           pinned: false,
           state: {},
         }
-        const dup = this.world.entities.add(data, true)
+        const dup = this.world.entities.add(data)
+        this.world.admin.entityAdd(data, { ignoreNetworkId: this.world.network.id })
         this.select(dup)
         this.addUndo({
           name: 'remove-entity',
@@ -568,12 +575,15 @@ export class ClientBuilder extends System {
       this.lastMoveSendTime += delta
       if (this.lastMoveSendTime > this.world.networkRate) {
         const app = this.selected
-        this.world.network.send('entityModified', {
-          id: app.data.id,
-          position: app.root.position.toArray(),
-          quaternion: app.root.quaternion.toArray(),
-          scale: app.root.scale.toArray(),
-        })
+        this.world.admin.entityModify(
+          {
+            id: app.data.id,
+            position: app.root.position.toArray(),
+            quaternion: app.root.quaternion.toArray(),
+            scale: app.root.scale.toArray(),
+          },
+          { ignoreNetworkId: this.world.network.id }
+        )
         this.lastMoveSendTime = 0
       }
     }
@@ -595,7 +605,8 @@ export class ClientBuilder extends System {
     if (!undo) return
     if (this.selected) this.select(null)
     if (undo.name === 'add-entity') {
-      this.world.entities.add(undo.data, true)
+      this.world.entities.add(undo.data)
+      this.world.admin.entityAdd(undo.data, { ignoreNetworkId: this.world.network.id })
       return
     }
     if (undo.name === 'move-entity') {
@@ -603,12 +614,15 @@ export class ClientBuilder extends System {
       if (!entity) return
       entity.data.position = undo.position
       entity.data.quaternion = undo.quaternion
-      this.world.network.send('entityModified', {
-        id: undo.entityId,
-        position: entity.data.position,
-        quaternion: entity.data.quaternion,
-        scale: entity.data.scale,
-      })
+      this.world.admin.entityModify(
+        {
+          id: undo.entityId,
+          position: entity.data.position,
+          quaternion: entity.data.quaternion,
+          scale: entity.data.scale,
+        },
+        { ignoreNetworkId: this.world.network.id }
+      )
       entity.build()
       return
     }
@@ -674,14 +688,17 @@ export class ClientBuilder extends System {
         app.data.quaternion = app.root.quaternion.toArray()
         app.data.scale = app.root.scale.toArray()
         app.data.state = {}
-        this.world.network.send('entityModified', {
-          id: app.data.id,
-          mover: null,
-          position: app.data.position,
-          quaternion: app.data.quaternion,
-          scale: app.data.scale,
-          state: app.data.state,
-        })
+        this.world.admin.entityModify(
+          {
+            id: app.data.id,
+            mover: null,
+            position: app.data.position,
+            quaternion: app.data.quaternion,
+            scale: app.data.scale,
+            state: app.data.state,
+          },
+          { ignoreNetworkId: this.world.network.id }
+        )
         app.build()
       }
       this.selected = null
@@ -705,7 +722,10 @@ export class ClientBuilder extends System {
       if (app.data.mover !== this.world.network.id) {
         app.data.mover = this.world.network.id
         app.build()
-        this.world.network.send('entityModified', { id: app.data.id, mover: app.data.mover })
+        this.world.admin.entityModify(
+          { id: app.data.id, mover: app.data.mover },
+          { ignoreNetworkId: this.world.network.id }
+        )
       }
       this.selected = app
       if (this.mode === 'grab') {
@@ -1105,7 +1125,8 @@ export class ClientBuilder extends System {
       pinned: false,
       state: {},
     }
-    const app = this.world.entities.add(data, true)
+    const app = this.world.entities.add(data)
+    this.world.admin.entityAdd(data, { ignoreNetworkId: this.world.network.id })
     // upload the glb
     await this.world.admin.upload(file)
     // mark as uploaded so other clients can load it in
@@ -1166,7 +1187,8 @@ export class ClientBuilder extends System {
           pinned: false,
           state: {},
         }
-        const app = this.world.entities.add(data, true)
+        const app = this.world.entities.add(data)
+        this.world.admin.entityAdd(data, { ignoreNetworkId: this.world.network.id })
         // upload the glb
         await this.world.admin.upload(file)
         // mark as uploaded so other clients can load it in

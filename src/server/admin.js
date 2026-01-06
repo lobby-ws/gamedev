@@ -98,6 +98,79 @@ export async function admin(fastify, { world, assets }) {
           return
         }
 
+        if (msg.type === 'entity_add') {
+          if (!msg.entity?.id) {
+            sendJson(ws, { type: 'error', error: 'invalid_payload', requestId })
+            return
+          }
+          const result = network.applyEntityAdded(msg.entity, { ignoreNetworkId })
+          if (!result.ok) {
+            sendJson(ws, { type: 'error', error: result.error, requestId })
+            return
+          }
+          sendJson(ws, { type: 'ok', requestId })
+          return
+        }
+
+        if (msg.type === 'entity_modify') {
+          if (!msg.change?.id) {
+            sendJson(ws, { type: 'error', error: 'invalid_payload', requestId })
+            return
+          }
+          const result = await network.applyEntityModified(msg.change, { ignoreNetworkId })
+          if (!result.ok) {
+            sendJson(ws, { type: 'error', error: result.error, requestId })
+            return
+          }
+          sendJson(ws, { type: 'ok', requestId })
+          return
+        }
+
+        if (msg.type === 'entity_remove') {
+          if (!msg.id) {
+            sendJson(ws, { type: 'error', error: 'invalid_payload', requestId })
+            return
+          }
+          const result = network.applyEntityRemoved(msg.id, { ignoreNetworkId })
+          if (!result.ok) {
+            sendJson(ws, { type: 'error', error: result.error, requestId })
+            return
+          }
+          sendJson(ws, { type: 'ok', requestId })
+          return
+        }
+
+        if (msg.type === 'settings_modify') {
+          if (!msg.key) {
+            sendJson(ws, { type: 'error', error: 'invalid_payload', requestId })
+            return
+          }
+          const result = network.applySettingsModified({ key: msg.key, value: msg.value }, { ignoreNetworkId })
+          if (!result.ok) {
+            sendJson(ws, { type: 'error', error: result.error, requestId })
+            return
+          }
+          sendJson(ws, { type: 'ok', requestId })
+          return
+        }
+
+        if (msg.type === 'spawn_modify') {
+          if (!msg.op) {
+            sendJson(ws, { type: 'error', error: 'invalid_payload', requestId })
+            return
+          }
+          const result = await network.applySpawnModified({
+            op: msg.op,
+            networkId: msg.networkId || defaultNetworkId,
+          })
+          if (!result.ok) {
+            sendJson(ws, { type: 'error', error: result.error, requestId })
+            return
+          }
+          sendJson(ws, { type: 'ok', requestId })
+          return
+        }
+
         sendJson(ws, { type: 'error', error: 'unknown_type', requestId })
       } catch (err) {
         console.error('[admin] handler error', err)

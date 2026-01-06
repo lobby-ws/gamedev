@@ -931,7 +931,8 @@ function Add({ world, hidden }) {
         pinned: false,
         state: {},
       }
-      const app = world.entities.add(data, true)
+      const app = world.entities.add(data)
+      world.admin.entityAdd(data, { ignoreNetworkId: world.network.id })
       world.builder.select(app)
     }, 100)
   }
@@ -1098,7 +1099,7 @@ function App({ world, hidden }) {
   const togglePinned = () => {
     const pinned = !app.data.pinned
     app.data.pinned = pinned
-    world.network.send('entityModified', { id: app.data.id, pinned })
+    world.admin.entityModify({ id: app.data.id, pinned }, { ignoreNetworkId: world.network.id })
     setPinned(pinned)
   }
 
@@ -1316,10 +1317,13 @@ function AppTransformFields({ app }) {
           console.log(value)
           setPosition(value)
           app.modify({ position: value })
-          app.world.network.send('entityModified', {
-            id: app.data.id,
-            position: value,
-          })
+          app.world.admin.entityModify(
+            {
+              id: app.data.id,
+              position: value,
+            },
+            { ignoreNetworkId: app.world.network.id }
+          )
         }}
       />
       <FieldVec3
@@ -1333,10 +1337,13 @@ function AppTransformFields({ app }) {
           setRotation(value)
           value = q1.setFromEuler(e1.fromArray(value.map(n => n * DEG2RAD))).toArray()
           app.modify({ quaternion: value })
-          app.world.network.send('entityModified', {
-            id: app.data.id,
-            quaternion: value,
-          })
+          app.world.admin.entityModify(
+            {
+              id: app.data.id,
+              quaternion: value,
+            },
+            { ignoreNetworkId: app.world.network.id }
+          )
         }}
       />
       <FieldVec3
@@ -1349,10 +1356,13 @@ function AppTransformFields({ app }) {
         onChange={value => {
           setScale(value)
           app.modify({ scale: value })
-          app.world.network.send('entityModified', {
-            id: app.data.id,
-            scale: value,
-          })
+          app.world.admin.entityModify(
+            {
+              id: app.data.id,
+              scale: value,
+            },
+            { ignoreNetworkId: app.world.network.id }
+          )
         }}
       />
     </>

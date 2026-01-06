@@ -181,4 +181,46 @@ export class AdminClient extends System {
       networkId: ignoreNetworkId,
     })
   }
+
+  entityAdd(entity, { ignoreNetworkId } = {}) {
+    this.send({
+      type: 'entity_add',
+      entity,
+      networkId: ignoreNetworkId,
+    })
+  }
+
+  entityModify(change, { ignoreNetworkId } = {}) {
+    this.send({
+      type: 'entity_modify',
+      change,
+      networkId: ignoreNetworkId,
+    })
+  }
+
+  entityRemove(id, { ignoreNetworkId } = {}) {
+    this.send({
+      type: 'entity_remove',
+      id,
+      networkId: ignoreNetworkId,
+    })
+  }
+
+  settingsModify({ key, value }, { ignoreNetworkId } = {}) {
+    this.send({
+      type: 'settings_modify',
+      key,
+      value,
+      networkId: ignoreNetworkId,
+    })
+  }
+
+  spawnModify(op, { networkId } = {}) {
+    const targetId = networkId || this.world.network?.id || null
+    this.send({
+      type: 'spawn_modify',
+      op,
+      networkId: targetId,
+    })
+  }
 }
