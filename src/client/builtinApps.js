@@ -2,10 +2,10 @@ export const BUILTIN_APP_TEMPLATES = [
   {
     name: 'Model',
     image: {
-      url: 'asset://builtin/39ad1b405cbf41a90825dadf0b554f3c3baba634636bb94a1057dd8ec0784c86.png',
+      url: 'asset://Model.png',
     },
-    model: 'asset://builtin/97fc7289a38b5b49357e6fbd74e7e77fc78493dbb1c0dbc850cb8e9db9fd2530.glb',
-    script: 'asset://builtin/448d865815800831237e06e9d5817d74cb600dfa8e7fec74eb209d63fc46f0aa.js',
+    model: 'asset://Model.glb',
+    script: 'asset://Model.js',
     props: {
       collision: true,
     },
@@ -20,10 +20,10 @@ export const BUILTIN_APP_TEMPLATES = [
   {
     name: 'Image',
     image: {
-      url: 'asset://builtin/daaace2f1b595664c0e6f5a10deb494efc13a850d3cf0804b297a634d2003803.png',
+      url: 'asset://Image.png',
     },
-    model: 'asset://builtin/70f1cabcf315fb6d19769609c0f2e9cc798a45165e19bf0e84c161643faef868.glb',
-    script: 'asset://builtin/378774dc69a8dc33c006d5c75c2d586070bfaa0aa42e0e4ba2ef74a2fd2aa81f.js',
+    model: 'asset://Image.glb',
+    script: 'asset://Image.js',
     props: {
       width: 0,
       height: 2,
@@ -34,7 +34,7 @@ export const BUILTIN_APP_TEMPLATES = [
       shadows: true,
       placeholder: {
         type: 'image',
-        url: 'asset://builtin/daaace2f1b595664c0e6f5a10deb494efc13a850d3cf0804b297a634d2003803.png',
+        url: 'asset://Image.png',
       },
     },
     preload: false,
@@ -48,10 +48,10 @@ export const BUILTIN_APP_TEMPLATES = [
   {
     name: 'Video',
     image: {
-      url: 'asset://builtin/2fecd2130b39ec39e00dce51c162247ce07500f419fbb188e0bf99b5cec415af.png',
+      url: 'asset://Video.png',
     },
-    model: 'asset://builtin/2faa49a0505b0e7f143e2278e3aa4a5585cabe9e87cc850f3b9b3c1625b8ba69.glb',
-    script: 'asset://builtin/3fb3a43c8c0be0b78a5ce5f357e43372d05c2024c3e37d08b5e9d08abe3f068b.js',
+    model: 'asset://Video.glb',
+    script: 'asset://Video.js',
     props: {
       width: 0,
       height: 2,
@@ -64,7 +64,7 @@ export const BUILTIN_APP_TEMPLATES = [
       shadows: true,
       placeholder: {
         type: 'video',
-        url: 'asset://builtin/8fab0105d67539618ed9b9a68b2952aefc870be4f40d4541f1f773583950ff44.mp4',
+        url: 'asset://Video.mp4',
       },
     },
     preload: false,
@@ -78,10 +78,10 @@ export const BUILTIN_APP_TEMPLATES = [
   {
     name: 'Text',
     image: {
-      url: 'asset://builtin/a737851aa49988665c40380007a8e3ef3fc7d5eb27cffcdf199ded87abcc7bcf.png',
+      url: 'asset://Text.png',
     },
-    model: 'asset://builtin/e7cfd8f907f8979fc32f3afabc0962c8d74ea484a61d150187fec23bd0c03a5c.glb',
-    script: 'asset://builtin/5298877b10d5aae7db40dde9c0ec421f374644c7c869e9c3696c3a95dd338ba5.js',
+    model: 'asset://Text.glb',
+    script: 'asset://Text.js',
     props: {
       width: 200,
       height: 200,

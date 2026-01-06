@@ -335,17 +335,17 @@ const migrations = [
           author: null,
           url: null,
           desc: null,
-          model: 'asset://builtin/1aa2381f0fb25ba2fe9941b62eb2cad1fe2c77afa0316df8828ba5eba5d3d374.glb',
-          script: 'asset://builtin/3d64ad66587920f17ac09164b42c4e441d5fc1320bc597bd1e6fd0b7a3631994.js',
+          model: 'asset://The_Meadow.glb',
+          script: 'asset://scene.js',
           props: {
             hour: 4,
             period: 'pm',
             intensity: 1,
             sky: {
-              url: 'asset://builtin/179d71586e675efc4af04185e1b2d3e6b7f4a5b707f1ef5e9b6497c5660ecab7.webp',
+              url: 'asset://sky.webp',
             },
             hdr: {
-              url: 'asset://builtin/62db0ffbcea86b5e9ba23fb5da739b160e8abfd3b390235fed5ac436750e1e2e.hdr',
+              url: 'asset://sky.hdr',
             },
             verticalRotation: 40,
             horizontalRotation: 230,
