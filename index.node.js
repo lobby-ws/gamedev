@@ -1,6 +1,6 @@
 // Node entrypoint for library consumers
 // - Exposes `server` to start the Hyperfy world server in-process
-// - Re-exports `createNodeClientWorld` for headless/node clients
+// - Exposes `nodeClient` as a lazy loader for headless/node clients
 
 export async function server(env = {}) {
   if (env && typeof env === 'object') {
@@ -14,7 +14,4 @@ export async function nodeClient() {
   const { createNodeClientWorld } = await import('./build/world-node-client.js')
   return createNodeClientWorld()
 }
-
-export { createNodeClientWorld } from './build/world-node-client.js'
-
 
