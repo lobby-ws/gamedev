@@ -3025,6 +3025,12 @@ async function main({port, ...options}) {
 
 // Only start the server if this file is run directly (not imported)
 if (import.meta.url === `file://${process.argv[1]}`) {
+  if (process.env.WORLD_URL) {
+    const { main: directMain } = await import('./direct.js')
+    await directMain()
+    process.exit(0)
+  }
+
   // Default hot reload ON unless explicitly disabled
   const argv = process.argv.slice(2)
   const noHot = argv.includes('--no-hot-reload')

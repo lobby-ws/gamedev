@@ -17,7 +17,7 @@ Key requirements (from collaboration):
 - `/admin` connections **do not** spawn player entities.
 - Admins may still join the world via `/ws` like anyone else; their powers are via `/admin`.
 - App-server should no longer require a browser client connection; it pushes changes directly to the world via `/admin`.
-- Linking should be stored in-world and automated (no “click to link” in the browser).
+- App discovery/linking must be automated from world state (no “click to link” in the browser).
 - App-server should support spawning (initial positions chosen by CLI).
 
 Non-goals (explicit):
@@ -71,7 +71,7 @@ Responsibilities:
 - Admin-only uploads:
   - Upload check
   - Upload file data
-- Linkage management (stored in-world)
+- Admin-protected world discovery reads (for app-server bootstrap)
 - Supports app-server deployments and spawning without browser involvement.
 
 Implementation shape:
@@ -202,7 +202,9 @@ Minimum JSON message types over `/admin` WS:
 - `entity_remove`
 - `settings_modify` (optional in phase 1)
 - `spawn_modify` (optional in phase 1)
-- `links_*` (see linkage section)
+
+Phase 3 also adds admin-protected read APIs (HTTP) for discovery/bootstrap:
+- `GET /admin/snapshot` (minimum)
 
 Each message should allow:
 - `networkId` (optional): `/ws` socket id to ignore echo and to target revert responses.
@@ -240,7 +242,6 @@ Responsibilities:
   - `admin.entityAdd(entityData, { ignoreNetworkId })`
   - `admin.entityModify(change, { ignoreNetworkId })`
   - `admin.entityRemove(id, { ignoreNetworkId })`
-  - link management calls (below)
 - Provide state flags:
   - `connected`, `authenticated`, `error`
   - so UI can gate authoring tools
@@ -290,89 +291,116 @@ No changes required to the client receive path:
 - `ClientNetwork.onBlueprintAdded/onBlueprintModified` already applies server broadcasts.
 - This is how admin-driven updates reach all players.
 
-## Linkage Stored In-World (for App-Server Automation)
+## World Discovery + Local Mapping (for App-Server Automation)
 
-Requirement: linkage must be stored in-world; app-server should auto-link without a browser.
+Goal: app-server can connect to a world with *no* pre-existing local state (empty folder) and automatically bootstrap a local workspace for every app in that world.
 
-Recommended approach (minimal schema risk):
-- Store link metadata on the blueprint itself (persisted in `blueprints` table JSON):
-  - Add optional field: `devApp: string` (or `dev: { app: string }`)
-  - This enables a simple query: “all blueprints where `devApp === '<appName>'`”
+First-principles approach:
+- The world’s authoritative state is already present in `{ entities, blueprints }`.
+- “Linking” for app-server is therefore *local mapping* from `blueprint.id` → local folder, derived from that state (no browser relay, no manual “click to link”, and no required in-world dev metadata).
+- Optional future extension: add a `dev` object on blueprints to aid filtering/stable naming. Not required to satisfy “empty folder → link everything”.
 
-Notes:
-- This aligns with Hyperfy’s “per-instance blueprints” model: multiple blueprint IDs can point to the same `devApp`.
-- App-server can update all those blueprint IDs when a local app changes.
+Local state:
+- `world.json` is the source-of-truth link map for the app-server workspace.
+  - Keys by `blueprint.id`, values point to local app folders and last-seen versions.
+  - Folder naming can remain human-friendly even if blueprint names change over time.
 
-Admin endpoints to support linkage:
-- `GET /admin/links` → returns all `{ devApp, blueprintIds }`
-- `POST /admin/links/claim-by-name` (optional)
-  - Sets `devApp` for blueprints where `name === appName` (first-run auto-link convenience)
-- `POST /admin/links/set`
-  - Explicitly set `devApp` on a blueprint id
-- `POST /admin/links/ensure`
-  - Ensure at least one blueprint exists for `devApp`, optionally creating and spawning one
+Server support needed (admin-protected reads, no `/ws` join):
+- `GET /admin/snapshot` (HTTP, auth via `X-Admin-Code`)
+  - returns `{ assetsUrl, settings, spawn, blueprints, entities }` (same shape as `/ws` snapshot minus player-only fields)
+  - does **not** spawn a player entity
+- Admin WS server pushes (for active pull):
+  - `blueprintAdded`, `blueprintModified`
+  - `entityAdded`, `entityModified`, `entityRemoved`
+- Optional (nice-to-have):
+  - `GET /admin/blueprints/:id` (single blueprint fetch)
+  - `GET /admin/entities?type=app` (filtered entities)
 
-Server implementation:
-- Implement as `/admin` WS messages or HTTP; choose one and keep app-server usage consistent.
-- Internally, linkage changes are just blueprint modifications (set `devApp` field).
-
-## App-Server Plan (No Browser Dependency)
+## App-Server Plan (Direct `/admin`, World-First Sync)
 
 ### Goal
-App-server should deploy directly to the world via `/admin`, without relying on `AppServerClient` in a browser to relay changes.
+- App-server connects directly to the world via `/admin` (no browser relay, no localhost dependency).
+- First run with an empty working directory auto-imports and “links” *all* world blueprints (apps + unused + `$scene`) into local `apps/`.
 
-### 1) Add world target + admin credentials
-App-server CLI should accept:
-- `--world <url>` (admin base URL, e.g. `http://localhost:3000`)
-- `--code <ADMIN_CODE>` (or read from env)
+### 1) Configuration (env-first)
+App-server should read:
+- `WORLD_URL` (base world URL, e.g. `http://localhost:3000`)
+- `ADMIN_CODE` (optional if the world is unprotected)
+- Optional: `APPS_DIR` (default `./apps`)
 
-### 2) Automatic linking
-On startup:
-1. Enumerate local apps in `apps/`.
-2. For each `appName`:
-   - Query world linkage:
-     - `GET /admin/links?devApp=<appName>` (or equivalent WS message)
-   - If no linked blueprints:
-     - Option A (recommended): claim by name if a blueprint exists with `name === appName`
-     - Option B: create a new blueprint + spawn an entity (see spawning section)
+### 2) Connect directly to `/admin`
+- WS: `ws(s)://<WORLD_URL>/admin`
+  - send `{ "type": "auth", "code": "<ADMIN_CODE>" }`
+- HTTP uploads/reads:
+  - `X-Admin-Code: <ADMIN_CODE>` on `/admin/*` requests
 
-### 3) Spawning support (positions chosen by CLI)
-Add a CLI action, e.g.:
-- `app-server spawn <appName> --pos x,y,z --yaw deg` (or quaternion)
+### 3) First-run bootstrap: empty folder → import everything
+Trigger condition (first connect):
+- `apps/` is missing or empty.
 
-Server-side behavior:
-- Create blueprint if needed (or reuse existing linked blueprint).
-- Create an entity `{ type:'app', blueprint:<id>, position, quaternion, scale:[1,1,1], ... }`
-- Apply via `/admin`:
-  - `entity_add` + broadcast to players
-  - mark dirty apps
+Import algorithm:
+1. Fetch `GET /admin/snapshot`.
+2. Determine the “blueprints to import” set (per goal):
+   - Import **all** blueprints from `snapshot.blueprints`, including unused blueprints and `$scene`.
+   - Also union in any blueprint IDs referenced by `snapshot.entities` where `type === "app"` (sanity check; should already be covered).
+3. Initialize `world.json` (new source-of-truth mapping), keyed by `blueprint.id`.
+   - Example shape:
+     ```json
+     {
+       "worldUrl": "http://localhost:3000",
+       "assetsUrl": "http://localhost:3000/assets",
+       "blueprints": {
+         "$scene": { "appName": "The Grid", "version": 12 },
+         "8c9d...": { "appName": "My App", "version": 3 }
+       }
+     }
+     ```
+4. For each blueprint:
+   - Choose a human-friendly local folder name:
+     - Prefer `apps/<sanitized blueprint.name>/`
+     - If a collision occurs, append a deterministic suffix (e.g. `__<idPrefix>`) to keep names readable.
+   - Write/update `world.json` entry `{ appName, version }` for this `blueprint.id`.
+   - Create `apps/<appName>/` with:
+     - `blueprint.json` containing defaults used for deploy (`name`, `model`, `props`, flags, etc)
+     - `index.js` containing script code:
+       - if `blueprint.script` is `asset://<hash>.js`, download from `assetsUrl` and write it
+       - if missing, write a stub script (still deployable)
+   - Download referenced assets (match current app-server behavior):
+     - model (`blueprint.model`)
+     - props file URLs (`blueprint.props.*.url`)
+     - image (if stored as an asset URL)
+     - any other `asset://...` fields used by deploy
+     - save into the central `assets/` folder with stable, human-ish names where possible (as today)
+     - update `blueprint.json` defaults to point at the local `assets/...` paths (as today)
+5. Do not overwrite existing local files unless `--force` (or a dedicated `sync` command).
+6. Bootstrap should be read-only with respect to the world: it should *not* create/modify blueprints/entities just to establish links.
 
-### 4) Deploy flow (script/model/props)
-On file change:
-1. Compute content hash (SHA-256; match client hashing).
-2. Upload asset if missing:
-   - call `/admin/upload-check?filename=<hash>.<ext>`
-   - if not exists, `POST /admin/upload` multipart with file named `<hash>.<ext>`
-3. For each linked blueprint id for `devApp`:
-   - send `/admin` blueprint modify:
-     - `{ id, version: currentVersion+1, script: "asset://<hash>.js" }`
-   - If versions are unknown, fetch blueprint first or add an endpoint that returns current blueprint by id.
+### 4) Continuous sync (no browser required)
+After bootstrap (or on any normal run), app-server should keep itself in sync in both directions.
 
-To support this, server should provide:
-- `GET /admin/blueprints/:id` → returns the full blueprint (including `version`)
-- or `GET /admin/links?devApp=...` returns blueprint objects, not just ids.
+World → local (active pull):
+- Connect to `/admin` WS and receive server pushes for blueprint/entity changes.
+  - When a blueprint changes, update `world.json` version, update `apps/<appName>/blueprint.json`, and download any newly referenced `asset://...` content from `assetsUrl` (script/model/props/image), updating local files.
+  - Mark these as “server-sourced” updates to avoid triggering a deploy loop from file watchers.
 
-Debouncing:
-- Keep the existing 500ms–1000ms debounce strategy for hot reload.
+Local → world (deploy):
+- Watch `apps/**/index.js`, `apps/**/blueprint.json`, and referenced local `assets/**`.
+- On change:
+  1. Upload new/changed assets via `/admin/upload-check` + `/admin/upload`.
+  2. Send `/admin` mutations (`blueprint_modify`, and entity mutations if needed).
+  3. If the server responds `version_mismatch`, treat local as source-of-truth:
+     - fetch current blueprint (`GET /admin/blueprints/:id` or `/admin/snapshot`)
+     - resend with `version: current.version + 1`, overwriting world with local state.
 
-### 5) Deprecate browser relay path
-Once app-server can deploy via `/admin`, the following become optional/deprecated:
-- `src/core/systems/AppServerClient.js` (browser ↔ local dev server)
-- app-server websocket protocol used exclusively for client relay
+### 5) Creating/spawning still works (but no longer required for linking)
+Add CLI actions that operate via `/admin`:
+- `app-server create <appName>`: creates a local folder + creates a blueprint in-world (and optionally spawns an entity).
+- `app-server spawn <appName> --pos x,y,z --yaw deg`: adds an entity instance for a linked blueprint.
 
-Plan for transition:
-- Keep the old path temporarily behind `PUBLIC_DEV_SERVER=true`.
-- Add a new mode `app-server --mode direct-admin` (default eventually).
+### 6) Deprecate the browser relay path
+Once direct-admin app-server is working:
+- Remove/disable `src/core/systems/AppServerClient.js` and any “click to link” UI.
+- Keep a temporary legacy flag only if needed for transition.
 
 ## Migration / Rollout Strategy
 
@@ -396,14 +424,18 @@ Acceptance:
 - `/ws` is “gameplay only”; authoring writes use `/admin`.
 
 ### Phase 3 (app-server direct deploy + auto-link)
-- Implement linkage stored in-world (`devApp`).
-- Add `/admin` endpoints to query blueprints + links.
-- Update app-server to deploy directly via `/admin` and support spawn positions via CLI.
-- Remove/disable “link” UI in browser and auto-link behavior.
+- Add admin-protected read APIs for app-server bootstrap (`GET /admin/snapshot` minimum).
+- Update app-server to connect directly to world `/admin` using `WORLD_URL` + `ADMIN_CODE` (no browser relay, no localhost coupling).
+- On first run with an empty folder, auto-import and “link” *all* blueprints from the world (apps + unused + `$scene`) into local `apps/`, persisting mapping in `world.json` keyed by `blueprint.id`.
+- Actively pull remote changes over `/admin` and keep the local workspace updated (including downloading referenced assets).
+- Watch local files and deploy changes via `/admin` (upload + blueprint/entity mutations); on version conflict, local overwrites world.
+- Remove/disable browser-side linking (`AppServerClient`) and any UI that exists only for relay.
 
 Acceptance:
-- App-server can deploy changes with no browser connected.
-- World players see updates when they are connected.
+- Starting app-server with an empty folder produces local folders for every world blueprint (including `$scene`), with scripts/assets downloaded and `world.json` mapping persisted.
+- Editing a local app updates the world via `/admin` with no browser client connected.
+- Remote blueprint changes propagate to local files without a browser client connected.
+- App-server does not need to connect to `/ws` (no player entity spawned) to function.
 
 ## Testing / Validation Checklist
 
@@ -428,4 +460,3 @@ Manual tests (recommended order):
 - Replace versioning semantics (server-assigned versions, conflict-free edits, etc).
 - Replace admin-as-player with admin control connections that pilot a free camera and don’t create player entities.
 - Migrate moderation features (kick/mute/rank changes) to `/admin`.
-

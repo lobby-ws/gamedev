@@ -29,7 +29,25 @@ function sendJson(ws, payload) {
 }
 
 export async function admin(fastify, { world, assets }) {
-  fastify.get('/admin', { websocket: true }, (ws, req) => {
+  const subscribers = new Set()
+
+  function broadcast(message, { ignore } = {}) {
+    for (const ws of subscribers) {
+      if (ignore && ws === ignore) continue
+      sendJson(ws, message)
+    }
+  }
+
+  function requireAdmin(req, reply) {
+    const code = getAdminCodeFromRequest(req)
+    if (!isAdminCodeValid(code)) {
+      reply.code(403).send({ error: 'admin_required' })
+      return false
+    }
+    return true
+  }
+
+  fastify.get('/admin', { websocket: true }, (ws, _req) => {
     let authed = false
     let defaultNetworkId = null
 
@@ -56,6 +74,10 @@ export async function admin(fastify, { world, assets }) {
         }
         authed = true
         defaultNetworkId = msg.networkId || null
+        subscribers.add(ws)
+        ws.on('close', () => {
+          subscribers.delete(ws)
+        })
         sendJson(ws, { type: 'auth_ok' })
         return
       }
@@ -75,6 +97,7 @@ export async function admin(fastify, { world, assets }) {
             sendJson(ws, { type: 'error', error: result.error, requestId })
             return
           }
+          broadcast({ type: 'blueprintAdded', blueprint: msg.blueprint }, { ignore: ws })
           sendJson(ws, { type: 'ok', requestId })
           return
         }
@@ -94,6 +117,7 @@ export async function admin(fastify, { world, assets }) {
             })
             return
           }
+          broadcast({ type: 'blueprintModified', blueprint: world.blueprints.get(msg.change.id) }, { ignore: ws })
           sendJson(ws, { type: 'ok', requestId })
           return
         }
@@ -108,6 +132,7 @@ export async function admin(fastify, { world, assets }) {
             sendJson(ws, { type: 'error', error: result.error, requestId })
             return
           }
+          broadcast({ type: 'entityAdded', entity: world.entities.get(msg.entity.id)?.data || msg.entity }, { ignore: ws })
           sendJson(ws, { type: 'ok', requestId })
           return
         }
@@ -122,6 +147,7 @@ export async function admin(fastify, { world, assets }) {
             sendJson(ws, { type: 'error', error: result.error, requestId })
             return
           }
+          broadcast({ type: 'entityModified', entity: world.entities.get(msg.change.id)?.data || msg.change }, { ignore: ws })
           sendJson(ws, { type: 'ok', requestId })
           return
         }
@@ -136,6 +162,7 @@ export async function admin(fastify, { world, assets }) {
             sendJson(ws, { type: 'error', error: result.error, requestId })
             return
           }
+          broadcast({ type: 'entityRemoved', id: msg.id }, { ignore: ws })
           sendJson(ws, { type: 'ok', requestId })
           return
         }
@@ -150,6 +177,7 @@ export async function admin(fastify, { world, assets }) {
             sendJson(ws, { type: 'error', error: result.error, requestId })
             return
           }
+          broadcast({ type: 'settingsModified', data: { key: msg.key, value: msg.value } }, { ignore: ws })
           sendJson(ws, { type: 'ok', requestId })
           return
         }
@@ -167,6 +195,7 @@ export async function admin(fastify, { world, assets }) {
             sendJson(ws, { type: 'error', error: result.error, requestId })
             return
           }
+          broadcast({ type: 'spawnModified', spawn: world.network.spawn }, { ignore: ws })
           sendJson(ws, { type: 'ok', requestId })
           return
         }
@@ -179,20 +208,45 @@ export async function admin(fastify, { world, assets }) {
     })
   })
 
-  fastify.get('/admin/upload-check', async (req, reply) => {
-    const code = getAdminCodeFromRequest(req)
-    if (!isAdminCodeValid(code)) {
-      return reply.code(403).send({ error: 'admin_required' })
+  fastify.get('/admin/snapshot', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const network = world.network
+    return {
+      assetsUrl: assets.url,
+      settings: world.settings.serialize(),
+      spawn: network.spawn,
+      blueprints: world.blueprints.serialize(),
+      entities: world.entities.serialize(),
     }
+  })
+
+  fastify.get('/admin/blueprints/:id', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const blueprint = world.blueprints.get(req.params.id)
+    if (!blueprint) {
+      return reply.code(404).send({ error: 'not_found' })
+    }
+    return { blueprint }
+  })
+
+  fastify.get('/admin/entities', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const type = req.query?.type
+    const entities = world.entities.serialize()
+    if (typeof type !== 'string' || !type) {
+      return { entities }
+    }
+    return { entities: entities.filter(e => e?.type === type) }
+  })
+
+  fastify.get('/admin/upload-check', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
     const exists = await assets.exists(req.query.filename)
     return { exists }
   })
 
   fastify.post('/admin/upload', async (req, reply) => {
-    const code = getAdminCodeFromRequest(req)
-    if (!isAdminCodeValid(code)) {
-      return reply.code(403).send({ error: 'admin_required' })
-    }
+    if (!requireAdmin(req, reply)) return
     const mp = await req.file()
     // collect into buffer
     const chunks = []
