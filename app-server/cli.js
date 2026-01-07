@@ -3,378 +3,510 @@
 import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
-import { fileURLToPath } from 'url'
 import readline from 'readline'
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
+import { DirectAppServer } from './direct.js'
+import { uuid } from './utils.js'
+
+function sha256Hex(text) {
+  return crypto.createHash('sha256').update(text, 'utf8').digest('hex')
+}
+
+function normalizeBaseUrl(url) {
+  if (!url) return ''
+  return url.replace(/\/+$/, '')
+}
+
+function joinUrl(base, pathname) {
+  const a = normalizeBaseUrl(base)
+  const b = (pathname || '').replace(/^\/+/, '')
+  return `${a}/${b}`
+}
+
+function isValidAppName(name) {
+  if (typeof name !== 'string') return false
+  const trimmed = name.trim()
+  if (!trimmed) return false
+  if (trimmed.includes('/') || trimmed.includes('\\')) return false
+  return true
+}
 
 class HyperfyCLI {
-  constructor() {
-    this.apiUrl = process.env.HYPERFY_APP_SERVER_URL || 'http://localhost:8080'
-    this.appsDir = path.join(process.cwd(), 'apps')
+  constructor({ rootDir = process.cwd() } = {}) {
+    this.rootDir = rootDir
+    this.appsDir = path.join(this.rootDir, 'apps')
+    this.assetsDir = path.join(this.rootDir, 'assets')
+    this.worldFile = path.join(this.rootDir, 'world.json')
+
+    this.worldUrl = process.env.WORLD_URL || this._readWorldUrlFromDisk()
+    this.adminCode = typeof process.env.ADMIN_CODE === 'string' ? process.env.ADMIN_CODE : null
   }
 
-  async validate(appName) {
-    console.log(`🔍 Validating app: ${appName}`)
-    
+  _readWorldUrlFromDisk() {
     try {
-      const appPath = path.join(this.appsDir, appName)
-      const configPath = path.join(appPath, 'config.json')
-      const scriptJs = path.join(appPath, 'index.js')
-      const scriptTs = path.join(appPath, 'index.ts')
-      const scriptPath = fs.existsSync(scriptJs) ? scriptJs : scriptTs
-
-      // Check if app exists
-      if (!fs.existsSync(appPath)) {
-        console.error(`❌ App ${appName} not found`)
-        console.log(`💡 Available apps in ${this.appsDir}:`)
-        if (fs.existsSync(this.appsDir)) {
-          const apps = fs.readdirSync(this.appsDir).filter(item => 
-            fs.statSync(path.join(this.appsDir, item)).isDirectory()
-          )
-          apps.forEach(app => console.log(`  • ${app}`))
-        }
-        return
-      }
-
-      // Check if config.json exists
-      if (!fs.existsSync(configPath)) {
-        console.error(`❌ config.json not found for app ${appName}`)
-        return
-      }
-
-      // Check if script exists
-      if (!fs.existsSync(scriptPath)) {
-        console.error(`❌ index.js/ts not found for app ${appName}`)
-        return
-      }
-
-      // Read and parse config.json
-      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'))
-      
-      if (!config.script) {
-        console.error(`❌ No script hash found in config.json`)
-        console.log(`💡 The config.json should have a "script" field with format: "asset://{hash}.js"`)
-        return
-      }
-
-      // Extract hash from script URL (format: "asset://{hash}.js")
-      const scriptUrlMatch = config.script.match(/^asset:\/\/([a-f0-9]+)\.js$/)
-      if (!scriptUrlMatch) {
-        console.error(`❌ Invalid script URL format in config.json: ${config.script}`)
-        console.log(`💡 Expected format: "asset://{hash}.js"`)
-        return
-      }
-      const expectedHash = scriptUrlMatch[1]
-
-      // Read script and calculate its hash
-      const scriptContent = fs.readFileSync(scriptPath, 'utf8')
-      const actualHash = this.calculateFileHash(scriptContent)
-
-      // Compare hashes
-      if (actualHash === expectedHash) {
-        console.log(`✅ Script validation passed!`)
-        console.log(`📝 ${path.basename(scriptPath)} matches the hash in config.json`)
-        console.log(`🔗 Hash: ${actualHash}`)
-      } else {
-        console.log(`❌ Script validation failed!`)
-        console.log(`📝 ${path.basename(scriptPath)} has been modified since last deployment`)
-        console.log(`🔗 Expected: ${expectedHash}`)
-        console.log(`🔗 Actual:   ${actualHash}`)
-        console.log(`💡 Run 'hyperfy update ${appName}' to sync the script`)
-      }
-
-    } catch (error) {
-      console.error(`❌ Error validating app:`, error.message)
+      const state = this._readWorldState()
+      return typeof state?.worldUrl === 'string' ? state.worldUrl : null
+    } catch {
+      return null
     }
   }
 
-  calculateFileHash(content) {
-    // Use the same SHA-256 hashing method as the core utils
-    const hash = crypto.createHash('sha256')
-    hash.update(content, 'utf8')
-    return hash.digest('hex')
+  _readWorldState() {
+    if (!fs.existsSync(this.worldFile)) return null
+    const data = JSON.parse(fs.readFileSync(this.worldFile, 'utf8'))
+    if (!data || typeof data !== 'object') return null
+    data.blueprints = data.blueprints && typeof data.blueprints === 'object' ? data.blueprints : {}
+    return data
   }
 
-  async create(appName, options = {}) {
-    console.log(`🚀 Creating new app: ${appName}`)
-    
-    try {
-      const appData = {
-        name: options.name || appName,
-        model: options.model || null,
-        position: options.position || [0, 0, 0],
-        props: options.props || {}
-      }
+  _writeWorldState(state) {
+    fs.writeFileSync(this.worldFile, JSON.stringify(state, null, 2) + '\n', 'utf8')
+  }
 
-      const response = await fetch(`${this.apiUrl}/api/apps/${appName}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(appData)
-      })
-      
-      const data = await response.json()
-      
-      if (data.success) {
-        console.log(`✅ Successfully created app: ${appName}`)
-        console.log(`📁 App directory: ${path.join(this.appsDir, appName)}`)
-        console.log(`📝 Edit your app: ${path.join(this.appsDir, appName, 'index.js')}`)
-      } else {
-        console.error(`❌ Failed to create app: ${data.error}`)
-      }
-    } catch (error) {
-      console.error(`❌ Error creating app:`, error.message)
-      if (error.code === 'ECONNREFUSED') {
-        console.error(`💡 Make sure the app server is running: npm run dev`)
-      }
+  _requireWorldUrl() {
+    if (this.worldUrl) return this.worldUrl
+    throw new Error('Missing WORLD_URL (or world.json with worldUrl)')
+  }
+
+  async _promptAdminCode() {
+    if (!process.stdin.isTTY) return null
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    })
+    const answer = await new Promise(resolve => {
+      rl.question('Enter ADMIN_CODE: ', resolve)
+    })
+    rl.close()
+    const trimmed = typeof answer === 'string' ? answer.trim() : ''
+    return trimmed ? trimmed : null
+  }
+
+  async _connectAdminClient() {
+    this._requireWorldUrl()
+
+    let adminCode = this.adminCode
+    if (!adminCode) {
+      adminCode = await this._promptAdminCode()
+      this.adminCode = adminCode
+    }
+
+    const server = new DirectAppServer({ worldUrl: this.worldUrl, adminCode, rootDir: this.rootDir })
+    try {
+      await server.client.connect()
+      return server
+    } catch (err) {
+      const msg = err?.message || ''
+      const canRetry = (msg === 'invalid_code' || msg === 'unauthorized') && process.stdin.isTTY
+      if (!canRetry) throw err
+      adminCode = await this._promptAdminCode()
+      this.adminCode = adminCode
+      const retryServer = new DirectAppServer({ worldUrl: this.worldUrl, adminCode, rootDir: this.rootDir })
+      await retryServer.client.connect()
+      return retryServer
     }
   }
 
-  async deploy(appName, options = {}) {
-    console.log(`🚀 Deploying app: ${appName}`)
-    
+  _closeAdminClient(server) {
     try {
-      const position = options.position || [0, 0, 0]
-      const response = await fetch(`${this.apiUrl}/api/apps/${appName}/deploy`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ position })
-      })
-      
-      const data = await response.json()
-      
-      if (data.success) {
-        console.log(`✅ Successfully deployed app: ${appName}`)
-      } else {
-        console.error(`❌ Failed to deploy app: ${data.error}`)
-      }
-    } catch (error) {
-      console.error(`❌ Error deploying app:`, error.message)
-      if (error.code === 'ECONNREFUSED') {
-        console.error(`💡 Make sure the app server is running: npm run dev`)
-      }
-    }
+      server?.client?.ws?.close()
+    } catch {}
   }
 
-  async update(appName, scriptPath) {
-    console.log(`🔄 Updating script for app: ${appName}`)
-    
-    try {
-      if (!scriptPath) {
-        const base = path.join(this.appsDir, appName)
-        const js = path.join(base, 'index.js')
-        const ts = path.join(base, 'index.ts')
-        scriptPath = fs.existsSync(js) ? js : ts
-      }
-      
-      if (!fs.existsSync(scriptPath)) {
-        console.error(`❌ Script file not found: ${scriptPath}`)
-        return
-      }
-
-      const script = fs.readFileSync(scriptPath, 'utf8')
-      const response = await fetch(`${this.apiUrl}/api/apps/${appName}/script`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ script })
-      })
-      
-      const data = await response.json()
-      
-      if (data.success) {
-        console.log(`✅ Successfully updated script for: ${appName}`)
-      } else {
-        console.error(`❌ Failed to update script: ${data.error}`)
-      }
-    } catch (error) {
-      console.error(`❌ Error updating script:`, error.message)
+  _findBlueprintIdByAppName(appName) {
+    const state = this._readWorldState()
+    const entries = state?.blueprints && typeof state.blueprints === 'object' ? Object.entries(state.blueprints) : []
+    for (const [blueprintId, info] of entries) {
+      if (info?.appName === appName) return blueprintId
     }
+    return null
+  }
+
+  _getLocalScriptPath(appName) {
+    const base = path.join(this.appsDir, appName)
+    const ts = path.join(base, 'index.ts')
+    const js = path.join(base, 'index.js')
+    return fs.existsSync(ts) ? ts : js
   }
 
   async list() {
     console.log(`📋 Listing apps...`)
-    
+
+    const dirs = fs.existsSync(this.appsDir)
+      ? fs
+          .readdirSync(this.appsDir, { withFileTypes: true })
+          .filter(e => e.isDirectory())
+          .map(e => e.name)
+      : []
+
+    if (dirs.length === 0) {
+      console.log(`📝 No local apps found in ${this.appsDir}`)
+      console.log(`💡 Start the app-server in this folder to bootstrap from the world:`)
+      console.log(`   WORLD_URL=<world url> ADMIN_CODE=<code> node <path-to-repo>/app-server/server.js`)
+      return
+    }
+
+    const state = this._readWorldState()
+    const blueprintByApp = new Map()
+    if (state?.blueprints && typeof state.blueprints === 'object') {
+      for (const [blueprintId, info] of Object.entries(state.blueprints)) {
+        if (info?.appName) blueprintByApp.set(info.appName, { blueprintId, version: info.version })
+      }
+    }
+
+    console.log(`\n📱 Found ${dirs.length} local app(s):`)
+    for (const dir of dirs) {
+      const link = blueprintByApp.get(dir)
+      const suffix = link ? ` (${link.blueprintId}${typeof link.version === 'number' ? ` v${link.version}` : ''})` : ''
+      console.log(`  • ${dir}${suffix}`)
+      console.log(`    📁 ${path.join(this.appsDir, dir)}`)
+      console.log(``)
+    }
+  }
+
+  async create(appName, options = {}) {
+    if (!isValidAppName(appName)) {
+      console.error(`❌ Invalid app name: ${appName}`)
+      console.log(`💡 App names cannot contain / or \\`)
+      return
+    }
+
+    console.log(`🚀 Creating new app: ${appName}`)
+
+    const server = await this._connectAdminClient()
     try {
-      const response = await fetch(`${this.apiUrl}/api/apps`)
-      const data = await response.json()
-      
-      if (data.success) {
-        const apps = data.apps
-        if (apps.length === 0) {
-          console.log(`📝 No apps found. Create one with: hyperfy create myApp`)
+      const scriptContent =
+        options.script ||
+        `// scripts exist inside apps, which are isolated from eachother but can communicate
+// global variables: Vector3, Quaternion, Matrix4, Euler, fetch, num(min, max) (similar to Math.random)
+
+// exposes variables to the UI (docs/scripting/app/Props.md)
+app.configure([
+  {
+    type: "text",
+    key: "color",
+    label: "Box Color",
+    placeholder: "Enter a hex color",
+    initial: "#ff0000",
+  },
+]);
+
+// create nodes (docs/scripting/nodes/types/**.md)
+const group = app.create("group");
+const box = app.create("prim", {
+  type: "box",
+  scale: [2, 1, 3],
+  position: [0, 1, 0],
+  color: props.color,
+});
+group.add(box);
+app.add(group); // add to world space with world.add(group)
+
+// networking (docs/scripting/Networking.md)
+if (world.isServer) {
+  app.on("ping", () => {
+    console.log("ping heard on server of original app");
+    app.emit("cross-app-ping", {});
+  });
+  world.on("cross-app-pong", () => {
+    app.send("end", {});
+  });
+}
+
+if (world.isClient) {
+  // get player objects (docs/scripting/world/World.md)
+  const localPlayer = world.getPlayer();
+  world.on('enter', (player) => {
+    console.log('player entered', player.playerId)
+  })
+  // client-side code
+  app.on("end", () => {
+    console.log("full loop ended");
+  });
+  app.send("ping", {});
+}
+
+app.on("update", (delta) => {
+  // runs on both client and server
+  // 'fixedUpdate' is better for physics
+});
+`
+
+      const scriptHash = sha256Hex(scriptContent)
+      const scriptFilename = `${scriptHash}.js`
+      await server.client.uploadAsset({
+        filename: scriptFilename,
+        buffer: Buffer.from(scriptContent, 'utf8'),
+        mimeType: 'text/javascript',
+      })
+
+      const blueprintId = uuid()
+      const entityId = uuid()
+
+      const blueprint = {
+        id: blueprintId,
+        version: 0,
+        name: options.name || appName,
+        image: null,
+        author: null,
+        url: null,
+        desc: null,
+        model: options.model || 'asset://Model.glb',
+        script: `asset://${scriptFilename}`,
+        props: options.props || {},
+        preload: false,
+        public: false,
+        locked: false,
+        frozen: false,
+        unique: false,
+        scene: false,
+        disabled: false,
+      }
+
+      const entity = {
+        id: entityId,
+        type: 'app',
+        blueprint: blueprintId,
+        position: options.position || [0, 0, 0],
+        quaternion: options.quaternion || [0, 0, 0, 1],
+        scale: options.scale || [1, 1, 1],
+        mover: null,
+        uploader: null,
+        pinned: false,
+        state: options.state || {},
+      }
+
+      await server.client.request('blueprint_add', { blueprint })
+      await server.client.request('entity_add', { entity })
+
+      let assetsUrl = null
+      try {
+        const snapshot = await server.client.getSnapshot()
+        assetsUrl = snapshot?.assetsUrl || null
+      } catch {}
+
+      const existing = this._readWorldState()
+      const nextState = existing && typeof existing === 'object' ? existing : { worldUrl: this.worldUrl, assetsUrl: assetsUrl || null, blueprints: {} }
+      nextState.worldUrl = this.worldUrl
+      if (assetsUrl) nextState.assetsUrl = assetsUrl
+      nextState.blueprints = nextState.blueprints && typeof nextState.blueprints === 'object' ? nextState.blueprints : {}
+      nextState.blueprints[blueprintId] = { appName, version: blueprint.version }
+      this._writeWorldState(nextState)
+
+      console.log(`✅ Successfully created app in world: ${appName}`)
+      console.log(`   • Blueprint: ${blueprintId}`)
+      console.log(`   • Entity:    ${entityId}`)
+      console.log(`💡 If app-server is running in this folder, it should sync into ${this.appsDir} shortly.`)
+    } catch (error) {
+      console.error(`❌ Error creating app:`, error?.message || error)
+      if (!this.worldUrl) {
+        console.error(`💡 Set WORLD_URL (and ADMIN_CODE if required)`)
+      }
+    } finally {
+      this._closeAdminClient(server)
+    }
+  }
+
+  async deploy(appName) {
+    if (!isValidAppName(appName)) {
+      console.error(`❌ Invalid app name: ${appName}`)
+      return
+    }
+
+    console.log(`🚀 Deploying app: ${appName}`)
+
+    const server = await this._connectAdminClient()
+    try {
+      const blueprintId = this._findBlueprintIdByAppName(appName)
+      if (!blueprintId) {
+        console.error(`❌ App ${appName} is not linked (missing in world.json)`)
+        console.log(`💡 Start app-server in this folder to bootstrap/linking.`)
+        return
+      }
+
+      await server._deployApp(appName)
+      console.log(`✅ Deployed ${appName}`)
+    } catch (error) {
+      console.error(`❌ Error deploying app:`, error?.message || error)
+    } finally {
+      this._closeAdminClient(server)
+    }
+  }
+
+  async update(appName) {
+    // Legacy command retained; in direct mode this is equivalent to deploy.
+    return this.deploy(appName)
+  }
+
+  async validate(appName) {
+    if (!isValidAppName(appName)) {
+      console.error(`❌ Invalid app name: ${appName}`)
+      return
+    }
+
+    console.log(`🔍 Validating app: ${appName}`)
+
+    const scriptPath = this._getLocalScriptPath(appName)
+    if (!fs.existsSync(scriptPath)) {
+      console.error(`❌ Script not found: ${scriptPath}`)
+      return
+    }
+
+    const blueprintId = this._findBlueprintIdByAppName(appName)
+    if (!blueprintId) {
+      console.error(`❌ App ${appName} is not linked (missing in world.json)`)
+      return
+    }
+
+    const server = await this._connectAdminClient()
+    try {
+      const blueprint = await server.client.getBlueprint(blueprintId)
+      const remoteScript = blueprint?.script
+      if (!remoteScript) {
+        console.error(`❌ World blueprint has no script set`)
+        return
+      }
+
+      const localText = fs.readFileSync(scriptPath, 'utf8')
+      const localHash = sha256Hex(localText)
+
+      if (!remoteScript.startsWith('asset://')) {
+        const matches = localText === String(remoteScript)
+        if (matches) {
+          console.log(`✅ Script validation passed!`)
         } else {
-          console.log(`\n📱 Found ${apps.length} app(s):`)
-          apps.forEach(app => {
-            console.log(`  • ${app.name}`)
-            console.log(`    📁 ${path.join(this.appsDir, app.name)}`)
-            console.log(`    🎯 Assets: ${app.assets.length}`)
-            console.log(``)
-          })
+          console.log(`❌ Script validation failed! (world script is inline, local differs)`)
         }
+        return
+      }
+
+      const filename = remoteScript.slice('asset://'.length)
+      let assetsUrl = this._readWorldState()?.assetsUrl || null
+      if (!assetsUrl) {
+        try {
+          const snapshot = await server.client.getSnapshot()
+          assetsUrl = snapshot?.assetsUrl || null
+        } catch {}
+      }
+      if (!assetsUrl) {
+        console.error(`❌ Missing assetsUrl (start app-server once to write world.json, or ensure /admin/snapshot works)`)
+        return
+      }
+
+      const res = await fetch(joinUrl(assetsUrl, encodeURIComponent(filename)))
+      if (!res.ok) {
+        console.error(`❌ Failed to fetch remote script: ${res.status}`)
+        return
+      }
+      const remoteText = await res.text()
+      const remoteHash = sha256Hex(remoteText)
+
+      if (localHash === remoteHash) {
+        console.log(`✅ Script validation passed!`)
+        console.log(`📝 ${path.basename(scriptPath)} matches the script currently set on the world blueprint`)
+        console.log(`🔗 Hash: ${localHash}`)
       } else {
-        console.error(`❌ Failed to list apps: ${data.error}`)
+        console.log(`❌ Script validation failed!`)
+        console.log(`🔗 Local:  ${localHash}`)
+        console.log(`🔗 World:  ${remoteHash} (${filename})`)
+        console.log(`💡 Run 'hyperfy deploy ${appName}' (or just save the file with app-server running)`)
       }
     } catch (error) {
-      console.error(`❌ Error listing apps:`, error.message)
-      if (error.code === 'ECONNREFUSED') {
-        console.error(`💡 Make sure the app server is running: npm run dev`)
-      }
+      console.error(`❌ Error validating app:`, error?.message || error)
+    } finally {
+      this._closeAdminClient(server)
     }
   }
 
   async status() {
+    console.log(`📊 Admin Status`)
+    const server = await this._connectAdminClient()
     try {
-      const response = await fetch(`${this.apiUrl}/health`)
-      const data = await response.json()
-      
-      console.log(`📊 App Server Status:`)
-      console.log(`  Status: ${data.status}`)
-      console.log(`  Connected Clients: ${data.connectedClients}`)
-      console.log(`  Timestamp: ${data.timestamp}`)
-      console.log(`  Server URL: ${this.apiUrl}`)
+      const snapshot = await server.client.getSnapshot()
+      const blueprints = Array.isArray(snapshot?.blueprints) ? snapshot.blueprints.length : 0
+      const entities = Array.isArray(snapshot?.entities) ? snapshot.entities.length : 0
+      console.log(`  World URL:   ${this.worldUrl}`)
+      console.log(`  Assets URL:  ${snapshot?.assetsUrl || 'unknown'}`)
+      console.log(`  Blueprints:  ${blueprints}`)
+      console.log(`  Entities:    ${entities}`)
     } catch (error) {
-      console.error(`❌ App server not reachable: ${error.message}`)
-      console.error(`💡 Start the server with: npm run dev`)
+      console.error(`❌ Status failed:`, error?.message || error)
+    } finally {
+      this._closeAdminClient(server)
     }
   }
 
-
   async reset(options = {}) {
     const force = options.force || false
-    
+
     if (!force) {
       console.log(`⚠️  This will permanently delete:`)
-      console.log(`   • All local apps in ${this.appsDir}`)
-      console.log(`   • All server state`)
+      console.log(`   • Local apps in ${this.appsDir}`)
+      console.log(`   • Local assets in ${this.assetsDir}`)
+      console.log(`   • ${this.worldFile}`)
       console.log(``)
-      
-      // Simple confirmation without external dependencies
-      // readline imported at top level
+
       const rl = readline.createInterface({
         input: process.stdin,
-        output: process.stdout
+        output: process.stdout,
       })
-      
+
       const answer = await new Promise(resolve => {
-        rl.question('Are you sure you want to reset everything? (yes/no): ', resolve)
+        rl.question('Are you sure you want to reset local state? (yes/no): ', resolve)
       })
       rl.close()
-      
+
       if (answer.toLowerCase() !== 'yes' && answer.toLowerCase() !== 'y') {
         console.log('❌ Reset cancelled')
         return
       }
     }
-    
+
     try {
-      console.log(`🔄 Resetting development environment...`)
-      
-      // Reset server state via API
-      try {
-        const response = await fetch(`${this.apiUrl}/api/reset`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          }
-        })
-        const data = await response.json()
-        if (data.success) {
-          console.log(`✅ Server state cleared`)
-        } else {
-          console.warn(`⚠️  Server reset warning: ${data.error}`)
-        }
-      } catch (error) {
-        if (error.code === 'ECONNREFUSED') {
-          console.log(`⚠️  App server not running, clearing local state only`)
-        } else {
-          console.warn(`⚠️  Server reset failed: ${error.message}`)
-        }
+      if (fs.existsSync(this.appsDir)) {
+        fs.rmSync(this.appsDir, { recursive: true, force: true })
       }
-      
-      // Clear local CLI state
-      await this.clearLocalState()
-      
-      console.log(``)
-      console.log(`✅ Reset complete! Your development environment is now clean.`)
-      console.log(`💡 Create a new app with: hyperfy create myApp`)
-      
+      if (fs.existsSync(this.assetsDir)) {
+        fs.rmSync(this.assetsDir, { recursive: true, force: true })
+      }
+      if (fs.existsSync(this.worldFile)) {
+        fs.rmSync(this.worldFile, { force: true })
+      }
+      console.log(`✅ Reset complete!`)
     } catch (error) {
-      console.error(`❌ Reset failed: ${error.message}`)
-    }
-  }
-
-  async clearLocalState() {
-    // Clear local apps directory
-    if (fs.existsSync(this.appsDir)) {
-      console.log(`🗑️  Clearing local apps directory...`)
-      fs.rmSync(this.appsDir, { recursive: true, force: true })
-      console.log(`✅ Local apps cleared`)
-    }
-  }
-
-  loadApp(appName) {
-    const appPath = path.join(this.appsDir, appName)
-    const configPath = path.join(appPath, 'config.json')
-    const scriptPath = path.join(appPath, 'index.js')
-
-    if (!fs.existsSync(configPath) || !fs.existsSync(scriptPath)) {
-      return null
-    }
-
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'))
-    const script = fs.readFileSync(scriptPath, 'utf8')
-
-    return {
-      name: appName,
-      config,
-      script
+      console.error(`❌ Reset failed:`, error?.message || error)
     }
   }
 
   showHelp() {
     console.log(`
-🚀 Hyperfy Development CLI
+🚀 Hyperfy CLI (direct /admin mode)
 
 Usage:
   hyperfy <command> [options]
 
 Commands:
-  create <appName>           Create a new app
-  list                       List all local apps
-  deploy <appName>           Deploy app to connected clients
-  update <appName>           Update app script  
-  validate <appName>         Verify index.js matches config.json script hash
-  reset [--force]            Reset all apps and server state
-  status                     Show app server status
+  create <appName>           Create a new app in the connected world
+  list                       List local apps in ./apps
+  deploy <appName>           Deploy local app (blueprint.json + index.js/ts) to world
+  update <appName>           Alias for deploy
+  validate <appName>         Verify local script matches world blueprint script
+  reset [--force]            Delete local apps/assets/world.json
+  status                     Show /admin snapshot summary
   help                       Show this help
 
-Examples:
-  hyperfy create myGame
-  hyperfy deploy myGame
-  hyperfy validate myGame
-  hyperfy reset
-  hyperfy reset --force
-  hyperfy list
-
-Workflow:
-  1. Create an app locally
-  2. Develop locally with hot reload
-  3. Deploy updates to connected clients
-
 Environment:
-  HYPERFY_APP_SERVER_URL   App server URL (default: http://localhost:8080)
+  WORLD_URL                  World server base URL (e.g. http://localhost:5000)
+  ADMIN_CODE                 Admin code (if the world requires it)
+
+Notes:
+  - This CLI no longer talks to a local app-server HTTP API.
+  - Start the direct app-server for continuous sync:
+      WORLD_URL=... ADMIN_CODE=... node <path-to-repo>/app-server/server.js
 `)
   }
 }
 
-// Parse command line arguments
 async function main() {
   const cli = new HyperfyCLI()
   const [command, ...args] = process.argv.slice(2)
@@ -404,14 +536,12 @@ async function main() {
         console.log('Usage: hyperfy update <appName>')
         break
       }
-      await cli.update(args[0], args[1])
+      await cli.update(args[0])
       break
 
     case 'list':
       await cli.list()
       break
-
-
 
     case 'validate':
       if (!args[0]) {
@@ -422,10 +552,11 @@ async function main() {
       await cli.validate(args[0])
       break
 
-    case 'reset':
+    case 'reset': {
       const force = args.includes('--force') || args.includes('-f')
       await cli.reset({ force })
       break
+    }
 
     case 'status':
       await cli.status()
@@ -442,11 +573,12 @@ async function main() {
         console.error(`❌ Unknown command: ${command}`)
       }
       cli.showHelp()
-      process.exit(1)
+      process.exit(command ? 1 : 0)
   }
 }
 
 main().catch(error => {
-  console.error('❌ CLI Error:', error.message)
+  console.error('❌ CLI Error:', error?.message || error)
   process.exit(1)
-}) 
+})
+
