@@ -1,6 +1,7 @@
 import { App } from '../entities/App'
 import { PlayerLocal } from '../entities/PlayerLocal'
 import { PlayerRemote } from '../entities/PlayerRemote'
+import { AdminPlayerRemote } from '../entities/AdminPlayerRemote'
 import { System } from './System'
 
 const Types = {
@@ -32,13 +33,20 @@ export class Entities extends System {
   }
 
   getPlayer(entityId) {
+    if (this.world.isAdminClient && this.player?.data?.id === entityId) {
+      return this.player
+    }
     return this.players.get(entityId)
   }
 
   add(data, local) {
     let Entity
     if (data.type === 'player') {
-      Entity = Types[data.owner === this.world.network.id ? 'playerLocal' : 'playerRemote']
+      if (this.world.isAdminClient) {
+        Entity = AdminPlayerRemote
+      } else {
+        Entity = Types[data.owner === this.world.network.id ? 'playerLocal' : 'playerRemote']
+      }
     } else {
       Entity = Types[data.type]
     }

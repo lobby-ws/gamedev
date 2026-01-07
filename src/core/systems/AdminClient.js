@@ -1,3 +1,4 @@
+import { readPacket, writePacket } from '../packets'
 import { storage } from '../storage'
 import { hashFile } from '../utils-client'
 import { System } from './System'
@@ -34,8 +35,13 @@ export class AdminClient extends System {
     this.requireCode = false
   }
 
-  init() {
+  init({ adminUrl, requireAdminCode } = {}) {
     this.code = storage.get('adminCode')
+    if (adminUrl) {
+      this.adminUrl = normalizeAdminUrl(adminUrl)
+      this.requireCode = !!requireAdminCode
+      this.connect()
+    }
   }
 
   onSnapshot(data) {
@@ -47,6 +53,7 @@ export class AdminClient extends System {
   setCode(code) {
     this.code = code
     storage.set('adminCode', code)
+    this.world.emit('admin-code', code)
     this.error = null
     this.disconnect()
     this.connect()
@@ -60,6 +67,7 @@ export class AdminClient extends System {
     }
     const wsUrl = toWsUrl(this.adminUrl)
     this.ws = new WebSocket(wsUrl)
+    this.ws.binaryType = 'arraybuffer'
     this.ws.addEventListener('open', this.onOpen)
     this.ws.addEventListener('message', this.onMessage)
     this.ws.addEventListener('close', this.onClose)
@@ -84,32 +92,27 @@ export class AdminClient extends System {
     this.connected = true
     this.authenticated = false
     this.error = null
-    this.sendRaw({
-      type: 'auth',
+    this.sendPacket('adminAuth', {
       code: this.code,
+      needsHeartbeat: false,
       networkId: this.world.network?.id || null,
     })
   }
 
   onMessage = event => {
-    let msg
-    try {
-      msg = JSON.parse(event.data)
-    } catch (err) {
-      console.error('[admin] invalid message', err)
-      return
-    }
-    if (msg.type === 'auth_ok') {
+    const [method, data] = readPacket(event.data)
+    if (!method) return
+    if (method === 'onAdminAuthOk') {
       this.authenticated = true
       this.flushQueue()
       return
     }
-    if (msg.type === 'auth_error') {
-      this.error = msg.error || 'auth_error'
+    if (method === 'onAdminAuthError') {
+      this.error = data?.error || 'auth_error'
       return
     }
-    if (msg.type === 'error') {
-      this.error = msg.error || 'error'
+    if (method === 'onAdminResult' && data && data.ok === false) {
+      this.error = data.error || 'error'
       return
     }
   }
@@ -128,21 +131,21 @@ export class AdminClient extends System {
     if (!this.authenticated) return
     while (this.queue.length) {
       const msg = this.queue.shift()
-      this.sendRaw(msg)
+      this.sendPacket('adminCommand', msg)
     }
   }
 
-  sendRaw(msg) {
+  sendPacket(name, payload) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(msg))
+      this.ws.send(writePacket(name, payload))
     }
   }
 
-  send(msg) {
+  send(payload) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN && this.authenticated) {
-      this.sendRaw(msg)
+      this.sendPacket('adminCommand', payload)
     } else {
-      this.queue.push(msg)
+      this.queue.push(payload)
       this.connect()
     }
   }

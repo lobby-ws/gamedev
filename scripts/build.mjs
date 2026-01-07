@@ -22,10 +22,12 @@ const clientPublicDir = path.join(rootDir, 'src/client/public')
 const clientBuildDir = path.join(rootDir, 'build/public')
 const clientHtmlSrc = path.join(rootDir, 'src/client/public/index.html')
 const clientHtmlDest = path.join(rootDir, 'build/public/index.html')
+const adminHtmlSrc = path.join(rootDir, 'src/client/public/admin.html')
+const adminHtmlDest = path.join(rootDir, 'build/public/admin.html')
 
 {
   const clientCtx = await esbuild.context({
-    entryPoints: ['src/client/index.js', 'src/client/particles.js'],
+    entryPoints: ['src/client/index.js', 'src/client/particles.js', 'src/client/admin.js'],
     entryNames: '/[name]-[hash]',
     outdir: clientBuildDir,
     platform: 'browser',
@@ -67,12 +69,22 @@ const clientHtmlDest = path.join(rootDir, 'build/public/index.html')
             const particlesPath = outputFiles
               .find(file => file.includes('/particles-') && file.endsWith('.js'))
               .split('build/public')[1]
+            const adminJsPath = outputFiles
+              .find(file => file.includes('/admin-') && file.endsWith('.js'))
+              .split('build/public')[1]
             // inject into html and copy over
             let htmlContent = await fs.readFile(clientHtmlSrc, 'utf-8')
             htmlContent = htmlContent.replace('{jsPath}', jsPath)
             htmlContent = htmlContent.replace('{particlesPath}', particlesPath)
             htmlContent = htmlContent.replaceAll('{buildId}', Date.now())
             await fs.writeFile(clientHtmlDest, htmlContent)
+            if (await fs.pathExists(adminHtmlSrc)) {
+              let adminHtml = await fs.readFile(adminHtmlSrc, 'utf-8')
+              adminHtml = adminHtml.replace('{jsPath}', adminJsPath)
+              adminHtml = adminHtml.replace('{particlesPath}', particlesPath)
+              adminHtml = adminHtml.replaceAll('{buildId}', Date.now())
+              await fs.writeFile(adminHtmlDest, adminHtml)
+            }
           })
         },
       },

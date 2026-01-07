@@ -1,4 +1,7 @@
 import crypto from 'crypto'
+import fs from 'fs'
+
+import { readPacket, writePacket } from '../core/packets.js'
 
 function normalizeHeader(value) {
   if (Array.isArray(value)) return value[0]
@@ -20,21 +23,48 @@ function getAdminCodeFromRequest(req) {
   return typeof header === 'string' ? header : null
 }
 
-function sendJson(ws, payload) {
+function sendPacket(ws, name, payload) {
   try {
-    ws.send(JSON.stringify(payload))
+    ws.send(writePacket(name, payload))
   } catch (err) {
     console.error('[admin] failed to send message', err)
   }
 }
 
-export async function admin(fastify, { world, assets }) {
-  const subscribers = new Set()
+function serializePlayersForAdmin(world) {
+  const players = []
+  world.entities.players.forEach(player => {
+    players.push({
+      id: player.data.id,
+      name: player.data.name,
+      avatar: player.data.avatar,
+      sessionAvatar: player.data.sessionAvatar,
+      position: player.data.position,
+      quaternion: player.data.quaternion,
+      rank: player.data.rank,
+      enteredAt: player.data.enteredAt,
+    })
+  })
+  return players
+}
 
-  function broadcast(message, { ignore } = {}) {
+function serializeEntitiesForAdmin(world) {
+  return world.entities.serialize().filter(entity => entity?.type !== 'player')
+}
+
+export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
+  const subscribers = new Set()
+  const heartbeatSubscribers = new Set()
+
+  function broadcast(name, payload) {
     for (const ws of subscribers) {
-      if (ignore && ws === ignore) continue
-      sendJson(ws, message)
+      sendPacket(ws, name, payload)
+    }
+  }
+
+  function broadcastHeartbeat(name, payload) {
+    for (const ws of heartbeatSubscribers) {
+      sendPacket(ws, name, payload)
     }
   }
 
@@ -47,223 +77,280 @@ export async function admin(fastify, { world, assets }) {
     return true
   }
 
-  fastify.get('/admin', { websocket: true }, (ws, _req) => {
-    let authed = false
-    let defaultNetworkId = null
-
-    ws.on('message', async raw => {
-      let msg
-      try {
-        const text = Buffer.isBuffer(raw) ? raw.toString('utf8') : String(raw)
-        msg = JSON.parse(text)
-      } catch (err) {
-        sendJson(ws, { type: 'error', error: 'invalid_json' })
-        return
-      }
-
-      if (!authed) {
-        if (msg?.type !== 'auth') {
-          sendJson(ws, { type: 'auth_error', error: 'unauthorized' })
-          ws.close()
-          return
-        }
-        if (!isAdminCodeValid(msg.code)) {
-          sendJson(ws, { type: 'auth_error', error: 'invalid_code' })
-          ws.close()
-          return
-        }
-        authed = true
-        defaultNetworkId = msg.networkId || null
-        subscribers.add(ws)
-        ws.on('close', () => {
-          subscribers.delete(ws)
-        })
-        sendJson(ws, { type: 'auth_ok' })
-        return
-      }
-
-      const requestId = msg?.requestId
-      const ignoreNetworkId = msg?.networkId || defaultNetworkId || undefined
-      const network = world.network
-
-      try {
-        if (msg.type === 'blueprint_add') {
-          if (!msg.blueprint?.id) {
-            sendJson(ws, { type: 'error', error: 'invalid_payload', requestId })
-            return
-          }
-          const result = network.applyBlueprintAdded(msg.blueprint, { ignoreNetworkId })
-          if (!result.ok) {
-            sendJson(ws, { type: 'error', error: result.error, requestId })
-            return
-          }
-          broadcast({ type: 'blueprintAdded', blueprint: msg.blueprint }, { ignore: ws })
-          sendJson(ws, { type: 'ok', requestId })
-          return
-        }
-
-        if (msg.type === 'blueprint_modify') {
-          if (!msg.change?.id) {
-            sendJson(ws, { type: 'error', error: 'invalid_payload', requestId })
-            return
-          }
-          const result = network.applyBlueprintModified(msg.change, { ignoreNetworkId })
-          if (!result.ok) {
-            sendJson(ws, {
-              type: 'error',
-              error: result.error,
-              current: result.current,
-              requestId,
-            })
-            return
-          }
-          broadcast({ type: 'blueprintModified', blueprint: world.blueprints.get(msg.change.id) }, { ignore: ws })
-          sendJson(ws, { type: 'ok', requestId })
-          return
-        }
-
-        if (msg.type === 'blueprint_remove') {
-          if (!msg.id) {
-            sendJson(ws, { type: 'error', error: 'invalid_payload', requestId })
-            return
-          }
-          const result = await network.applyBlueprintRemoved({ id: msg.id }, { ignoreNetworkId })
-          if (!result.ok) {
-            sendJson(ws, { type: 'error', error: result.error, requestId })
-            return
-          }
-          broadcast({ type: 'blueprintRemoved', id: msg.id }, { ignore: ws })
-          sendJson(ws, { type: 'ok', requestId })
-          return
-        }
-
-        if (msg.type === 'entity_add') {
-          if (!msg.entity?.id) {
-            sendJson(ws, { type: 'error', error: 'invalid_payload', requestId })
-            return
-          }
-          const result = network.applyEntityAdded(msg.entity, { ignoreNetworkId })
-          if (!result.ok) {
-            sendJson(ws, { type: 'error', error: result.error, requestId })
-            return
-          }
-          broadcast({ type: 'entityAdded', entity: world.entities.get(msg.entity.id)?.data || msg.entity }, { ignore: ws })
-          sendJson(ws, { type: 'ok', requestId })
-          return
-        }
-
-        if (msg.type === 'entity_modify') {
-          if (!msg.change?.id) {
-            sendJson(ws, { type: 'error', error: 'invalid_payload', requestId })
-            return
-          }
-          const result = await network.applyEntityModified(msg.change, { ignoreNetworkId })
-          if (!result.ok) {
-            sendJson(ws, { type: 'error', error: result.error, requestId })
-            return
-          }
-          broadcast({ type: 'entityModified', entity: world.entities.get(msg.change.id)?.data || msg.change }, { ignore: ws })
-          sendJson(ws, { type: 'ok', requestId })
-          return
-        }
-
-        if (msg.type === 'entity_remove') {
-          if (!msg.id) {
-            sendJson(ws, { type: 'error', error: 'invalid_payload', requestId })
-            return
-          }
-          const result = network.applyEntityRemoved(msg.id, { ignoreNetworkId })
-          if (!result.ok) {
-            sendJson(ws, { type: 'error', error: result.error, requestId })
-            return
-          }
-          broadcast({ type: 'entityRemoved', id: msg.id }, { ignore: ws })
-          sendJson(ws, { type: 'ok', requestId })
-          return
-        }
-
-        if (msg.type === 'settings_modify') {
-          if (!msg.key) {
-            sendJson(ws, { type: 'error', error: 'invalid_payload', requestId })
-            return
-          }
-          const result = network.applySettingsModified({ key: msg.key, value: msg.value }, { ignoreNetworkId })
-          if (!result.ok) {
-            sendJson(ws, { type: 'error', error: result.error, requestId })
-            return
-          }
-          broadcast({ type: 'settingsModified', data: { key: msg.key, value: msg.value } }, { ignore: ws })
-          sendJson(ws, { type: 'ok', requestId })
-          return
-        }
-
-        if (msg.type === 'spawn_modify') {
-          if (!msg.op) {
-            sendJson(ws, { type: 'error', error: 'invalid_payload', requestId })
-            return
-          }
-          const result = await network.applySpawnModified({
-            op: msg.op,
-            networkId: msg.networkId || defaultNetworkId,
-          })
-          if (!result.ok) {
-            sendJson(ws, { type: 'error', error: result.error, requestId })
-            return
-          }
-          broadcast({ type: 'spawnModified', spawn: world.network.spawn }, { ignore: ws })
-          sendJson(ws, { type: 'ok', requestId })
-          return
-        }
-
-        if (msg.type === 'modify_rank') {
-          if (!msg.playerId || typeof msg.rank !== 'number') {
-            sendJson(ws, { type: 'error', error: 'invalid_payload', requestId })
-            return
-          }
-          const result = await network.applyModifyRank({ playerId: msg.playerId, rank: msg.rank })
-          if (!result.ok) {
-            sendJson(ws, { type: 'error', error: result.error, requestId })
-            return
-          }
-          broadcast({ type: 'entityModified', entity: world.entities.get(msg.playerId)?.data || { id: msg.playerId, rank: msg.rank } }, { ignore: ws })
-          sendJson(ws, { type: 'ok', requestId })
-          return
-        }
-
-        if (msg.type === 'kick') {
-          if (!msg.playerId) {
-            sendJson(ws, { type: 'error', error: 'invalid_payload', requestId })
-            return
-          }
-          const result = network.applyKick(msg.playerId)
-          if (!result.ok) {
-            sendJson(ws, { type: 'error', error: result.error, requestId })
-            return
-          }
-          sendJson(ws, { type: 'ok', requestId })
-          return
-        }
-
-        if (msg.type === 'mute') {
-          if (!msg.playerId || typeof msg.muted !== 'boolean') {
-            sendJson(ws, { type: 'error', error: 'invalid_payload', requestId })
-            return
-          }
-          const result = network.applyMute({ playerId: msg.playerId, muted: msg.muted })
-          if (!result.ok) {
-            sendJson(ws, { type: 'error', error: result.error, requestId })
-            return
-          }
-          sendJson(ws, { type: 'ok', requestId })
-          return
-        }
-
-        sendJson(ws, { type: 'error', error: 'unknown_type', requestId })
-      } catch (err) {
-        console.error('[admin] handler error', err)
-        sendJson(ws, { type: 'error', error: 'server_error', requestId })
-      }
+  function sendSnapshot(ws) {
+    sendPacket(ws, 'snapshot', {
+      serverTime: performance.now(),
+      assetsUrl: assets.url,
+      maxUploadSize: process.env.PUBLIC_MAX_UPLOAD_SIZE,
+      settings: world.settings.serialize(),
+      spawn: world.network.spawn,
+      blueprints: world.blueprints.serialize(),
+      entities: serializeEntitiesForAdmin(world),
+      players: serializePlayersForAdmin(world),
+      hasAdminCode: !!process.env.ADMIN_CODE,
+      adminUrl: process.env.PUBLIC_ADMIN_URL,
     })
+  }
+
+  world.network.on('entityAdded', data => {
+    broadcast('entityAdded', data)
+  })
+  world.network.on('entityModified', data => {
+    broadcast('entityModified', data)
+  })
+  world.network.on('entityRemoved', id => {
+    broadcast('entityRemoved', id)
+  })
+  world.network.on('blueprintAdded', data => {
+    broadcast('blueprintAdded', data)
+  })
+  world.network.on('blueprintModified', data => {
+    broadcast('blueprintModified', data)
+  })
+  world.network.on('settingsModified', data => {
+    broadcast('settingsModified', data)
+  })
+  world.network.on('spawnModified', data => {
+    broadcast('spawnModified', data)
+  })
+  world.network.on('playerJoined', data => {
+    broadcastHeartbeat('playerJoined', data)
+  })
+  world.network.on('playerUpdated', data => {
+    broadcastHeartbeat('playerUpdated', data)
+  })
+  world.network.on('playerLeft', data => {
+    broadcastHeartbeat('playerLeft', data)
+  })
+
+  fastify.route({
+    method: 'GET',
+    url: '/admin',
+    handler: async (_req, reply) => {
+      if (!adminHtmlPath) {
+        return reply.code(404).send()
+      }
+      const title = world.settings.title || 'World'
+      const desc = world.settings.desc || ''
+      const image = world.resolveURL(world.settings.image?.url) || ''
+      const url = process.env.ASSETS_BASE_URL
+      let html = fs.readFileSync(adminHtmlPath, 'utf-8')
+      html = html.replaceAll('{url}', url)
+      html = html.replaceAll('{title}', title)
+      html = html.replaceAll('{desc}', desc)
+      html = html.replaceAll('{image}', image)
+      reply.type('text/html').send(html)
+    },
+    wsHandler: (ws, _req) => {
+      let authed = false
+      let defaultNetworkId = null
+      let needsHeartbeat = false
+
+      const onClose = () => {
+        subscribers.delete(ws)
+        heartbeatSubscribers.delete(ws)
+      }
+
+      ws.on('close', onClose)
+
+      ws.on('message', async raw => {
+        const [method, data] = readPacket(raw)
+        if (!method) {
+          sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_packet' })
+          return
+        }
+
+        if (!authed) {
+          if (method !== 'onAdminAuth') {
+            sendPacket(ws, 'adminAuthError', { error: 'unauthorized' })
+            ws.close()
+            return
+          }
+          if (!isAdminCodeValid(data?.code)) {
+            sendPacket(ws, 'adminAuthError', { error: 'invalid_code' })
+            ws.close()
+            return
+          }
+          authed = true
+          needsHeartbeat = !!data?.needsHeartbeat
+          defaultNetworkId = data?.networkId || null
+          subscribers.add(ws)
+          if (needsHeartbeat) heartbeatSubscribers.add(ws)
+          sendPacket(ws, 'adminAuthOk', { ok: true })
+          if (needsHeartbeat) {
+            sendSnapshot(ws)
+          }
+          return
+        }
+
+        if (method !== 'onAdminCommand') {
+          sendPacket(ws, 'adminResult', { ok: false, error: 'unknown_type', requestId: data?.requestId })
+          return
+        }
+
+        const requestId = data?.requestId
+        const ignoreNetworkId = data?.networkId || defaultNetworkId || undefined
+        const network = world.network
+
+        try {
+          if (data.type === 'blueprint_add') {
+            if (!data.blueprint?.id) {
+              sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
+              return
+            }
+            const result = network.applyBlueprintAdded(data.blueprint, { ignoreNetworkId })
+            if (!result.ok) {
+              sendPacket(ws, 'adminResult', { ok: false, error: result.error, requestId })
+              return
+            }
+            sendPacket(ws, 'adminResult', { ok: true, requestId })
+            return
+          }
+
+          if (data.type === 'blueprint_modify') {
+            if (!data.change?.id) {
+              sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
+              return
+            }
+            const result = network.applyBlueprintModified(data.change, { ignoreNetworkId })
+            if (!result.ok) {
+              sendPacket(ws, 'adminResult', {
+                ok: false,
+                error: result.error,
+                current: result.current,
+                requestId,
+              })
+              if (result.current) {
+                sendPacket(ws, 'blueprintModified', result.current)
+              }
+              return
+            }
+            sendPacket(ws, 'adminResult', { ok: true, requestId })
+            return
+          }
+
+          if (data.type === 'entity_add') {
+            if (!data.entity?.id) {
+              sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
+              return
+            }
+            const result = network.applyEntityAdded(data.entity, { ignoreNetworkId })
+            if (!result.ok) {
+              sendPacket(ws, 'adminResult', { ok: false, error: result.error, requestId })
+              return
+            }
+            sendPacket(ws, 'adminResult', { ok: true, requestId })
+            return
+          }
+
+          if (data.type === 'entity_modify') {
+            if (!data.change?.id) {
+              sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
+              return
+            }
+            const result = await network.applyEntityModified(data.change, { ignoreNetworkId })
+            if (!result.ok) {
+              sendPacket(ws, 'adminResult', { ok: false, error: result.error, requestId })
+              return
+            }
+            sendPacket(ws, 'adminResult', { ok: true, requestId })
+            return
+          }
+
+          if (data.type === 'entity_remove') {
+            if (!data.id) {
+              sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
+              return
+            }
+            const result = network.applyEntityRemoved(data.id, { ignoreNetworkId })
+            if (!result.ok) {
+              sendPacket(ws, 'adminResult', { ok: false, error: result.error, requestId })
+              return
+            }
+            sendPacket(ws, 'adminResult', { ok: true, requestId })
+            return
+          }
+
+          if (data.type === 'settings_modify') {
+            if (!data.key) {
+              sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
+              return
+            }
+            const result = network.applySettingsModified({ key: data.key, value: data.value }, { ignoreNetworkId })
+            if (!result.ok) {
+              sendPacket(ws, 'adminResult', { ok: false, error: result.error, requestId })
+              return
+            }
+            sendPacket(ws, 'adminResult', { ok: true, requestId })
+            return
+          }
+
+          if (data.type === 'spawn_modify') {
+            if (!data.op) {
+              sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
+              return
+            }
+            const result = await network.applySpawnModified({
+              op: data.op,
+              networkId: data.networkId || defaultNetworkId,
+            })
+            if (!result.ok) {
+              sendPacket(ws, 'adminResult', { ok: false, error: result.error, requestId })
+              return
+            }
+            sendPacket(ws, 'adminResult', { ok: true, requestId })
+            return
+          }
+
+          if (data.type === 'modify_rank') {
+            if (!data.playerId || typeof data.rank !== 'number') {
+              sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
+              return
+            }
+            const result = await network.applyModifyRank({ playerId: data.playerId, rank: data.rank })
+            if (!result.ok) {
+              sendPacket(ws, 'adminResult', { ok: false, error: result.error, requestId })
+              return
+            }
+            sendPacket(ws, 'adminResult', { ok: true, requestId })
+            return
+          }
+
+          if (data.type === 'kick') {
+            if (!data.playerId) {
+              sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
+              return
+            }
+            const result = network.applyKick(data.playerId)
+            if (!result.ok) {
+              sendPacket(ws, 'adminResult', { ok: false, error: result.error, requestId })
+              return
+            }
+            sendPacket(ws, 'adminResult', { ok: true, requestId })
+            return
+          }
+
+          if (data.type === 'mute') {
+            if (!data.playerId || typeof data.muted !== 'boolean') {
+              sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
+              return
+            }
+            const result = network.applyMute({ playerId: data.playerId, muted: data.muted })
+            if (!result.ok) {
+              sendPacket(ws, 'adminResult', { ok: false, error: result.error, requestId })
+              return
+            }
+            sendPacket(ws, 'adminResult', { ok: true, requestId })
+            return
+          }
+
+          sendPacket(ws, 'adminResult', { ok: false, error: 'unknown_type', requestId })
+        } catch (err) {
+          console.error('[admin] handler error', err)
+          sendPacket(ws, 'adminResult', { ok: false, error: 'server_error', requestId })
+        }
+      })
+    },
   })
 
   fastify.get('/admin/snapshot', async (req, reply) => {
@@ -272,10 +359,14 @@ export async function admin(fastify, { world, assets }) {
     return {
       worldId: network.worldId,
       assetsUrl: assets.url,
+      maxUploadSize: process.env.PUBLIC_MAX_UPLOAD_SIZE,
       settings: world.settings.serialize(),
       spawn: network.spawn,
       blueprints: world.blueprints.serialize(),
-      entities: world.entities.serialize(),
+      entities: serializeEntitiesForAdmin(world),
+      players: serializePlayersForAdmin(world),
+      hasAdminCode: !!process.env.ADMIN_CODE,
+      adminUrl: process.env.PUBLIC_ADMIN_URL,
     }
   })
 
@@ -300,14 +391,14 @@ export async function admin(fastify, { world, assets }) {
       }
       return reply.code(400).send({ error: result.error })
     }
-    broadcast({ type: 'blueprintRemoved', id: req.params.id })
+    broadcast('blueprintRemoved', { id: req.params.id })
     return { ok: true }
   })
 
   fastify.get('/admin/entities', async (req, reply) => {
     if (!requireAdmin(req, reply)) return
     const type = req.query?.type
-    const entities = world.entities.serialize()
+    const entities = serializeEntitiesForAdmin(world)
     if (typeof type !== 'string' || !type) {
       return { entities }
     }
@@ -327,7 +418,7 @@ export async function admin(fastify, { world, assets }) {
     if (!result.ok) {
       return reply.code(400).send({ error: result.error })
     }
-    broadcast({ type: 'spawnModified', spawn: world.network.spawn })
+    broadcast('spawnModified', world.network.spawn)
     return { ok: true, spawn: world.network.spawn }
   })
 

@@ -2,11 +2,11 @@ import { useEffect, useState } from 'react'
 
 export function useRank(world, player) {
   const [perms, setPerms] = useState(() => {
-    const isAdmin = player.isAdmin()
-    const isBuilder = player.isBuilder()
-    return { isAdmin, isBuilder }
+    if (!player) return { isAdmin: false, isBuilder: false }
+    return { isAdmin: player.isAdmin(), isBuilder: player.isBuilder() }
   })
   useEffect(() => {
+    if (!player) return
     function update() {
       const isAdmin = player.isAdmin()
       const isBuilder = player.isBuilder()
@@ -28,6 +28,6 @@ export function useRank(world, player) {
       world.settings.off('change', onSettings)
       world.off('rank', onRank)
     }
-  }, [])
+  }, [player])
   return perms
 }

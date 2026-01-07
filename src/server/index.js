@@ -132,7 +132,8 @@ fastify.register(multipart, {
 })
 fastify.register(ws)
 fastify.register(worldNetwork)
-fastify.register(admin, { world, assets })
+const adminHtmlPath = path.join(__dirname, 'public', 'admin.html')
+fastify.register(admin, { world, assets, adminHtmlPath })
 
 const publicEnvs = {}
 for (const key in process.env) {

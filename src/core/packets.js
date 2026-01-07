@@ -27,6 +27,16 @@ const names = [
   'ping',
   'pong',
   'blueprintRemoved',
+  // admin protocol
+  'adminAuth',
+  'adminAuthOk',
+  'adminAuthError',
+  'adminCommand',
+  'adminResult',
+  // admin player streaming
+  'playerJoined',
+  'playerUpdated',
+  'playerLeft',
 ]
 
 const byName = {}

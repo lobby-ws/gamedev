@@ -6,6 +6,7 @@ import { isEqual } from 'lodash-es'
 import { uuid } from './utils.js'
 import { WorldManifest } from './WorldManifest.js'
 import { deriveBlueprintId, parseBlueprintId, isBlueprintDenylist } from './blueprintUtils.js'
+import { readPacket, writePacket } from '../src/core/packets.js'
 
 const BLUEPRINT_FIELDS = [
   'model',
@@ -154,27 +155,27 @@ class WorldAdminClient extends EventEmitter {
       this.ws = ws
 
       const onOpen = () => {
-        ws.send(JSON.stringify({ type: 'auth', code: this.adminCode }))
+        ws.send(
+          writePacket('adminAuth', {
+            code: this.adminCode,
+            needsHeartbeat: false,
+          })
+        )
       }
 
       const onMessage = event => {
-        let msg
-        try {
-          msg = JSON.parse(event.data)
-        } catch {
-          return
-        }
-
-        if (msg?.type === 'auth_ok') {
+        const [method, data] = readPacket(event.data)
+        if (!method) return
+        if (method === 'onAdminAuthOk') {
           cleanup()
           this._attachListeners(ws)
           resolve()
           return
         }
 
-        if (msg?.type === 'auth_error') {
+        if (method === 'onAdminAuthError') {
           cleanup()
-          reject(new Error(msg.error || 'auth_error'))
+          reject(new Error(data?.error || 'auth_error'))
         }
       }
 
@@ -204,30 +205,44 @@ class WorldAdminClient extends EventEmitter {
 
   _attachListeners(ws) {
     ws.addEventListener('message', event => {
-      let msg
-      try {
-        msg = JSON.parse(event.data)
-      } catch {
-        return
-      }
+      const [method, data] = readPacket(event.data)
+      if (!method) return
 
-      const requestId = msg?.requestId
-      if (requestId && (msg.type === 'ok' || msg.type === 'error')) {
+      if (method === 'onAdminResult') {
+        const requestId = data?.requestId
+        if (!requestId) return
         const pending = this.pending.get(requestId)
         if (!pending) return
         this.pending.delete(requestId)
-        if (msg.type === 'ok') {
-          pending.resolve(msg)
+        if (data.ok) {
+          pending.resolve(data)
         } else {
-          const err = new Error(msg.error || 'error')
-          err.code = msg.error
-          err.current = msg.current
+          const err = new Error(data.error || 'error')
+          err.code = data.error
+          err.current = data.current
           pending.reject(err)
         }
         return
       }
 
-      this.emit('message', msg)
+      const type = method.slice(2)
+      if (type) {
+        const name = type.charAt(0).toLowerCase() + type.slice(1)
+        if (name === 'blueprintAdded' || name === 'blueprintModified') {
+          this.emit('message', { type: name, blueprint: data })
+          return
+        }
+        if (name === 'entityAdded' || name === 'entityModified') {
+          this.emit('message', { type: name, entity: data })
+          return
+        }
+        if (name === 'entityRemoved') {
+          this.emit('message', { type: name, id: data })
+          return
+        }
+      }
+
+      this.emit('message', { type: null, data })
     })
 
     ws.addEventListener('close', () => {
@@ -247,7 +262,7 @@ class WorldAdminClient extends EventEmitter {
     const message = { type, requestId, ...payload }
     return new Promise((resolve, reject) => {
       this.pending.set(requestId, { resolve, reject })
-      this.ws.send(JSON.stringify(message))
+      this.ws.send(writePacket('adminCommand', message))
     })
   }
 
