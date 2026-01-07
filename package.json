@@ -1,11 +1,12 @@
 {
-  "name": "@drama-haus/hyperfy",
-  "version": "0.16.0",
+  "name": "hypkg",
+  "version": "1.0.0-alpha.0",
   "type": "module",
   "main": "index.node.js",
   "types": "index.d.ts",
   "files": [
     "build/**",
+    "app-server/**",
     "index.node.js",
     "index.node-client.js",
     "index.d.ts",
