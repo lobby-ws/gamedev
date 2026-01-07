@@ -1747,16 +1747,16 @@ function Players({ world, hidden }) {
   }, [])
   const toggleBuilder = player => {
     if (player.data.rank === Ranks.BUILDER) {
-      world.network.send('modifyRank', { playerId: player.data.id, rank: Ranks.VISITOR })
+      world.admin.modifyRank(player.data.id, Ranks.VISITOR)
     } else {
-      world.network.send('modifyRank', { playerId: player.data.id, rank: Ranks.BUILDER })
+      world.admin.modifyRank(player.data.id, Ranks.BUILDER)
     }
   }
   const toggleMute = player => {
-    world.network.send('mute', { playerId: player.data.id, muted: !player.isMuted() })
+    world.admin.mute(player.data.id, !player.isMuted())
   }
   const kick = player => {
-    world.network.send('kick', player.data.id)
+    world.admin.kick(player.data.id)
   }
   const teleportTo = player => {
     // behind player 0.6m (capsule size)

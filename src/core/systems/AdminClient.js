@@ -223,4 +223,27 @@ export class AdminClient extends System {
       networkId: targetId,
     })
   }
+
+  modifyRank(playerId, rank) {
+    this.send({
+      type: 'modify_rank',
+      playerId,
+      rank,
+    })
+  }
+
+  kick(playerId) {
+    this.send({
+      type: 'kick',
+      playerId,
+    })
+  }
+
+  mute(playerId, muted) {
+    this.send({
+      type: 'mute',
+      playerId,
+      muted,
+    })
+  }
 }

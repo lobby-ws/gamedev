@@ -200,6 +200,49 @@ export async function admin(fastify, { world, assets }) {
           return
         }
 
+        if (msg.type === 'modify_rank') {
+          if (!msg.playerId || typeof msg.rank !== 'number') {
+            sendJson(ws, { type: 'error', error: 'invalid_payload', requestId })
+            return
+          }
+          const result = await network.applyModifyRank({ playerId: msg.playerId, rank: msg.rank })
+          if (!result.ok) {
+            sendJson(ws, { type: 'error', error: result.error, requestId })
+            return
+          }
+          broadcast({ type: 'entityModified', entity: world.entities.get(msg.playerId)?.data || { id: msg.playerId, rank: msg.rank } }, { ignore: ws })
+          sendJson(ws, { type: 'ok', requestId })
+          return
+        }
+
+        if (msg.type === 'kick') {
+          if (!msg.playerId) {
+            sendJson(ws, { type: 'error', error: 'invalid_payload', requestId })
+            return
+          }
+          const result = network.applyKick(msg.playerId)
+          if (!result.ok) {
+            sendJson(ws, { type: 'error', error: result.error, requestId })
+            return
+          }
+          sendJson(ws, { type: 'ok', requestId })
+          return
+        }
+
+        if (msg.type === 'mute') {
+          if (!msg.playerId || typeof msg.muted !== 'boolean') {
+            sendJson(ws, { type: 'error', error: 'invalid_payload', requestId })
+            return
+          }
+          const result = network.applyMute({ playerId: msg.playerId, muted: msg.muted })
+          if (!result.ok) {
+            sendJson(ws, { type: 'error', error: result.error, requestId })
+            return
+          }
+          sendJson(ws, { type: 'ok', requestId })
+          return
+        }
+
         sendJson(ws, { type: 'error', error: 'unknown_type', requestId })
       } catch (err) {
         console.error('[admin] handler error', err)

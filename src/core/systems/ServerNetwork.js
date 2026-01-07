@@ -397,37 +397,45 @@ export class ServerNetwork extends System {
   }
 
   onModifyRank = async (socket, data) => {
-    if (!socket.player.isAdmin()) return
-    const { playerId, rank } = data
-    if (!playerId) return
-    if (!isNumber(rank)) return
-    const player = this.world.entities.get(playerId)
-    if (!player || !player.isPlayer) return
-    player.modify({ rank })
-    this.send('entityModified', { id: playerId, rank })
-    await this.db('users').where('id', playerId).update({ rank })
+    console.warn('rejected modifyRank over /ws', { playerId: socket.id })
   }
 
   onKick = (socket, playerId) => {
-    const player = this.world.entities.get(playerId)
-    if (!player) return
-    // admins can kick builders + visitors
-    // builders can kick visitors
-    // visitors cannot kick anyone
-    if (socket.player.data.rank <= player.data.rank) return
-    const tSocket = this.sockets.get(playerId)
-    tSocket.send('kick', 'moderation')
-    tSocket.disconnect()
+    console.warn('rejected kick over /ws', { playerId: socket.id })
   }
 
   onMute = (socket, data) => {
-    const player = this.world.entities.get(data.playerId)
-    if (!player) return
-    // admins can mute builders + visitors
-    // builders can mute visitors
-    // visitors cannot mute anyone
-    if (socket.player.data.rank <= player.data.rank) return
-    this.world.livekit.setMuted(data.playerId, data.muted)
+    console.warn('rejected mute over /ws', { playerId: socket.id })
+  }
+
+  applyModifyRank = async ({ playerId, rank }) => {
+    if (!playerId) return { ok: false, error: 'invalid_payload' }
+    if (!isNumber(rank)) return { ok: false, error: 'invalid_payload' }
+    const player = this.world.entities.get(playerId)
+    if (!player || !player.isPlayer) return { ok: false, error: 'not_found' }
+    player.modify({ rank })
+    this.send('entityModified', { id: playerId, rank })
+    await this.db('users').where('id', playerId).update({ rank })
+    return { ok: true }
+  }
+
+  applyKick(playerId) {
+    if (!playerId) return { ok: false, error: 'invalid_payload' }
+    const player = this.world.entities.get(playerId)
+    if (!player || !player.isPlayer) return { ok: false, error: 'not_found' }
+    const tSocket = this.sockets.get(playerId)
+    if (!tSocket) return { ok: false, error: 'not_connected' }
+    tSocket.send('kick', 'moderation')
+    tSocket.disconnect()
+    return { ok: true }
+  }
+
+  applyMute({ playerId, muted }) {
+    if (!playerId) return { ok: false, error: 'invalid_payload' }
+    const player = this.world.entities.get(playerId)
+    if (!player || !player.isPlayer) return { ok: false, error: 'not_found' }
+    this.world.livekit.setMuted(playerId, muted)
+    return { ok: true }
   }
 
   applyBlueprintAdded(blueprint, { ignoreNetworkId } = {}) {

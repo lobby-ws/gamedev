@@ -21,7 +21,6 @@ Key requirements (from collaboration):
 - App-server should support spawning (initial positions chosen by CLI).
 
 Non-goals (explicit):
-- Moderation (kick/mute/modifyRank) migration is out of scope for now.
 - Versioning refactor is out of scope; keep current version rules.
 - Future “admin without player entity + free camera” is out of scope (but keep design extensible).
 
@@ -68,6 +67,9 @@ Responsibilities:
   - Blueprint add/modify (required)
   - Entity add/remove/modify for world authoring (strongly recommended to fully separate concerns)
   - Settings/spawn writes (recommended; can be phased if needed)
+- Moderation actions:
+  - kick / mute
+  - rank changes (`modifyRank`)
 - Admin-only uploads:
   - Upload check
   - Upload file data
@@ -202,6 +204,9 @@ Minimum JSON message types over `/admin` WS:
 - `entity_remove`
 - `settings_modify` (optional in phase 1)
 - `spawn_modify` (optional in phase 1)
+- `kick`
+- `mute`
+- `modify_rank`
 
 Phase 3 also adds admin-protected read APIs (HTTP) for discovery/bootstrap:
 - `GET /admin/snapshot` (minimum)
@@ -418,6 +423,7 @@ Acceptance:
 
 ### Phase 2 (complete separation for authoring)
 - Move entity add/remove/modify, settings, spawn from `/ws` to `/admin`.
+- Move moderation actions (kick/mute/modifyRank) from `/ws` to `/admin`.
 - Update ClientBuilder and Add panel flows to use `/admin`.
 
 Acceptance:
@@ -459,4 +465,3 @@ Manual tests (recommended order):
 ## Future Extensions (Not in Scope)
 - Replace versioning semantics (server-assigned versions, conflict-free edits, etc).
 - Replace admin-as-player with admin control connections that pilot a free camera and don’t create player entities.
-- Migrate moderation features (kick/mute/rank changes) to `/admin`.

@@ -62,6 +62,51 @@ export class Chat extends System {
     if (cmd === 'admin' && value) {
       this.world.admin?.setCode?.(value)
     }
+    if (cmd === 'spawn') {
+      const op = (args[1] || value || '').toLowerCase()
+      if (!op) return
+      const admin = this.world.admin
+      if (!admin?.spawnModify) return
+      if (admin.requireCode && !admin.code) {
+        this.add(
+          {
+            id: uuid(),
+            from: null,
+            fromId: null,
+            body: 'Admin code required. Use /admin <code> first.',
+            createdAt: moment().toISOString(),
+          },
+          false
+        )
+        return
+      }
+      if (op !== 'set' && op !== 'clear') {
+        this.add(
+          {
+            id: uuid(),
+            from: null,
+            fromId: null,
+            body: 'Usage: /spawn set | /spawn clear',
+            createdAt: moment().toISOString(),
+          },
+          false
+        )
+        return
+      }
+      admin.spawnModify(op, { networkId: playerId })
+      const body = op === 'set' ? 'Spawn set.' : 'Spawn cleared.'
+      this.add(
+        {
+          id: uuid(),
+          from: null,
+          fromId: null,
+          body,
+          createdAt: moment().toISOString(),
+        },
+        false
+      )
+      return
+    }
     if (cmd !== 'admin') {
       this.world.events.emit('command', { playerId, cmd, value, args })
     }
