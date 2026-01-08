@@ -1,6 +1,6 @@
 {
-  "name": "hypkg",
-  "version": "1.0.0-alpha.0",
+  "name": "gamedev",
+  "version": "0.0.1-alpha.0",
   "type": "module",
   "main": "index.node.js",
   "types": "index.d.ts",
