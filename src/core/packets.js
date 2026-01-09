@@ -26,6 +26,7 @@ const names = [
   'ai',
   'ping',
   'pong',
+  'blueprintRemoved',
 ]
 
 const byName = {}

@@ -16,6 +16,14 @@ const HEALTH_MAX = 100
 const PUBLIC_ADMIN_URL =
   process.env.PUBLIC_ADMIN_URL || (process.env.PUBLIC_API_URL || '').replace(/\/api\/?$/, '')
 
+function isNumberArray(value, length) {
+  return (
+    Array.isArray(value) &&
+    value.length === length &&
+    value.every(item => typeof item === 'number' && Number.isFinite(item))
+  )
+}
+
 /**
  * Server Network System
  *
@@ -45,6 +53,20 @@ export class ServerNetwork extends System {
     // get spawn
     const spawnRow = await this.db('config').where('key', 'spawn').first()
     this.spawn = JSON.parse(spawnRow?.value || defaultSpawn)
+    // get worldId
+    const worldIdRow = await this.db('config').where('key', 'worldId').first()
+    let worldId = worldIdRow?.value
+    if (!worldId) {
+      worldId = process.env.WORLD_ID || uuid()
+      await this.db('config')
+        .insert({ key: 'worldId', value: worldId })
+        .onConflict('key')
+        .merge({ value: worldId })
+    }
+    if (process.env.WORLD_ID && process.env.WORLD_ID !== worldId) {
+      throw new Error(`[envs] WORLD_ID mismatch: env=${process.env.WORLD_ID} db=${worldId}`)
+    }
+    this.worldId = worldId
     // hydrate blueprints
     const blueprints = await this.db('blueprints')
     for (const blueprint of blueprints) {
@@ -464,6 +486,22 @@ export class ServerNetwork extends System {
     return { ok: false, error: 'version_mismatch', current: blueprint }
   }
 
+  applyBlueprintRemoved = async ({ id }, { ignoreNetworkId } = {}) => {
+    if (!id) return { ok: false, error: 'invalid_payload' }
+    const blueprint = this.world.blueprints.get(id)
+    if (!blueprint) return { ok: false, error: 'not_found' }
+    for (const entity of this.world.entities.items.values()) {
+      if (entity?.data?.blueprint === id) {
+        return { ok: false, error: 'in_use' }
+      }
+    }
+    this.world.blueprints.remove(id)
+    this.send('blueprintRemoved', { id }, ignoreNetworkId)
+    this.dirtyBlueprints.delete(id)
+    await this.db('blueprints').where('id', id).delete()
+    return { ok: true }
+  }
+
   applyEntityAdded(data, { ignoreNetworkId } = {}) {
     const entity = this.world.entities.add(data)
     this.send('entityAdded', data, ignoreNetworkId)
@@ -515,6 +553,25 @@ export class ServerNetwork extends System {
     return { ok: true }
   }
 
+  applySpawnSet = async ({ position, quaternion }) => {
+    if (!isNumberArray(position, 3) || !isNumberArray(quaternion, 4)) {
+      return { ok: false, error: 'invalid_payload' }
+    }
+    this.spawn = { position: position.slice(0, 3), quaternion: quaternion.slice(0, 4) }
+    const value = JSON.stringify(this.spawn)
+    await this.db('config')
+      .insert({
+        key: 'spawn',
+        value,
+      })
+      .onConflict('key')
+      .merge({
+        value,
+      })
+    this.send('spawnModified', this.spawn)
+    return { ok: true, spawn: this.spawn }
+  }
+
   applySpawnModified = async ({ op, networkId }) => {
     if (op === 'set') {
       const player = this.world.entities.get(networkId)
@@ -535,6 +592,7 @@ export class ServerNetwork extends System {
       .merge({
         value,
       })
+    this.send('spawnModified', this.spawn)
     return { ok: true }
   }
 

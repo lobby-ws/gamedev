@@ -182,6 +182,28 @@ export class AdminClient extends System {
     })
   }
 
+  async blueprintRemove(id) {
+    if (!this.adminUrl) throw new Error('admin_url_missing')
+    if (this.requireCode && !this.code) throw new Error('admin_code_missing')
+    const headers = this.code ? { 'X-Admin-Code': this.code } : undefined
+    const url = joinUrl(this.adminUrl, `/admin/blueprints/${encodeURIComponent(id)}`)
+    const res = await fetch(url, { method: 'DELETE', headers })
+    if (res.status === 403) throw new Error('admin_required')
+    if (!res.ok) {
+      let error = null
+      try {
+        const data = await res.json()
+        error = data?.error || null
+      } catch {}
+      throw new Error(error || `blueprint_remove_failed:${res.status}`)
+    }
+    try {
+      return await res.json()
+    } catch {
+      return { ok: true }
+    }
+  }
+
   entityAdd(entity, { ignoreNetworkId } = {}) {
     this.send({
       type: 'entity_add',

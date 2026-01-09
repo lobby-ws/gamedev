@@ -122,6 +122,21 @@ export async function admin(fastify, { world, assets }) {
           return
         }
 
+        if (msg.type === 'blueprint_remove') {
+          if (!msg.id) {
+            sendJson(ws, { type: 'error', error: 'invalid_payload', requestId })
+            return
+          }
+          const result = await network.applyBlueprintRemoved({ id: msg.id }, { ignoreNetworkId })
+          if (!result.ok) {
+            sendJson(ws, { type: 'error', error: result.error, requestId })
+            return
+          }
+          broadcast({ type: 'blueprintRemoved', id: msg.id }, { ignore: ws })
+          sendJson(ws, { type: 'ok', requestId })
+          return
+        }
+
         if (msg.type === 'entity_add') {
           if (!msg.entity?.id) {
             sendJson(ws, { type: 'error', error: 'invalid_payload', requestId })
@@ -255,6 +270,7 @@ export async function admin(fastify, { world, assets }) {
     if (!requireAdmin(req, reply)) return
     const network = world.network
     return {
+      worldId: network.worldId,
       assetsUrl: assets.url,
       settings: world.settings.serialize(),
       spawn: network.spawn,
@@ -272,6 +288,22 @@ export async function admin(fastify, { world, assets }) {
     return { blueprint }
   })
 
+  fastify.delete('/admin/blueprints/:id', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const result = await world.network.applyBlueprintRemoved({ id: req.params.id })
+    if (!result.ok) {
+      if (result.error === 'not_found') {
+        return reply.code(404).send({ error: result.error })
+      }
+      if (result.error === 'in_use') {
+        return reply.code(409).send({ error: result.error })
+      }
+      return reply.code(400).send({ error: result.error })
+    }
+    broadcast({ type: 'blueprintRemoved', id: req.params.id })
+    return { ok: true }
+  })
+
   fastify.get('/admin/entities', async (req, reply) => {
     if (!requireAdmin(req, reply)) return
     const type = req.query?.type
@@ -286,6 +318,17 @@ export async function admin(fastify, { world, assets }) {
     if (!requireAdmin(req, reply)) return
     const exists = await assets.exists(req.query.filename)
     return { exists }
+  })
+
+  fastify.put('/admin/spawn', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const { position, quaternion } = req.body || {}
+    const result = await world.network.applySpawnSet({ position, quaternion })
+    if (!result.ok) {
+      return reply.code(400).send({ error: result.error })
+    }
+    broadcast({ type: 'spawnModified', spawn: world.network.spawn })
+    return { ok: true, spawn: world.network.spawn }
   })
 
   fastify.post('/admin/upload', async (req, reply) => {

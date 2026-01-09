@@ -27,6 +27,7 @@ export class Blueprints extends System {
     if (local) {
       this.world.network.send('blueprintAdded', data)
     }
+    this.emit('add', data)
   }
 
   modify(data) {
@@ -45,6 +46,13 @@ export class Blueprints extends System {
       }
     }
     this.emit('modify', modified)
+  }
+
+  remove(id) {
+    const blueprint = this.items.get(id)
+    if (!blueprint) return
+    this.items.delete(id)
+    this.emit('remove', blueprint)
   }
 
   serialize() {

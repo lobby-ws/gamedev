@@ -165,6 +165,12 @@ export class ClientNetwork extends System {
     this.world.blueprints.modify(change)
   }
 
+  onBlueprintRemoved = data => {
+    const id = typeof data === 'string' ? data : data?.id
+    if (!id) return
+    this.world.blueprints.remove(id)
+  }
+
   onEntityAdded = data => {
     this.world.entities.add(data)
   }

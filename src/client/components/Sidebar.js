@@ -53,7 +53,6 @@ import { useFullscreen } from './useFullscreen'
 import { downloadFile } from '../../core/extras/downloadFile'
 import { hashFile } from '../../core/utils-client'
 import { cloneDeep, isArray, isBoolean, sortBy } from 'lodash-es'
-import { BUILTIN_APP_TEMPLATES } from '../builtinApps'
 import { storage } from '../../core/storage'
 import { ScriptEditor } from './ScriptEditor'
 import { NodeHierarchy } from './NodeHierarchy'
@@ -893,15 +892,28 @@ function Apps({ world, hidden }) {
 }
 
 function Add({ world, hidden }) {
-  const templates = BUILTIN_APP_TEMPLATES
   const span = 4
   const gap = '0.5rem'
-  const add = template => {
-    const blueprint = cloneDeep(template)
-    blueprint.id = uuid()
-    blueprint.version = 0
-    world.blueprints.add(blueprint)
-    world.admin.blueprintAdd(blueprint, { ignoreNetworkId: world.network.id })
+  const [trashMode, setTrashMode] = useState(false)
+  const buildTemplates = () => {
+    const items = Array.from(world.blueprints.items.values()).filter(bp => !bp.scene)
+    return sortBy(items, bp => (bp.name || bp.id || '').toLowerCase())
+  }
+  const [templates, setTemplates] = useState(() => buildTemplates())
+
+  useEffect(() => {
+    const refresh = () => setTemplates(buildTemplates())
+    world.blueprints.on('add', refresh)
+    world.blueprints.on('modify', refresh)
+    world.blueprints.on('remove', refresh)
+    return () => {
+      world.blueprints.off('add', refresh)
+      world.blueprints.off('modify', refresh)
+      world.blueprints.off('remove', refresh)
+    }
+  }, [])
+
+  const add = blueprint => {
     const transform = world.builder.getSpawnTransform(true)
     world.builder.toggle(true)
     world.builder.control.pointer.lock()
@@ -923,6 +935,38 @@ function Add({ world, hidden }) {
       world.builder.select(app)
     }, 100)
   }
+
+  const remove = blueprint => {
+    world.ui
+      .confirm({
+        title: 'Delete blueprint',
+        message: `Delete blueprint \"${blueprint.name || blueprint.id}\"? This cannot be undone.`,
+        confirmText: 'Delete',
+        cancelText: 'Cancel',
+      })
+      .then(async ok => {
+        if (!ok) return
+        try {
+          await world.admin.blueprintRemove(blueprint.id)
+          world.emit('toast', 'Blueprint deleted')
+        } catch (err) {
+          const code = err?.message || ''
+          if (code === 'in_use') {
+            world.emit('toast', 'Cannot delete blueprint: there are spawned entities using it.')
+          } else {
+            world.emit('toast', 'Blueprint delete failed')
+          }
+        }
+      })
+  }
+
+  const handleClick = blueprint => {
+    if (trashMode) {
+      remove(blueprint)
+    } else {
+      add(blueprint)
+    }
+  }
   return (
     <Pane hidden={hidden}>
       <div
@@ -942,9 +986,25 @@ function Add({ world, hidden }) {
             align-items: center;
           }
           .add-title {
+            flex: 1;
             font-weight: 500;
             font-size: 1rem;
             line-height: 1;
+          }
+          .add-toggle {
+            width: 2rem;
+            height: 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #5d6077;
+            &:hover {
+              cursor: pointer;
+              color: white;
+            }
+            &.active {
+              color: #ff6b6b;
+            }
           }
           .add-content {
             flex: 1;
@@ -960,6 +1020,9 @@ function Add({ world, hidden }) {
           .add-item {
             flex-basis: calc((100% / ${span}) - (${gap} * (${span} - 1) / ${span}));
             cursor: pointer;
+          }
+          .add-item.trash .add-item-image {
+            border-color: rgba(255, 107, 107, 0.6);
           }
           .add-item-image {
             width: 100%;
@@ -978,20 +1041,30 @@ function Add({ world, hidden }) {
       >
         <div className='add-head'>
           <div className='add-title'>Add</div>
+          <div className={cls('add-toggle', { active: trashMode })} onClick={() => setTrashMode(!trashMode)}>
+            <Trash2Icon size='1.125rem' />
+          </div>
         </div>
         <div className='add-content noscrollbar'>
           <div className='add-items'>
-            {templates.map(template => (
-              <div className='add-item' key={template.name} onClick={() => add(template)}>
+            {templates.map(blueprint => {
+              const imageUrl = blueprint.image?.url || (typeof blueprint.image === 'string' ? blueprint.image : null)
+              return (
                 <div
-                  className='add-item-image'
-                  css={css`
-                    background-image: url(${world.resolveURL(template.image?.url)});
-                  `}
-                ></div>
-                <div className='add-item-name'>{template.name}</div>
-              </div>
-            ))}
+                  className={cls('add-item', { trash: trashMode })}
+                  key={blueprint.id}
+                  onClick={() => handleClick(blueprint)}
+                >
+                  <div
+                    className='add-item-image'
+                    css={css`
+                      ${imageUrl ? `background-image: url(${world.resolveURL(imageUrl)});` : ''}
+                    `}
+                  ></div>
+                  <div className='add-item-name'>{blueprint.name || blueprint.id}</div>
+                </div>
+              )
+            })}
           </div>
         </div>
       </div>

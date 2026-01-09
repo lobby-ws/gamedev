@@ -9,6 +9,7 @@ import { spawn } from 'child_process'
 import { customAlphabet } from 'nanoid'
 
 import { HyperfyCLI, runAppCommand } from '../app-server/commands.js'
+import { DirectAppServer } from '../app-server/direct.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const packageRoot = path.resolve(__dirname, '..')
@@ -138,11 +139,11 @@ function isLocalHost(hostname) {
   return false
 }
 
-function isLocalWorld({ worldUrl, worldId }) {
-  if (!worldUrl || !worldId) return false
+function isLocalWorld({ worldUrl }) {
+  if (!worldUrl) return false
   const url = parseWorldUrl(worldUrl)
   if (!url) return false
-  return isLocalHost(url.hostname) && worldId.startsWith('local-')
+  return isLocalHost(url.hostname)
 }
 
 function getWorldDir(worldId) {
@@ -280,6 +281,15 @@ async function confirmAction(prompt) {
   rl.close()
   const normalized = (answer || '').trim().toLowerCase()
   return normalized === 'y' || normalized === 'yes'
+}
+
+async function promptValue(prompt) {
+  if (!process.stdin.isTTY) return null
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  const answer = await new Promise(resolve => rl.question(prompt, resolve))
+  rl.close()
+  const trimmed = typeof answer === 'string' ? answer.trim() : ''
+  return trimmed || null
 }
 
 function ensureEnvForStart() {
@@ -443,6 +453,24 @@ async function appsCommand(args) {
   return runAppCommand({ command: args[0], args: args.slice(1), rootDir: projectDir, helpPrefix: 'hyperfy apps' })
 }
 
+async function connectAdminServer({ worldUrl, adminCode, rootDir }) {
+  let code = adminCode || process.env.ADMIN_CODE || null
+  let server = new DirectAppServer({ worldUrl, adminCode: code, rootDir })
+  try {
+    await server.connect()
+    return server
+  } catch (err) {
+    const msg = err?.message || ''
+    const canRetry = (msg === 'invalid_code' || msg === 'unauthorized') && process.stdin.isTTY
+    if (!canRetry) throw err
+    code = await promptValue('Enter ADMIN_CODE: ')
+    if (!code) throw err
+    server = new DirectAppServer({ worldUrl, adminCode: code, rootDir })
+    await server.connect()
+    return server
+  }
+}
+
 async function projectCommand(args) {
   if (!args.length || ['help', '--help', '-h'].includes(args[0])) {
     printHelp()
@@ -496,54 +524,78 @@ async function worldCommand(args) {
     return 0
   }
 
-  if (args[0] !== 'wipe') {
-    console.error(`Error: Unknown world command: ${args[0]}`)
-    printHelp()
-    return 1
-  }
+  const action = args[0]
 
-  const env = readDotEnv(envPath)
-  if (!env) {
-    console.error('Error: Missing .env in this project.')
-    return 1
-  }
-  applyEnvToProcess(env)
-
-  const worldUrl = env.WORLD_URL
-  const worldId = env.WORLD_ID
-  if (!worldUrl || !worldId) {
-    console.error('Error: Missing WORLD_URL or WORLD_ID in .env')
-    return 1
-  }
-
-  if (!isLocalWorld({ worldUrl, worldId })) {
-    console.error('Error: WORLD_URL/WORLD_ID do not indicate a local world. Refusing to wipe.')
-    return 1
-  }
-
-  const worldDir = getWorldDir(worldId)
-  if (!fs.existsSync(worldDir)) {
-    console.log(`Worlds: No local world found at ${worldDir}`)
-    return 0
-  }
-
-  const force = args.includes('--force') || args.includes('-f')
-  if (!force) {
-    const ok = await confirmAction(`Delete local world data at ${worldDir}? (y/N): `)
-    if (!ok) {
-      console.log('World wipe cancelled')
+  if (action === 'export' || action === 'import' || action === 'wipe') {
+    const env = readDotEnv(envPath)
+    if (!env) {
+      console.error('Error: Missing .env in this project.')
       return 1
+    }
+    applyEnvToProcess(env)
+
+    const worldUrl = env.WORLD_URL
+    const worldId = env.WORLD_ID
+    if (!worldUrl || !worldId) {
+      console.error('Error: Missing WORLD_URL or WORLD_ID in .env')
+      return 1
+    }
+
+    if (action === 'wipe') {
+      if (!isLocalWorld({ worldUrl })) {
+        console.error('Error: WORLD_URL does not indicate a local world. Refusing to wipe.')
+        return 1
+      }
+
+      const worldDir = getWorldDir(worldId)
+      if (!fs.existsSync(worldDir)) {
+        console.log(`Worlds: No local world found at ${worldDir}`)
+        return 0
+      }
+
+      const force = args.includes('--force') || args.includes('-f')
+      if (!force) {
+        const ok = await confirmAction(`Delete local world data at ${worldDir}? (y/N): `)
+        if (!ok) {
+          console.log('World wipe cancelled')
+          return 1
+        }
+      }
+
+      try {
+        fs.rmSync(worldDir, { recursive: true, force: true })
+        console.log(`Deleted ${worldDir}`)
+        return 0
+      } catch (error) {
+        console.error(`Error: Failed to delete ${worldDir}`, error?.message || error)
+        return 1
+      }
+    }
+
+    let server
+    try {
+      server = await connectAdminServer({ worldUrl, adminCode: env.ADMIN_CODE, rootDir: projectDir })
+      if (action === 'export') {
+        await server.exportWorldToDisk()
+        console.log('✅ World export complete')
+      } else {
+        await server.importWorldFromDisk()
+        console.log('✅ World import complete')
+      }
+      return 0
+    } catch (error) {
+      console.error(`Error: World ${action} failed:`, error?.message || error)
+      return 1
+    } finally {
+      try {
+        server?.client?.ws?.close()
+      } catch {}
     }
   }
 
-  try {
-    fs.rmSync(worldDir, { recursive: true, force: true })
-    console.log(`Deleted ${worldDir}`)
-    return 0
-  } catch (error) {
-    console.error(`Error: Failed to delete ${worldDir}`, error?.message || error)
-    return 1
-  }
+  console.error(`Error: Unknown world command: ${args[0]}`)
+  printHelp()
+  return 1
 }
 
 function printHelp() {
@@ -557,6 +609,8 @@ Commands:
   start                     Start the world (local or remote) + app-server sync
   apps <command>            Manage apps (create, list, deploy, update, validate, status)
   project reset [--force]   Delete local apps/assets/world.json in this project
+  world export              Export world.json + apps/assets from the world
+  world import              Import local apps + world.json into the world
   world wipe [--force]      Delete the local world runtime directory for this project
   worlds list               List local world directories in ~/.hyperfy
   help                      Show this help

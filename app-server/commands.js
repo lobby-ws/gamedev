@@ -5,6 +5,7 @@ import readline from 'readline'
 
 import { DirectAppServer } from './direct.js'
 import { uuid } from './utils.js'
+import { deriveBlueprintId, isBlueprintDenylist } from './blueprintUtils.js'
 
 function sha256Hex(text) {
   return crypto.createHash('sha256').update(text, 'utf8').digest('hex')
@@ -29,6 +30,31 @@ function isValidAppName(name) {
   return true
 }
 
+function listLocalBlueprints(appsDir) {
+  const results = []
+  if (!fs.existsSync(appsDir)) return results
+
+  const apps = fs
+    .readdirSync(appsDir, { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .map(entry => entry.name)
+
+  for (const appName of apps) {
+    const appPath = path.join(appsDir, appName)
+    const files = fs.readdirSync(appPath, { withFileTypes: true })
+    for (const file of files) {
+      if (!file.isFile()) continue
+      if (!file.name.endsWith('.json')) continue
+      if (isBlueprintDenylist(file.name)) continue
+      const fileBase = path.basename(file.name, '.json')
+      const id = deriveBlueprintId(appName, fileBase)
+      results.push({ appName, fileBase, id, configPath: path.join(appPath, file.name) })
+    }
+  }
+
+  return results
+}
+
 export class HyperfyCLI {
   constructor({ rootDir = process.cwd() } = {}) {
     this.rootDir = rootDir
@@ -36,34 +62,13 @@ export class HyperfyCLI {
     this.assetsDir = path.join(this.rootDir, 'assets')
     this.worldFile = path.join(this.rootDir, 'world.json')
 
-    this.worldUrl = process.env.WORLD_URL || this._readWorldUrlFromDisk()
+    this.worldUrl = process.env.WORLD_URL || null
     this.adminCode = typeof process.env.ADMIN_CODE === 'string' ? process.env.ADMIN_CODE : null
-  }
-
-  _readWorldUrlFromDisk() {
-    try {
-      const state = this._readWorldState()
-      return typeof state?.worldUrl === 'string' ? state.worldUrl : null
-    } catch {
-      return null
-    }
-  }
-
-  _readWorldState() {
-    if (!fs.existsSync(this.worldFile)) return null
-    const data = JSON.parse(fs.readFileSync(this.worldFile, 'utf8'))
-    if (!data || typeof data !== 'object') return null
-    data.blueprints = data.blueprints && typeof data.blueprints === 'object' ? data.blueprints : {}
-    return data
-  }
-
-  _writeWorldState(state) {
-    fs.writeFileSync(this.worldFile, JSON.stringify(state, null, 2) + '\n', 'utf8')
   }
 
   _requireWorldUrl() {
     if (this.worldUrl) return this.worldUrl
-    throw new Error('Missing WORLD_URL (or world.json with worldUrl)')
+    throw new Error('Missing WORLD_URL in environment')
   }
 
   async _promptAdminCode() {
@@ -91,7 +96,7 @@ export class HyperfyCLI {
 
     const server = new DirectAppServer({ worldUrl: this.worldUrl, adminCode, rootDir: this.rootDir })
     try {
-      await server.client.connect()
+      await server.connect()
       return server
     } catch (err) {
       const msg = err?.message || ''
@@ -100,7 +105,7 @@ export class HyperfyCLI {
       adminCode = await this._promptAdminCode()
       this.adminCode = adminCode
       const retryServer = new DirectAppServer({ worldUrl: this.worldUrl, adminCode, rootDir: this.rootDir })
-      await retryServer.client.connect()
+      await retryServer.connect()
       return retryServer
     }
   }
@@ -109,15 +114,6 @@ export class HyperfyCLI {
     try {
       server?.client?.ws?.close()
     } catch {}
-  }
-
-  _findBlueprintIdByAppName(appName) {
-    const state = this._readWorldState()
-    const entries = state?.blueprints && typeof state.blueprints === 'object' ? Object.entries(state.blueprints) : []
-    for (const [blueprintId, info] of entries) {
-      if (info?.appName === appName) return blueprintId
-    }
-    return null
   }
 
   _getLocalScriptPath(appName) {
@@ -130,34 +126,26 @@ export class HyperfyCLI {
   async list() {
     console.log(`📋 Listing apps...`)
 
-    const dirs = fs.existsSync(this.appsDir)
-      ? fs
-          .readdirSync(this.appsDir, { withFileTypes: true })
-          .filter(e => e.isDirectory())
-          .map(e => e.name)
-      : []
-
-    if (dirs.length === 0) {
-      console.log(`📝 No local apps found in ${this.appsDir}`)
-      console.log(`💡 Start the app-server in this folder to bootstrap from the world:`)
-      console.log(`   WORLD_URL=<world url> ADMIN_CODE=<code> node <path-to-repo>/app-server/server.js`)
+    const blueprints = listLocalBlueprints(this.appsDir)
+    if (blueprints.length === 0) {
+      console.log(`📝 No local blueprints found in ${this.appsDir}`)
+      console.log(`💡 Run "hyperfy world export" to pull blueprints from the world.`)
       return
     }
 
-    const state = this._readWorldState()
-    const blueprintByApp = new Map()
-    if (state?.blueprints && typeof state.blueprints === 'object') {
-      for (const [blueprintId, info] of Object.entries(state.blueprints)) {
-        if (info?.appName) blueprintByApp.set(info.appName, { blueprintId, version: info.version })
-      }
+    const byApp = new Map()
+    for (const item of blueprints) {
+      if (!byApp.has(item.appName)) byApp.set(item.appName, [])
+      byApp.get(item.appName).push(item)
     }
 
-    console.log(`\n📱 Found ${dirs.length} local app(s):`)
-    for (const dir of dirs) {
-      const link = blueprintByApp.get(dir)
-      const suffix = link ? ` (${link.blueprintId}${typeof link.version === 'number' ? ` v${link.version}` : ''})` : ''
-      console.log(`  • ${dir}${suffix}`)
-      console.log(`    📁 ${path.join(this.appsDir, dir)}`)
+    console.log(`\n📱 Found ${byApp.size} local app folder(s):`)
+    for (const [appName, items] of byApp.entries()) {
+      console.log(`  • ${appName}`)
+      for (const item of items) {
+        console.log(`    - ${item.fileBase} (${item.id})`)
+      }
+      console.log(`    📁 ${path.join(this.appsDir, appName)}`)
       console.log(``)
     }
   }
@@ -238,13 +226,22 @@ app.on("update", (delta) => {
         mimeType: 'text/javascript',
       })
 
-      const blueprintId = uuid()
+      const existingIds = new Set(server.snapshot?.blueprints?.keys() || [])
+      let fileBase = appName
+      let blueprintId = deriveBlueprintId(appName, fileBase)
+      let suffix = 2
+      while (existingIds.has(blueprintId)) {
+        fileBase = `${appName}_${suffix}`
+        blueprintId = deriveBlueprintId(appName, fileBase)
+        suffix += 1
+      }
+
       const entityId = uuid()
 
       const blueprint = {
         id: blueprintId,
         version: 0,
-        name: options.name || appName,
+        name: fileBase,
         image: null,
         author: null,
         url: null,
@@ -277,28 +274,14 @@ app.on("update", (delta) => {
       await server.client.request('blueprint_add', { blueprint })
       await server.client.request('entity_add', { entity })
 
-      let assetsUrl = null
-      try {
-        const snapshot = await server.client.getSnapshot()
-        assetsUrl = snapshot?.assetsUrl || null
-      } catch {}
-
-      const existing = this._readWorldState()
-      const nextState = existing && typeof existing === 'object' ? existing : { worldUrl: this.worldUrl, assetsUrl: assetsUrl || null, blueprints: {} }
-      nextState.worldUrl = this.worldUrl
-      if (assetsUrl) nextState.assetsUrl = assetsUrl
-      nextState.blueprints = nextState.blueprints && typeof nextState.blueprints === 'object' ? nextState.blueprints : {}
-      nextState.blueprints[blueprintId] = { appName, version: blueprint.version }
-      this._writeWorldState(nextState)
-
       console.log(`✅ Successfully created app in world: ${appName}`)
       console.log(`   • Blueprint: ${blueprintId}`)
       console.log(`   • Entity:    ${entityId}`)
-      console.log(`💡 If app-server is running in this folder, it should sync into ${this.appsDir} shortly.`)
+      console.log(`💡 Run "hyperfy world export" to sync into ${this.appsDir}.`)
     } catch (error) {
       console.error(`❌ Error creating app:`, error?.message || error)
       if (!this.worldUrl) {
-        console.error(`💡 Set WORLD_URL (and ADMIN_CODE if required)`)
+        console.error(`💡 Set WORLD_URL (and ADMIN_CODE if required)`) 
       }
     } finally {
       this._closeAdminClient(server)
@@ -311,18 +294,18 @@ app.on("update", (delta) => {
       return
     }
 
+    const blueprints = listLocalBlueprints(this.appsDir).filter(item => item.appName === appName)
+    if (!blueprints.length) {
+      console.error(`❌ No blueprints found for ${appName}`)
+      console.log(`💡 Expected ${path.join(this.appsDir, appName, '<blueprint>.json')}`)
+      return
+    }
+
     console.log(`🚀 Deploying app: ${appName}`)
 
     const server = await this._connectAdminClient()
     try {
-      const blueprintId = this._findBlueprintIdByAppName(appName)
-      if (!blueprintId) {
-        console.error(`❌ App ${appName} is not linked (missing in world.json)`)
-        console.log(`💡 Start app-server in this folder to bootstrap/linking.`)
-        return
-      }
-
-      await server._deployApp(appName)
+      await server.deployApp(appName)
       console.log(`✅ Deployed ${appName}`)
     } catch (error) {
       console.error(`❌ Error deploying app:`, error?.message || error)
@@ -332,7 +315,6 @@ app.on("update", (delta) => {
   }
 
   async update(appName) {
-    // Legacy command retained; in direct mode this is equivalent to deploy.
     return this.deploy(appName)
   }
 
@@ -350,64 +332,59 @@ app.on("update", (delta) => {
       return
     }
 
-    const blueprintId = this._findBlueprintIdByAppName(appName)
-    if (!blueprintId) {
-      console.error(`❌ App ${appName} is not linked (missing in world.json)`)
+    const blueprints = listLocalBlueprints(this.appsDir).filter(item => item.appName === appName)
+    if (!blueprints.length) {
+      console.error(`❌ No blueprints found for ${appName}`)
       return
     }
 
     const server = await this._connectAdminClient()
     try {
-      const blueprint = await server.client.getBlueprint(blueprintId)
-      const remoteScript = blueprint?.script
-      if (!remoteScript) {
-        console.error(`❌ World blueprint has no script set`)
-        return
-      }
-
       const localText = fs.readFileSync(scriptPath, 'utf8')
       const localHash = sha256Hex(localText)
+      const assetsUrl = server.assetsUrl
 
-      if (!remoteScript.startsWith('asset://')) {
-        const matches = localText === String(remoteScript)
-        if (matches) {
-          console.log(`✅ Script validation passed!`)
-        } else {
-          console.log(`❌ Script validation failed! (world script is inline, local differs)`)
+      let allMatch = true
+      for (const blueprint of blueprints) {
+        const remoteBlueprint = await server.client.getBlueprint(blueprint.id)
+        const remoteScript = remoteBlueprint?.script
+        if (!remoteScript) {
+          console.error(`❌ World blueprint ${blueprint.id} has no script set`)
+          allMatch = false
+          continue
         }
-        return
+
+        if (!remoteScript.startsWith('asset://')) {
+          const matches = localText === String(remoteScript)
+          if (!matches) {
+            console.error(`❌ Script mismatch for ${blueprint.id} (inline script differs)`)
+            allMatch = false
+          }
+          continue
+        }
+
+        const filename = remoteScript.slice('asset://'.length)
+        const res = await fetch(joinUrl(assetsUrl, encodeURIComponent(filename)))
+        if (!res.ok) {
+          console.error(`❌ Failed to fetch remote script for ${blueprint.id}: ${res.status}`)
+          allMatch = false
+          continue
+        }
+        const remoteText = await res.text()
+        const remoteHash = sha256Hex(remoteText)
+        if (localHash !== remoteHash) {
+          console.error(`❌ Script mismatch for ${blueprint.id}`)
+          console.log(`🔗 Local:  ${localHash}`)
+          console.log(`🔗 World:  ${remoteHash} (${filename})`)
+          allMatch = false
+        }
       }
 
-      const filename = remoteScript.slice('asset://'.length)
-      let assetsUrl = this._readWorldState()?.assetsUrl || null
-      if (!assetsUrl) {
-        try {
-          const snapshot = await server.client.getSnapshot()
-          assetsUrl = snapshot?.assetsUrl || null
-        } catch {}
-      }
-      if (!assetsUrl) {
-        console.error(`❌ Missing assetsUrl (start app-server once to write world.json, or ensure /admin/snapshot works)`)
-        return
-      }
-
-      const res = await fetch(joinUrl(assetsUrl, encodeURIComponent(filename)))
-      if (!res.ok) {
-        console.error(`❌ Failed to fetch remote script: ${res.status}`)
-        return
-      }
-      const remoteText = await res.text()
-      const remoteHash = sha256Hex(remoteText)
-
-      if (localHash === remoteHash) {
-        console.log(`✅ Script validation passed!`)
-        console.log(`📝 ${path.basename(scriptPath)} matches the script currently set on the world blueprint`)
+      if (allMatch) {
+        console.log(`✅ Script validation passed for ${appName}`)
         console.log(`🔗 Hash: ${localHash}`)
       } else {
-        console.log(`❌ Script validation failed!`)
-        console.log(`🔗 Local:  ${localHash}`)
-        console.log(`🔗 World:  ${remoteHash} (${filename})`)
-        console.log(`💡 Run 'hyperfy deploy ${appName}' (or just save the file with app-server running)`)
+        console.log(`💡 Run 'hyperfy apps deploy ${appName}' (or save the file with app-server running)`) 
       }
     } catch (error) {
       console.error(`❌ Error validating app:`, error?.message || error)
@@ -424,6 +401,7 @@ app.on("update", (delta) => {
       const blueprints = Array.isArray(snapshot?.blueprints) ? snapshot.blueprints.length : 0
       const entities = Array.isArray(snapshot?.entities) ? snapshot.entities.length : 0
       console.log(`  World URL:   ${this.worldUrl}`)
+      console.log(`  World ID:    ${snapshot?.worldId || 'unknown'}`)
       console.log(`  Assets URL:  ${snapshot?.assetsUrl || 'unknown'}`)
       console.log(`  Blueprints:  ${blueprints}`)
       console.log(`  Entities:    ${entities}`)
@@ -486,21 +464,22 @@ Usage:
 Commands:
   create <appName>           Create a new app in the connected world
   list                       List local apps in ./apps
-  deploy <appName>           Deploy local app (blueprint.json + index.js/ts) to world
+  deploy <appName>           Deploy all local blueprints under ./apps/<appName>
   update <appName>           Alias for deploy
-  validate <appName>         Verify local script matches world blueprint script
+  validate <appName>         Verify local script matches world blueprint script(s)
   reset [--force]            Delete local apps/assets/world.json
   status                     Show /admin snapshot summary
   help                       Show this help
 
 Environment:
   WORLD_URL                  World server base URL (e.g. http://localhost:5000)
+  WORLD_ID                   World ID (must match remote worldId)
   ADMIN_CODE                 Admin code (if the world requires it)
 
 Notes:
-  - This CLI no longer talks to a local app-server HTTP API.
+  - Blueprints live at apps/<appName>/*.json with a shared index.js/ts script.
   - Start the direct app-server for continuous sync:
-      WORLD_URL=... ADMIN_CODE=... node <path-to-repo>/app-server/server.js
+      WORLD_URL=... WORLD_ID=... ADMIN_CODE=... node <path-to-repo>/app-server/server.js
 `)
   }
 }

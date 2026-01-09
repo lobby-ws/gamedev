@@ -38,26 +38,7 @@ class Cleaner {
     const settings = JSON.parse(settingsRow.value)
     if (settings.image) assetsToKeep.add(settings.image.url.replace('asset://', ''))
     if (settings.avatar) assetsToKeep.add(settings.avatar.url.replace('asset://', ''))
-    // delete orphaned blueprints (no longer referenced by an entity)
-    const blueprintsToDelete = []
-    for (const blueprint of blueprints) {
-      const keep = entities.find(e => e.blueprint === blueprint.id)
-      if (!keep) {
-        blueprints.delete(blueprint)
-        blueprintsToDelete.push(blueprint)
-      }
-    }
-    if (blueprintsToDelete.length) {
-      console.log(`[clean] ${blueprintsToDelete.length} blueprints can be deleted`)
-      if (!dryrun) {
-        console.log(`[clean] ${blueprintsToDelete.length} blueprints deleted`)
-        while (blueprintsToDelete.length) {
-          const blueprint = blueprintsToDelete.pop()
-          await db('blueprints').where('id', blueprint.id).delete()
-        }
-      }
-    }
-    // keep all assets associated with remaining active blueprints
+    // keep all assets associated with all blueprints (spawned or unspawned)
     for (const blueprint of blueprints) {
       // blueprint model
       if (blueprint.model && blueprint.model.startsWith('asset://')) {
@@ -72,10 +53,12 @@ class Cleaner {
         assetsToKeep.add(blueprint.image.url.replace('asset://', ''))
       }
       // assets from file props
-      for (const key in blueprint.props) {
-        const url = blueprint.props[key]?.url
-        if (!url) continue
-        assetsToKeep.add(url.replace('asset://', ''))
+      if (blueprint.props && typeof blueprint.props === 'object') {
+        for (const key in blueprint.props) {
+          const url = blueprint.props[key]?.url
+          if (!url) continue
+          assetsToKeep.add(url.replace('asset://', ''))
+        }
       }
     }
     // get a list of assets to delete

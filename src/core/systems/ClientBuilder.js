@@ -24,6 +24,27 @@ const v2 = new THREE.Vector3()
 const q1 = new THREE.Quaternion()
 const e1 = new THREE.Euler()
 
+function splitBlueprintId(id) {
+  const idx = typeof id === 'string' ? id.indexOf('__') : -1
+  if (idx !== -1) {
+    return { prefix: id.slice(0, idx + 2), base: id.slice(idx + 2) }
+  }
+  return { prefix: '', base: id || 'blueprint' }
+}
+
+function getNextBlueprintVariant(world, sourceId) {
+  const { prefix, base } = splitBlueprintId(sourceId)
+  const safeBase = base || 'blueprint'
+  for (let n = 2; n < 10000; n += 1) {
+    const candidateId = `${prefix}${safeBase}_${n}`
+    if (!world.blueprints.get(candidateId)) {
+      return { id: candidateId, name: `${safeBase}_${n}` }
+    }
+  }
+  const fallback = uuid()
+  return { id: `${prefix}${safeBase}_${fallback}`, name: `${safeBase}_${fallback}` }
+}
+
 const modeLabels = {
   grab: 'Grab',
   translate: 'Translate',
@@ -261,10 +282,11 @@ export class ClientBuilder extends System {
       if (entity?.isApp) {
         this.select(null)
         // duplicate the blueprint
+        const nextBlueprint = getNextBlueprintVariant(this.world, entity.blueprint.id)
         const blueprint = {
-          id: uuid(),
+          id: nextBlueprint.id,
           version: 0,
-          name: entity.blueprint.name,
+          name: nextBlueprint.name,
           image: entity.blueprint.image,
           author: entity.blueprint.author,
           url: entity.blueprint.url,
@@ -383,10 +405,11 @@ export class ClientBuilder extends System {
         let blueprintId = entity.data.blueprint
         // if unique, we also duplicate the blueprint
         if (entity.blueprint.unique) {
+          const nextBlueprint = getNextBlueprintVariant(this.world, entity.blueprint.id)
           const blueprint = {
-            id: uuid(),
+            id: nextBlueprint.id,
             version: 0,
-            name: entity.blueprint.name,
+            name: nextBlueprint.name,
             image: entity.blueprint.image,
             author: entity.blueprint.author,
             url: entity.blueprint.url,
