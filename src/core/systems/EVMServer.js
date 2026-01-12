@@ -7,6 +7,12 @@ import { uuid } from '../utils'
 import { System } from './System'
 
 const DEPOSIT_TIMEOUT_MS = 2 * 60 * 1000
+const resolveHlIsTestnet = () => {
+  const envValue = process.env.HL_IS_TESTNET
+  if (envValue === undefined) return true
+  const normalized = envValue.toString().toLowerCase()
+  return !(normalized === 'false' || normalized === '0' || normalized === 'off')
+}
 
 export class EVM extends System {
   constructor(world) {
@@ -16,7 +22,7 @@ export class EVM extends System {
     this.hlClient = null
     this.hlInfoClient = null
     this.hlTransport = null
-    this.hlIsTestnet = true
+    this.hlIsTestnet = resolveHlIsTestnet()
     this.hlAccount = null
 
     const chainName = process.env.PUBLIC_EVM ?? 'mainnet'
@@ -50,13 +56,9 @@ export class EVM extends System {
     }
   }
 
-  async init({ db }) {
+  async init() {
     if (!this.world.network?.isServer) return
-    this.db = db
-    const row = await this.db('config').where('key', 'hlIsTestnet').first()
-    if (row?.value) {
-      this.hlIsTestnet = row.value === 'true'
-    }
+    this.hlIsTestnet = resolveHlIsTestnet()
     this.initHyperliquidClients()
   }
 
@@ -74,12 +76,6 @@ export class EVM extends System {
     } catch (err) {
       console.error('[evm] Failed to initialize Hyperliquid clients:', err)
     }
-  }
-
-  setHlIsTestnet(isTestnet) {
-    if (this.hlIsTestnet === isTestnet) return
-    this.hlIsTestnet = isTestnet
-    this.initHyperliquidClients()
   }
 
   getDepositDestination() {

@@ -439,23 +439,10 @@ export class ServerNetwork extends System {
         return
       }
       if (sub === 'testnet' || sub === 'network') {
-        const toggle = arg2 || ''
-        const nextIsTestnet =
-          toggle === 'on' || toggle === 'testnet' ? true : toggle === 'off' || toggle === 'mainnet' ? false : null
-        if (nextIsTestnet === null) {
-          send('Usage: /hl testnet on|off or /hl network testnet|mainnet')
-          return
-        }
-        await this.db('config')
-          .insert({ key: 'hlIsTestnet', value: nextIsTestnet ? 'true' : 'false' })
-          .onConflict('key')
-          .merge({ value: nextIsTestnet ? 'true' : 'false' })
-        this.world.evm?.setHlIsTestnet?.(nextIsTestnet)
-        this.send('hlConfig', { isTestnet: nextIsTestnet })
-        send(`Hyperliquid network set to ${nextIsTestnet ? 'testnet' : 'mainnet'}.`)
+        send('HL_IS_TESTNET is env-only. Set it in the environment and restart the server.')
         return
       }
-      send('Usage: /hl status | /hl testnet on|off | /hl network testnet|mainnet')
+      send('Usage: /hl status')
     }
     // emit event for all except admin
     if (cmd !== 'admin') {
