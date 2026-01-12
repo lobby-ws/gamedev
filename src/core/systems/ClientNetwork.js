@@ -143,6 +143,7 @@ export class ClientNetwork extends System {
     this.world.livekit?.deserialize(data.livekit)
     storage.set('authToken', data.authToken)
     this.world.admin?.onSnapshot?.(data)
+    this.world.evm?.onSnapshot?.(data)
   }
 
   onSettingsModified = data => {
@@ -217,6 +218,18 @@ export class ClientNetwork extends System {
 
   onKick = code => {
     this.world.emit('kick', code)
+  }
+
+  onHlConfig = data => {
+    this.world.evm?.onHlConfig?.(data)
+  }
+
+  onDepositRequest = data => {
+    this.world.evm?.onDepositRequest?.(data)
+  }
+
+  onDepositResult = data => {
+    this.world.evm?.onDepositResult?.(data)
   }
 
   onClose = code => {

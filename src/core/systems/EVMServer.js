@@ -6,13 +6,18 @@ import * as hl from '@nktkas/hyperliquid'
 import { uuid } from '../utils'
 import { System } from './System'
 
+const DEPOSIT_TIMEOUT_MS = 2 * 60 * 1000
+
 export class EVM extends System {
   constructor(world) {
     super(world)
-    this.callbacks = {}
+    this.pendingDeposits = new Map()
     this.evm = null
     this.hlClient = null
-    this.hlPublicClient = null
+    this.hlInfoClient = null
+    this.hlTransport = null
+    this.hlIsTestnet = true
+    this.hlAccount = null
 
     const chainName = process.env.PUBLIC_EVM ?? 'mainnet'
     const chain = chains[chainName]
@@ -21,6 +26,7 @@ export class EVM extends System {
 
     if (world.network.isServer) {
       const account = mnemonicToAccount(process.env.EVM_SEED_PHRASE)
+      this.hlAccount = account
 
       const wallet = createWalletClient({
         account,
@@ -41,33 +47,45 @@ export class EVM extends System {
         erc20: erc20Abi,
         erc721: null,
       }
-
-      // Initialize Hyperliquid clients
-      try {
-        const hlTransport = new hl.HttpTransport()
-        
-        // Public client for querying data
-        this.hlPublicClient = new hl.PublicClient({ transport: hlTransport })
-        
-        // Wallet client for transactions, using the same account as EVM
-        this.hlClient = new hl.WalletClient({ 
-          wallet: account,
-          transport: hlTransport 
-        })
-        
-        console.log('[evm] Hyperliquid clients initialized on server')
-      } catch (err) {
-        console.error('[evm] Failed to initialize Hyperliquid clients:', err)
-      }
     }
   }
 
-  start() {
-    this.world.network.on('depositResponse', this.onDepositResponse.bind(this))
+  async init({ db }) {
+    if (!this.world.network?.isServer) return
+    this.db = db
+    const row = await this.db('config').where('key', 'hlIsTestnet').first()
+    if (row?.value) {
+      this.hlIsTestnet = row.value === 'true'
+    }
+    this.initHyperliquidClients()
   }
 
-  stop() {
-    this.world.network.off('depositResponse', this.onDepositResponse.bind(this))
+  initHyperliquidClients() {
+    if (!this.world.network?.isServer || !this.hlAccount) return
+    try {
+      const hlTransport = new hl.HttpTransport({ isTestnet: this.hlIsTestnet })
+      this.hlTransport = hlTransport
+      this.hlInfoClient = new hl.InfoClient({ transport: hlTransport })
+      this.hlClient = new hl.ExchangeClient({
+        wallet: this.hlAccount,
+        transport: hlTransport,
+      })
+      console.log(`[evm] Hyperliquid clients initialized on server (${this.hlIsTestnet ? 'testnet' : 'mainnet'})`)
+    } catch (err) {
+      console.error('[evm] Failed to initialize Hyperliquid clients:', err)
+    }
+  }
+
+  setHlIsTestnet(isTestnet) {
+    if (this.hlIsTestnet === isTestnet) return
+    this.hlIsTestnet = isTestnet
+    this.initHyperliquidClients()
+  }
+
+  getDepositDestination() {
+    const destination = process.env.HL_WORLD_ADDRESS
+    if (!destination) return null
+    return destination
   }
 
   onEvmConnect(socket, address) {
@@ -82,62 +100,106 @@ export class EVM extends System {
     this.world.network.send('entityModified', { id: socket.player.data.id, evm: null })
   }
 
-  /**
-   * Deposits funds from player to the server/world account
-   * @param {Object} entity - The entity initiating the deposit
-   * @param {Object} player - The player making the deposit
-   * @param {Number} amount - The amount to deposit
-   * @returns {Promise<Object>} - Transaction result
-   */
-  deposit(entity, player, amount) {
-    return new Promise(async (resolve, reject) => {
-      const hook = entity.getDeadHook()
-      try {
-        const playerAddress = player.data.evm
-        if (!playerAddress) return reject('not_connected')
-        if (typeof amount !== 'number' || amount <= 0) return reject('amount_invalid')
-        if (!this.hlClient) return reject('hyperliquid_not_initialized')
+  async deposit(player, amount, depositId = uuid()) {
+    const playerAddress = player?.data?.evm
+    if (!playerAddress) throw new Error('not_connected')
+    if (!Number.isFinite(amount) || amount <= 0) throw new Error('amount_invalid')
+    if (!this.hlTransport) throw new Error('hyperliquid_not_initialized')
+    if (this.pendingDeposits.has(depositId)) throw new Error('deposit_id_in_use')
 
-        // Create transaction data for client to sign
-        const txData = {
-          destination: process.env.HL_WORLD_ADDRESS || this.wallet.account.address,
-          amount: amount.toString()
-        }
+    const destination = this.getDepositDestination()
+    if (!destination) throw new Error('hl_world_address_missing')
 
-        // Serialize the transaction data
-        const serializedTx = JSON.stringify(txData)
+    const amountString = amount.toString()
+    const expectedChain = this.hlIsTestnet ? 'Testnet' : 'Mainnet'
 
-        // Stop if entity is dead
-        if (hook.dead) return
+    return new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        this.pendingDeposits.delete(depositId)
+        reject(new Error('deposit_timeout'))
+      }, DEPOSIT_TIMEOUT_MS)
 
-        // Setup callback to handle response
-        const depositId = uuid()
-        this.callbacks[depositId] = async (data) => {
-          delete this.callbacks[depositId]
-          if (hook.dead) return
+      this.pendingDeposits.set(depositId, {
+        playerId: player.data.id,
+        amount: amountString,
+        destination,
+        expectedChain,
+        resolve,
+        reject,
+        timeoutId,
+      })
 
-          if (data.success) {
-            resolve({
-              txId: data.txId,
-              result: JSON.parse(data.result)
-            })
-          } else {
-            reject(data.error || 'transaction_failed')
-          }
-        }
-
-        // Send to player to sign and execute
-        this.world.network.sendTo(player.data.id, 'depositRequest', { depositId, serializedTx })
-      } catch (err) {
-        if (hook.dead) return
-        console.error('[hl] Deposit preparation failed:', err)
-        reject('failed')
-      }
+      this.world.network.sendTo(player.data.id, 'depositRequest', {
+        depositId,
+        destination,
+        amount: amountString,
+        isTestnet: this.hlIsTestnet,
+      })
     })
   }
 
-  onDepositResponse(data) {
-    this.callbacks[data.depositId]?.(data)
+  async onDepositResponse(socket, data) {
+    const { depositId, action, signature, nonce, error } = data || {}
+    if (!depositId) throw new Error('deposit_id_missing')
+    const pending = this.pendingDeposits.get(depositId)
+    if (!pending) throw new Error('deposit_not_found')
+
+    if (pending.playerId !== socket.player.data.id) {
+      clearTimeout(pending.timeoutId)
+      this.pendingDeposits.delete(depositId)
+      pending.reject(new Error('deposit_owner_mismatch'))
+      throw new Error('deposit_owner_mismatch')
+    }
+
+    clearTimeout(pending.timeoutId)
+    this.pendingDeposits.delete(depositId)
+
+    if (error) {
+      pending.reject(new Error(error))
+      throw new Error(error)
+    }
+
+    try {
+      if (!action || action.type !== 'usdSend') {
+        throw new Error('deposit_action_invalid')
+      }
+      if (!signature) {
+        throw new Error('deposit_signature_missing')
+      }
+
+      const actionDestination = String(action.destination || '').toLowerCase()
+      if (actionDestination !== pending.destination.toLowerCase()) {
+        throw new Error('deposit_destination_mismatch')
+      }
+
+      if (String(action.amount) !== pending.amount) {
+        throw new Error('deposit_amount_mismatch')
+      }
+
+      if (action.hyperliquidChain !== pending.expectedChain) {
+        throw new Error('deposit_network_mismatch')
+      }
+
+      if (Number(action.time) !== Number(nonce)) {
+        throw new Error('deposit_nonce_mismatch')
+      }
+
+      if (!this.hlTransport) {
+        throw new Error('hyperliquid_not_initialized')
+      }
+
+      const response = await this.hlTransport.request('exchange', {
+        action,
+        signature,
+        nonce,
+      })
+
+      pending.resolve(response)
+      return response
+    } catch (err) {
+      pending.reject(err)
+      throw err
+    }
   }
 
   /**
@@ -150,33 +212,32 @@ export class EVM extends System {
     if (!player) {
       throw new Error('Player is required')
     }
-    
+
     const playerAddress = player.data.evm
     if (!playerAddress) {
       throw new Error('Player does not have a connected wallet')
     }
-    
-    if (typeof amount !== 'number' || amount <= 0) {
+
+    if (!Number.isFinite(amount) || amount <= 0) {
       throw new Error('Amount must be a positive number')
     }
-    
+
     if (!this.hlClient) {
       throw new Error('Hyperliquid client not initialized')
     }
-    
+
     try {
       console.log(`[hl] Transferring ${amount} USDC to player ${player.data.id} (${playerAddress})`)
-      
-      // Execute transfer from server wallet to player
+
       const result = await this.hlClient.usdSend({
         destination: playerAddress,
-        amount: amount.toString()
+        amount: amount.toString(),
       })
-      
+
       console.log(`[hl] Transfer successful: ${result?.txId}`)
       return {
         txId: result?.txId,
-        result
+        result,
       }
     } catch (err) {
       console.error('[hl] Transfer failed:', err)

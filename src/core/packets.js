@@ -29,6 +29,11 @@ const names = [
   'blueprintRemoved',
   'evmConnect',
   'evmDisconnect',
+  'hlConfig',
+  'evmDeposit',
+  'depositRequest',
+  'depositResponse',
+  'depositResult',
 ]
 
 const byName = {}

@@ -75,7 +75,7 @@
     "@fastify/websocket": "^11.0.1",
     "@firebolt-dev/css": "^0.4.3",
     "@firebolt-dev/jsx": "^0.4.3",
-    "@nktkas/hyperliquid": "^0.17.4",
+    "@nktkas/hyperliquid": "0.30.2",
     "@pixiv/three-vrm": "^3.3.3",
     "@tanstack/react-query": "^5.65.1",
     "better-sqlite3": "^11.7.2",

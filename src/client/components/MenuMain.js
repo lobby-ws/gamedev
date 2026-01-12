@@ -11,8 +11,8 @@ import {
   MenuItemTextarea,
   MenuItemToggle,
 } from './Menu'
-import { usePermissions } from './usePermissions'
 import { useFullscreen } from './useFullscreen'
+import { useRank } from './useRank'
 
 export function MenuMain({ world }) {
   const [pages, setPages] = useState(() => ['index'])
@@ -37,7 +37,7 @@ export function MenuMain({ world }) {
 }
 
 function MenuMainIndex({ world, pop, push }) {
-  const { isAdmin, isBuilder } = usePermissions(world)
+  const { isAdmin, isBuilder } = useRank(world, player)
   const player = world.entities.player
   const [name, setName] = useState(() => player.data.name)
   const changeName = name => {
@@ -65,7 +65,7 @@ function MenuMainUI({ world, pop, push }) {
   const [ui, setUI] = useState(world.prefs.ui)
   const [actions, setActions] = useState(world.prefs.actions)
   const [stats, setStats] = useState(world.prefs.stats)
-  const { isBuilder } = usePermissions(world)
+  const { isAdmin, isBuilder } = useRank(world, player)
   useEffect(() => {
     const onChange = changes => {
       if (changes.ui) setUI(changes.ui.value)
@@ -242,7 +242,7 @@ function MenuMainAudio({ world, pop, push }) {
 
 function MenuMainWorld({ world, pop, push }) {
   const player = world.entities.player
-  const { isAdmin } = usePermissions(world)
+  const { isAdmin, isBuilder } = useRank(world, player)
   const [title, setTitle] = useState(world.settings.title)
   const [desc, setDesc] = useState(world.settings.desc)
   const [model, setModel] = useState(world.settings.model)

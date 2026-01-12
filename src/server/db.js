@@ -585,4 +585,14 @@ const migrations = [
       await db('blueprints').insert(blueprint)
     }
   },
+  // add hlIsTestnet config key
+  async db => {
+    const row = await db('config').where('key', 'hlIsTestnet').first()
+    if (row) return
+    const envValue = process.env.HL_IS_TESTNET
+    const normalized = envValue ? envValue.toString().toLowerCase() : ''
+    const isTestnet =
+      envValue === undefined ? true : !(normalized === 'false' || normalized === '0' || normalized === 'off')
+    await db('config').insert({ key: 'hlIsTestnet', value: isTestnet ? 'true' : 'false' })
+  },
 ]

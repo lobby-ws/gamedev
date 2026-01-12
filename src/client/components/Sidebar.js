@@ -1,5 +1,6 @@
 import { css } from '@firebolt-dev/css'
 import { MenuIcon, MicIcon, MicOffIcon, VRIcon } from './Icons'
+import { HyperliquidPane } from './HyperliquidPane'
 import {
   BookTextIcon,
   BoxIcon,
@@ -32,6 +33,7 @@ import {
   Volume2Icon,
   HammerIcon,
   CircleArrowRightIcon,
+  DollarSignIcon,
 } from 'lucide-react'
 import { cls } from './cls'
 import { useContext, useEffect, useMemo, useRef, useState } from 'react'
@@ -84,13 +86,26 @@ export function Sidebar({ world, ui }) {
   const player = world.entities.player
   const { isAdmin, isBuilder } = useRank(world, player)
   const [livekit, setLiveKit] = useState(() => world.livekit.status)
+  const [hyperliquid, setHyperliquid] = useState(false)
   useEffect(() => {
     const onLiveKitStatus = status => {
       setLiveKit({ ...status })
     }
     world.livekit.on('status', onLiveKitStatus)
+    world.on('hyperliquid', setHyperliquid)
+
+    // Add keyboard listener for SHIFT+P
+    const handleKeyDown = (e) => {
+      if (e.shiftKey && e.code === 'KeyP') {
+        world.ui.toggleHyperliquid()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+
     return () => {
       world.livekit.off('status', onLiveKitStatus)
+      world.off('hyperliquid', setHyperliquid)
+      window.removeEventListener('keydown', handleKeyDown)
     }
   }, [])
   const activePane = ui.active ? ui.pane : null
@@ -175,6 +190,12 @@ export function Sidebar({ world, ui }) {
                 <VRIcon size='1.25rem' />
               </Btn>
             )}
+            <Btn
+              active={hyperliquid}
+              onClick={() => world.ui.toggleHyperliquid()}
+            >
+              <DollarSignIcon size='1.25rem' />
+            </Btn>
           </Section>
           {isBuilder && (
             <Section active={activePane} top bottom>
@@ -250,6 +271,7 @@ export function Sidebar({ world, ui }) {
         {ui.pane === 'nodes' && <Nodes key={ui.app.data.id} world={world} hidden={!ui.active} />}
         {ui.pane === 'meta' && <Meta key={ui.app.data.id} world={world} hidden={!ui.active} />}
         {ui.pane === 'players' && <Players world={world} hidden={!ui.active} />}
+        {hyperliquid && <HyperliquidPane world={world} close={() => world.ui.toggleHyperliquid()} />}
       </div>
     </HintProvider>
   )

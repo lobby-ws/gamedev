@@ -309,6 +309,9 @@ export class ServerNetwork extends System {
         apiUrl: process.env.PUBLIC_API_URL,
         adminUrl: PUBLIC_ADMIN_URL,
         maxUploadSize: process.env.PUBLIC_MAX_UPLOAD_SIZE,
+        hl: {
+          isTestnet: this.world.evm?.hlIsTestnet ?? true,
+        },
         settings: this.world.settings.serialize(),
         chat: this.world.chat.serialize(),
         ai: this.world.ai.serialize(),
@@ -411,6 +414,48 @@ export class ServerNetwork extends System {
           `Memory: ${stats.currentMemory} / ${stats.maxMemory} MB (${((stats.currentMemory / stats.maxMemory) * 100).toFixed(1)}%)`
         )
       }
+    }
+    if (cmd === 'hl') {
+      const isAdmin = !process.env.ADMIN_CODE || player.isAdmin()
+      const send = body => {
+        socket.send('chatAdded', {
+          id: uuid(),
+          from: null,
+          fromId: null,
+          body,
+          createdAt: moment().toISOString(),
+        })
+      }
+      if (!isAdmin) {
+        send('Admin only.')
+        return
+      }
+      const sub = arg1
+      if (sub === 'status') {
+        const isTestnet = this.world.evm?.hlIsTestnet ?? true
+        const destination = this.world.evm?.getDepositDestination?.()
+        send(`HL_IS_TESTNET: ${isTestnet ? 'true' : 'false'}`)
+        send(`HL_WORLD_ADDRESS: ${destination || 'missing'}`)
+        return
+      }
+      if (sub === 'testnet' || sub === 'network') {
+        const toggle = arg2 || ''
+        const nextIsTestnet =
+          toggle === 'on' || toggle === 'testnet' ? true : toggle === 'off' || toggle === 'mainnet' ? false : null
+        if (nextIsTestnet === null) {
+          send('Usage: /hl testnet on|off or /hl network testnet|mainnet')
+          return
+        }
+        await this.db('config')
+          .insert({ key: 'hlIsTestnet', value: nextIsTestnet ? 'true' : 'false' })
+          .onConflict('key')
+          .merge({ value: nextIsTestnet ? 'true' : 'false' })
+        this.world.evm?.setHlIsTestnet?.(nextIsTestnet)
+        this.send('hlConfig', { isTestnet: nextIsTestnet })
+        send(`Hyperliquid network set to ${nextIsTestnet ? 'testnet' : 'mainnet'}.`)
+        return
+      }
+      send('Usage: /hl status | /hl testnet on|off | /hl network testnet|mainnet')
     }
     // emit event for all except admin
     if (cmd !== 'admin') {
@@ -670,6 +715,26 @@ export class ServerNetwork extends System {
 
   onEvmDisconnect = socket => {
     this.world.evm.onEvmDisconnect(socket)
+  }
+
+  onEvmDeposit = async (socket, data) => {
+    const { amount, depositId } = data || {}
+    try {
+      if (!depositId) throw new Error('deposit_id_missing')
+      const result = await this.world.evm.deposit(socket.player, amount, depositId)
+      this.sendTo(socket.id, 'depositResult', { depositId, success: true, response: result })
+    } catch (err) {
+      const message = err?.message || err?.toString?.() || 'deposit_failed'
+      this.sendTo(socket.id, 'depositResult', { depositId, success: false, error: message })
+    }
+  }
+
+  onDepositResponse = async (socket, data) => {
+    try {
+      await this.world.evm.onDepositResponse(socket, data)
+    } catch (err) {
+      console.warn('[hl] deposit response rejected:', err)
+    }
   }
 
   onDisconnect = (socket, code) => {
