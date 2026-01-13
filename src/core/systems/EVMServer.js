@@ -79,7 +79,7 @@ export class EVM extends System {
   }
 
   getDepositDestination() {
-    const destination = process.env.HL_WORLD_ADDRESS
+    const destination = this.hlAccount.address
     if (!destination) return null
     return destination
   }
