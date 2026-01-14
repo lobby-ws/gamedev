@@ -91,34 +91,34 @@ This is a tracked, PR-sized implementation checklist for the next authoring/depl
 ## Epic B — Code is dev-only (runtime view-only)
 
 ### PR-B1: Separate deploy capability from builder admin (M)
-- [ ] Add a deploy credential distinct from `ADMIN_CODE` (suggested: `DEPLOY_CODE`).
-- [ ] Extend `/admin` auth to establish a session role/capabilities:
+- [x] Add a deploy credential distinct from `ADMIN_CODE` (suggested: `DEPLOY_CODE`).
+- [x] Extend `/admin` auth to establish a session role/capabilities:
   - builder: layout + instance props + template metadata/flags (as allowed)
   - deploy: template script updates (and optionally template config updates)
-- [ ] Server enforcement:
+- [x] Server enforcement:
   - reject `blueprint_modify` that changes `script` unless session has deploy capability.
   - return clear error (`deploy_required`) so clients can message correctly.
-- [ ] Update app-server to authenticate as deploy-capable for script updates.
-- [ ] Acceptance: admin client cannot modify scripts even if it tries; dev-server can still deploy scripts.
+- [x] Update app-server to authenticate as deploy-capable for script updates.
+- [x] Acceptance: admin client cannot modify scripts even if it tries; dev-server can still deploy scripts.
 - **Touches (likely):** `src/server/admin.js`, `app-server/direct.js`, `app-server/commands.js`
 - **Manual test:** admin client attempts script save → rejected; app-server deploy still succeeds.
 
 ### PR-B2: Make script UI view-only (S/M)
-- [ ] UI: make the code editor read-only and remove save/upload paths:
+- [x] UI: make the code editor read-only and remove save/upload paths:
   - `src/client/components/ScriptEditor.js` (disable Ctrl/Cmd+S action, set editor `readOnly`)
   - remove “Save” affordances in `src/client/components/Sidebar.js` script pane header
   - update `src/client/components/MenuApp.js` “Code” hint to “View code”
-- [ ] UI copy: show “Code is managed by dev server” with optional “Copy” button.
-- [ ] Acceptance: you can open code, select/copy, but can’t persist any edits.
+- [x] UI copy: show “Code is managed by dev server” with optional “Copy” button.
+- [x] Acceptance: you can open code, select/copy, but can’t persist any edits.
 - **Touches (likely):** `src/client/components/ScriptEditor.js`, `src/client/components/Sidebar.js`, `src/client/components/MenuApp.js`
 - **Manual test:** edit text in code view (should be blocked) + press Ctrl/Cmd+S (no-op) + copy still works.
 
 ### PR-B3: Dev-server UX for code deploy (M)
-- [ ] Add/standardize commands for code deploy:
+- [x] Add/standardize commands for code deploy:
   - one-shot deploy (`hyperfy apps deploy <app>`)
   - watch/sync (`hyperfy dev` or existing `app-server` entry)
-- [ ] Ensure deploy tool prints which target/world it is writing to (URL + worldId) before mutating.
-- [ ] Acceptance: code changes only travel via dev-server; runtime never edits code.
+- [x] Ensure deploy tool prints which target/world it is writing to (URL + worldId) before mutating.
+- [x] Acceptance: code changes only travel via dev-server; runtime never edits code.
 
 ---
 

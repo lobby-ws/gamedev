@@ -607,6 +607,7 @@ Usage:
 
 Commands:
   start                     Start the world (local or remote) + app-server sync
+  dev                       Alias for start
   apps <command>            Manage apps (create, list, deploy, update, validate, status)
   project reset [--force]   Delete local apps/assets/world.json in this project
   world export              Export world.json + apps/assets from the world
@@ -622,6 +623,7 @@ async function main() {
 
   switch (command) {
     case 'start':
+    case 'dev':
       return startCommand()
     case 'apps':
       return appsCommand(args)

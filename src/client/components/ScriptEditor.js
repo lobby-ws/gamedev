@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { css } from '@firebolt-dev/css'
-import { hashFile } from '../../core/utils-client'
-
 // editor will remember a single script so you can flip between tabs without hitting save (eg viewing docs)
 const cached = {
   key: null,
@@ -16,28 +14,16 @@ export function ScriptEditor({ app, onHandle }) {
   const codeRef = useRef()
   const [editor, setEditor] = useState(null)
   const [fontSize, setFontSize] = useState(() => 12 * app.world.prefs.ui)
-  const save = async () => {
-    const world = app.world
-    const blueprint = app.blueprint
-    const code = codeRef.current
-    // convert to file
-    const blob = new Blob([code], { type: 'text/plain' })
-    const file = new File([blob], 'script.js', { type: 'text/plain' })
-    // immutable hash the file
-    const hash = await hashFile(file)
-    // use hash as glb filename
-    const filename = `${hash}.js`
-    // canonical url to this file
-    const url = `asset://${filename}`
-    // cache file locally so this client can insta-load it
-    world.loader.insert('script', url, file)
-    // update blueprint locally (also rebuilds apps)
-    const version = blueprint.version + 1
-    world.blueprints.modify({ id: blueprint.id, version, script: url })
-    // upload script
-    await world.admin.upload(file)
-    // broadcast blueprint change to server + other clients
-    world.admin.blueprintModify({ id: blueprint.id, version, script: url }, { ignoreNetworkId: world.network.id })
+  const copy = async () => {
+    const text = editor ? editor.getValue() : codeRef.current || ''
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      app.world.emit('toast', 'Code copied')
+    } catch (err) {
+      console.error(err)
+      app.world.emit('toast', 'Copy failed')
+    }
   }
   const saveState = () => {
     if (editor) {
@@ -48,8 +34,8 @@ export function ScriptEditor({ app, onHandle }) {
     }
   }
   useEffect(() => {
-    onHandle({ save })
-  }, [])
+    onHandle?.({ copy })
+  }, [editor])
   useEffect(() => {
     const onPrefsChange = changes => {
       if (changes.ui) {
@@ -98,6 +84,7 @@ export function ScriptEditor({ app, onHandle }) {
         tabSize: 2,
         insertSpaces: true,
         fontSize: fontSize,
+        readOnly: true,
       })
       if (state?.viewState) {
         editor.restoreViewState(state.viewState)
@@ -105,12 +92,6 @@ export function ScriptEditor({ app, onHandle }) {
       }
       editor.onDidChangeModelContent(event => {
         codeRef.current = editor.getValue()
-      })
-      editor.addAction({
-        id: 'save',
-        label: 'Save',
-        keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS],
-        run: save,
       })
       setEditor(editor)
       // watch changes

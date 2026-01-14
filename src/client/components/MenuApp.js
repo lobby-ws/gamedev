@@ -99,7 +99,7 @@ function MenuAppIndex({ world, app, blueprint, pop, push }) {
           onChange={changeModel}
         />
       )}
-      {!frozen && <MenuItemBtn label='Code' hint='View or edit the code for this app' onClick={world.ui.toggleCode} />}
+      {!frozen && <MenuItemBtn label='Code' hint='View code for this app' onClick={world.ui.toggleCode} />}
       {!frozen && <MenuItemBtn label='Flags' hint='View/edit flags for this app' onClick={() => push('flags')} nav />}
       <MenuItemBtn label='Metadata' hint='View/edit metadata for this app' onClick={() => push('metadata')} nav />
       <MenuItemBtn

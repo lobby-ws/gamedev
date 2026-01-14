@@ -64,6 +64,7 @@ export class HyperfyCLI {
 
     this.worldUrl = process.env.WORLD_URL || null
     this.adminCode = typeof process.env.ADMIN_CODE === 'string' ? process.env.ADMIN_CODE : null
+    this.deployCode = typeof process.env.DEPLOY_CODE === 'string' ? process.env.DEPLOY_CODE : null
   }
 
   _requireWorldUrl() {
@@ -94,7 +95,12 @@ export class HyperfyCLI {
       this.adminCode = adminCode
     }
 
-    const server = new DirectAppServer({ worldUrl: this.worldUrl, adminCode, rootDir: this.rootDir })
+    const server = new DirectAppServer({
+      worldUrl: this.worldUrl,
+      adminCode,
+      deployCode: this.deployCode,
+      rootDir: this.rootDir,
+    })
     try {
       await server.connect()
       return server
@@ -104,7 +110,12 @@ export class HyperfyCLI {
       if (!canRetry) throw err
       adminCode = await this._promptAdminCode()
       this.adminCode = adminCode
-      const retryServer = new DirectAppServer({ worldUrl: this.worldUrl, adminCode, rootDir: this.rootDir })
+      const retryServer = new DirectAppServer({
+        worldUrl: this.worldUrl,
+        adminCode,
+        deployCode: this.deployCode,
+        rootDir: this.rootDir,
+      })
       await retryServer.connect()
       return retryServer
     }
@@ -476,11 +487,12 @@ Environment:
   WORLD_URL                  World server base URL (e.g. http://localhost:5000)
   WORLD_ID                   World ID (must match remote worldId)
   ADMIN_CODE                 Admin code (if the world requires it)
+  DEPLOY_CODE                Deploy code (required for script updates when configured)
 
 Notes:
   - Blueprints live at apps/<appName>/*.json with a shared index.js/ts script.
   - Start the direct app-server for continuous sync:
-      WORLD_URL=... WORLD_ID=... ADMIN_CODE=... node <path-to-repo>/app-server/server.js
+      WORLD_URL=... WORLD_ID=... ADMIN_CODE=... DEPLOY_CODE=... node <path-to-repo>/app-server/server.js
 `)
   }
 }

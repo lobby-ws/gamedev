@@ -20,7 +20,6 @@ import {
   PinIcon,
   RocketIcon,
   RotateCcwIcon,
-  SaveIcon,
   SearchIcon,
   SparkleIcon,
   SquareCheckBigIcon,
@@ -1716,6 +1715,7 @@ function Script({ world, hidden }) {
           display: flex;
           align-items: center;
           border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+          gap: 0.75rem;
         }
         .script-title {
           flex: 1;
@@ -1723,15 +1723,25 @@ function Script({ world, hidden }) {
           font-size: 1rem;
           line-height: 1;
         }
-        .script-btn {
-          width: 2rem;
+        .script-note {
+          font-size: 0.75rem;
+          color: rgba(255, 255, 255, 0.45);
+          white-space: nowrap;
+        }
+        .script-copy {
           height: 2rem;
+          padding: 0 0.75rem;
           display: flex;
           align-items: center;
           justify-content: center;
+          border-radius: 999px;
+          border: 1px solid rgba(255, 255, 255, 0.15);
+          background: transparent;
           color: rgba(255, 255, 255, 0.8);
+          font-size: 0.8rem;
           &:hover {
             cursor: pointer;
+            border-color: rgba(255, 255, 255, 0.3);
             color: white;
           }
         }
@@ -1751,9 +1761,10 @@ function Script({ world, hidden }) {
     >
       <div className='script-head'>
         <div className='script-title'>Script: {app.blueprint?.name}</div>
-        <div className='script-btn' onClick={() => handle?.save()}>
-          <SaveIcon size='1.125rem' />
-        </div>
+        <div className='script-note'>Code is managed by dev server</div>
+        <button className='script-copy' type='button' onClick={() => handle?.copy?.()}>
+          Copy
+        </button>
       </div>
       <ScriptEditor key={app.data.id} app={app} onHandle={setHandle} />
       <div className='script-resizer' ref={resizeRef} />

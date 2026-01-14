@@ -135,10 +135,11 @@ function normalizeBlueprintForCompare(source) {
 }
 
 class WorldAdminClient extends EventEmitter {
-  constructor({ worldUrl, adminCode }) {
+  constructor({ worldUrl, adminCode, deployCode }) {
     super()
     this.worldUrl = normalizeBaseUrl(worldUrl)
     this.adminCode = adminCode || null
+    this.deployCode = deployCode || null
     this.ws = null
     this.pending = new Map()
   }
@@ -173,6 +174,7 @@ class WorldAdminClient extends EventEmitter {
         ws.send(
           writePacket('adminAuth', {
             code: this.adminCode,
+            deployCode: this.deployCode,
             needsHeartbeat: false,
           })
         )
@@ -357,16 +359,21 @@ class WorldAdminClient extends EventEmitter {
 }
 
 export class DirectAppServer {
-  constructor({ worldUrl, adminCode, rootDir = process.cwd() }) {
+  constructor({ worldUrl, adminCode, deployCode, rootDir = process.cwd() }) {
     this.rootDir = rootDir
     this.worldUrl = normalizeBaseUrl(worldUrl)
     this.adminCode = adminCode || null
+    this.deployCode = deployCode || null
     this.appsDir = path.join(this.rootDir, 'apps')
     this.assetsDir = path.join(this.rootDir, 'assets')
     this.worldFile = path.join(this.rootDir, 'world.json')
     this.manifest = new WorldManifest(this.worldFile)
 
-    this.client = new WorldAdminClient({ worldUrl: this.worldUrl, adminCode: this.adminCode })
+    this.client = new WorldAdminClient({
+      worldUrl: this.worldUrl,
+      adminCode: this.adminCode,
+      deployCode: this.deployCode,
+    })
     this.deployTimers = new Map()
     this.pendingWrites = new Set()
     this.watchers = new Map()
@@ -375,6 +382,7 @@ export class DirectAppServer {
 
     this.assetsUrl = null
     this.snapshot = null
+    this.loggedTarget = false
   }
 
   async connect() {
@@ -496,6 +504,13 @@ export class DirectAppServer {
 
   async deployBlueprint(id) {
     await this._deployBlueprintById(id)
+  }
+
+  _logTarget() {
+    if (this.loggedTarget) return
+    const worldId = this.snapshot?.worldId || 'unknown'
+    console.log(`Deploy target: ${this.worldUrl} (worldId: ${worldId})`)
+    this.loggedTarget = true
   }
 
   async _startReconnectLoop() {
@@ -706,6 +721,7 @@ export class DirectAppServer {
   }
 
   async _deployAllBlueprints() {
+    this._logTarget()
     const index = this._indexLocalBlueprints()
     const byApp = new Map()
     for (const info of index.values()) {
@@ -725,6 +741,7 @@ export class DirectAppServer {
   }
 
   async _deployBlueprintsForApp(appName, infos = null, index = null) {
+    this._logTarget()
     const blueprintIndex = index || this._indexLocalBlueprints()
     const list = infos || Array.from(blueprintIndex.values()).filter(item => item.appName === appName)
     if (!list.length) return
@@ -838,6 +855,7 @@ export class DirectAppServer {
 
   async _applyManifestToWorld(manifest) {
     if (!this.snapshot) return
+    this._logTarget()
 
     for (const [key, value] of Object.entries(manifest.settings || {})) {
       if (!isEqual(this.snapshot.settings?.[key], value)) {
@@ -1177,11 +1195,12 @@ export class DirectAppServer {
 export async function main() {
   const worldUrl = process.env.WORLD_URL
   const adminCode = process.env.ADMIN_CODE
+  const deployCode = process.env.DEPLOY_CODE
   if (!worldUrl) {
     console.error('Missing env WORLD_URL (e.g. http://localhost:3000)')
     process.exit(1)
   }
-  const server = new DirectAppServer({ worldUrl, adminCode })
+  const server = new DirectAppServer({ worldUrl, adminCode, deployCode })
   await server.start()
   await new Promise(() => {})
 }

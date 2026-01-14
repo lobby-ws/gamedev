@@ -8,14 +8,26 @@ function normalizeHeader(value) {
   return value
 }
 
+function isCodeValid(expected, code) {
+  if (!expected) return true
+  if (typeof code !== 'string') return false
+  const expectedBuf = Buffer.from(expected)
+  const codeBuf = Buffer.from(code)
+  if (expectedBuf.length !== codeBuf.length) return false
+  return crypto.timingSafeEqual(expectedBuf, codeBuf)
+}
+
 function isAdminCodeValid(code) {
   const adminCode = process.env.ADMIN_CODE
-  if (!adminCode) return true
-  if (typeof code !== 'string') return false
-  const adminBuf = Buffer.from(adminCode)
-  const codeBuf = Buffer.from(code)
-  if (adminBuf.length !== codeBuf.length) return false
-  return crypto.timingSafeEqual(adminBuf, codeBuf)
+  return isCodeValid(adminCode, code)
+}
+
+function isDeployCodeValid(code, builderOk) {
+  const deployCode = process.env.DEPLOY_CODE
+  if (deployCode) {
+    return isCodeValid(deployCode, code)
+  }
+  return builderOk
 }
 
 function getAdminCodeFromRequest(req) {
@@ -145,6 +157,7 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
       let authed = false
       let defaultNetworkId = null
       let needsHeartbeat = false
+      let capabilities = { builder: false, deploy: false }
 
       const onClose = () => {
         subscribers.delete(ws)
@@ -166,7 +179,9 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
             ws.close()
             return
           }
-          if (!isAdminCodeValid(data?.code)) {
+          const builderOk = isAdminCodeValid(data?.code)
+          const deployOk = isDeployCodeValid(data?.deployCode, builderOk)
+          if (!builderOk && !deployOk) {
             sendPacket(ws, 'adminAuthError', { error: 'invalid_code' })
             ws.close()
             return
@@ -174,9 +189,10 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
           authed = true
           needsHeartbeat = !!data?.needsHeartbeat
           defaultNetworkId = data?.networkId || null
+          capabilities = { builder: builderOk, deploy: deployOk }
           subscribers.add(ws)
           if (needsHeartbeat) heartbeatSubscribers.add(ws)
-          sendPacket(ws, 'adminAuthOk', { ok: true })
+          sendPacket(ws, 'adminAuthOk', { ok: true, capabilities })
           if (needsHeartbeat) {
             sendSnapshot(ws)
           }
@@ -194,6 +210,10 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
 
         try {
           if (data.type === 'blueprint_add') {
+            if (!capabilities.builder) {
+              sendPacket(ws, 'adminResult', { ok: false, error: 'builder_required', requestId })
+              return
+            }
             if (!data.blueprint?.id) {
               sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
               return
@@ -210,6 +230,17 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
           if (data.type === 'blueprint_modify') {
             if (!data.change?.id) {
               sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
+              return
+            }
+            const change = data.change
+            const hasScriptChange = Object.prototype.hasOwnProperty.call(change, 'script')
+            const nonScriptKeys = Object.keys(change).filter(key => !['id', 'version', 'script'].includes(key))
+            if (nonScriptKeys.length > 0 && !capabilities.builder) {
+              sendPacket(ws, 'adminResult', { ok: false, error: 'builder_required', requestId })
+              return
+            }
+            if (hasScriptChange && !capabilities.deploy) {
+              sendPacket(ws, 'adminResult', { ok: false, error: 'deploy_required', requestId })
               return
             }
             const result = network.applyBlueprintModified(data.change, { ignoreNetworkId })
@@ -230,6 +261,10 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
           }
 
           if (data.type === 'entity_add') {
+            if (!capabilities.builder) {
+              sendPacket(ws, 'adminResult', { ok: false, error: 'builder_required', requestId })
+              return
+            }
             if (!data.entity?.id) {
               sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
               return
@@ -244,6 +279,10 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
           }
 
           if (data.type === 'entity_modify') {
+            if (!capabilities.builder) {
+              sendPacket(ws, 'adminResult', { ok: false, error: 'builder_required', requestId })
+              return
+            }
             if (!data.change?.id) {
               sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
               return
@@ -258,6 +297,10 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
           }
 
           if (data.type === 'entity_remove') {
+            if (!capabilities.builder) {
+              sendPacket(ws, 'adminResult', { ok: false, error: 'builder_required', requestId })
+              return
+            }
             if (!data.id) {
               sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
               return
@@ -272,6 +315,10 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
           }
 
           if (data.type === 'settings_modify') {
+            if (!capabilities.builder) {
+              sendPacket(ws, 'adminResult', { ok: false, error: 'builder_required', requestId })
+              return
+            }
             if (!data.key) {
               sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
               return
@@ -286,6 +333,10 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
           }
 
           if (data.type === 'spawn_modify') {
+            if (!capabilities.builder) {
+              sendPacket(ws, 'adminResult', { ok: false, error: 'builder_required', requestId })
+              return
+            }
             if (!data.op) {
               sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
               return
@@ -303,6 +354,10 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
           }
 
           if (data.type === 'modify_rank') {
+            if (!capabilities.builder) {
+              sendPacket(ws, 'adminResult', { ok: false, error: 'builder_required', requestId })
+              return
+            }
             if (!data.playerId || typeof data.rank !== 'number') {
               sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
               return
@@ -317,6 +372,10 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
           }
 
           if (data.type === 'kick') {
+            if (!capabilities.builder) {
+              sendPacket(ws, 'adminResult', { ok: false, error: 'builder_required', requestId })
+              return
+            }
             if (!data.playerId) {
               sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
               return
@@ -331,6 +390,10 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
           }
 
           if (data.type === 'mute') {
+            if (!capabilities.builder) {
+              sendPacket(ws, 'adminResult', { ok: false, error: 'builder_required', requestId })
+              return
+            }
             if (!data.playerId || typeof data.muted !== 'boolean') {
               sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
               return
