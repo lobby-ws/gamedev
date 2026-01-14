@@ -134,6 +134,20 @@ function normalizeBlueprintForCompare(source) {
   }
 }
 
+function normalizeBlueprintForCompareWithoutScript(source) {
+  const normalized = normalizeBlueprintForCompare(source)
+  if (!normalized) return normalized
+  delete normalized.script
+  return normalized
+}
+
+function formatNameList(items, limit = 6) {
+  if (!Array.isArray(items) || items.length === 0) return ''
+  if (items.length <= limit) return items.join(', ')
+  const shown = items.slice(0, limit).join(', ')
+  return `${shown} (+${items.length - limit} more)`
+}
+
 class WorldAdminClient extends EventEmitter {
   constructor({ worldUrl, adminCode, deployCode }) {
     super()
@@ -156,9 +170,10 @@ class WorldAdminClient extends EventEmitter {
     return joinUrl(this.wsBase, '/admin')
   }
 
-  adminHeaders(extra = {}) {
+  adminHeaders(extra = {}, { includeDeploy } = {}) {
     const headers = { ...extra }
     if (this.adminCode) headers['X-Admin-Code'] = this.adminCode
+    if (includeDeploy && this.deployCode) headers['X-Deploy-Code'] = this.deployCode
     return headers
   }
 
@@ -251,6 +266,7 @@ class WorldAdminClient extends EventEmitter {
           const err = new Error(data.error || 'error')
           err.code = data.error
           err.current = data.current
+          err.lock = data.lock
           pending.reject(err)
         }
         return
@@ -356,6 +372,96 @@ class WorldAdminClient extends EventEmitter {
     }
     return upload.json()
   }
+
+  async getDeployLockStatus() {
+    const res = await fetch(joinUrl(this.httpBase, '/admin/deploy-lock'), {
+      headers: this.adminHeaders({}, { includeDeploy: true }),
+    })
+    if (!res.ok) {
+      throw new Error(`deploy_lock_status_failed:${res.status}`)
+    }
+    return res.json()
+  }
+
+  async acquireDeployLock({ owner, ttl } = {}) {
+    const res = await fetch(joinUrl(this.httpBase, '/admin/deploy-lock'), {
+      method: 'POST',
+      headers: this.adminHeaders({ 'Content-Type': 'application/json' }, { includeDeploy: true }),
+      body: JSON.stringify({ owner, ttl }),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => null)
+      const err = new Error(data?.error || `deploy_lock_failed:${res.status}`)
+      err.code = data?.error || 'deploy_lock_failed'
+      err.lock = data?.lock
+      throw err
+    }
+    return res.json()
+  }
+
+  async renewDeployLock({ token, ttl } = {}) {
+    const res = await fetch(joinUrl(this.httpBase, '/admin/deploy-lock'), {
+      method: 'PUT',
+      headers: this.adminHeaders({ 'Content-Type': 'application/json' }, { includeDeploy: true }),
+      body: JSON.stringify({ token, ttl }),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => null)
+      const err = new Error(data?.error || `deploy_lock_renew_failed:${res.status}`)
+      err.code = data?.error || 'deploy_lock_renew_failed'
+      err.lock = data?.lock
+      throw err
+    }
+    return res.json()
+  }
+
+  async releaseDeployLock({ token } = {}) {
+    const res = await fetch(joinUrl(this.httpBase, '/admin/deploy-lock'), {
+      method: 'DELETE',
+      headers: this.adminHeaders({ 'Content-Type': 'application/json' }, { includeDeploy: true }),
+      body: JSON.stringify({ token }),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => null)
+      const err = new Error(data?.error || `deploy_lock_release_failed:${res.status}`)
+      err.code = data?.error || 'deploy_lock_release_failed'
+      err.lock = data?.lock
+      throw err
+    }
+    return res.json()
+  }
+
+  async createDeploySnapshot({ ids, target, note, lockToken } = {}) {
+    const res = await fetch(joinUrl(this.httpBase, '/admin/deploy-snapshots'), {
+      method: 'POST',
+      headers: this.adminHeaders({ 'Content-Type': 'application/json' }, { includeDeploy: true }),
+      body: JSON.stringify({ ids, target, note, lockToken }),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => null)
+      const err = new Error(data?.error || `snapshot_failed:${res.status}`)
+      err.code = data?.error || 'snapshot_failed'
+      err.lock = data?.lock
+      throw err
+    }
+    return res.json()
+  }
+
+  async rollbackDeploySnapshot({ id, lockToken } = {}) {
+    const res = await fetch(joinUrl(this.httpBase, '/admin/deploy-snapshots/rollback'), {
+      method: 'POST',
+      headers: this.adminHeaders({ 'Content-Type': 'application/json' }, { includeDeploy: true }),
+      body: JSON.stringify({ id, lockToken }),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => null)
+      const err = new Error(data?.error || `rollback_failed:${res.status}`)
+      err.code = data?.error || 'rollback_failed'
+      err.lock = data?.lock
+      throw err
+    }
+    return res.json()
+  }
 }
 
 export class DirectAppServer {
@@ -383,6 +489,7 @@ export class DirectAppServer {
     this.assetsUrl = null
     this.snapshot = null
     this.loggedTarget = false
+    this.deployLockToken = null
   }
 
   async connect() {
@@ -498,8 +605,8 @@ export class DirectAppServer {
     await this._applyManifestToWorld(manifest)
   }
 
-  async deployApp(appName) {
-    await this._deployBlueprintsForApp(appName)
+  async deployApp(appName, options = {}) {
+    await this._deployBlueprintsForApp(appName, null, null, { preview: true, ...options })
   }
 
   async deployBlueprint(id) {
@@ -720,6 +827,132 @@ export class DirectAppServer {
     this.deployTimers.set(key, timer)
   }
 
+  _getDeployLockOwner(appName = null) {
+    const target = process.env.HYPERFY_TARGET || 'default'
+    const label = appName ? `:${appName}` : ''
+    return `app-server${label}:${target}:${process.pid}`
+  }
+
+  async _acquireDeployLock({ owner } = {}) {
+    const lockOwner = owner || this._getDeployLockOwner()
+    const result = await this.client.acquireDeployLock({ owner: lockOwner })
+    this.deployLockToken = result.token
+    return result.token
+  }
+
+  async _releaseDeployLock() {
+    const token = this.deployLockToken
+    if (!token) return
+    try {
+      await this.client.releaseDeployLock({ token })
+    } finally {
+      this.deployLockToken = null
+    }
+  }
+
+  async _withDeployLock(fn, { owner } = {}) {
+    await this._acquireDeployLock({ owner })
+    try {
+      return await fn()
+    } finally {
+      await this._releaseDeployLock()
+    }
+  }
+
+  _getDeployTargetName() {
+    return process.env.HYPERFY_TARGET || null
+  }
+
+  async _prepareBlueprintPayload(info, scriptInfo, { uploadAssets = true } = {}) {
+    const cfg = readJson(info.configPath)
+    if (!cfg || typeof cfg !== 'object') {
+      throw new Error(`invalid_blueprint_config:${info.configPath}`)
+    }
+    const payload = {
+      id: info.id,
+      name: info.fileBase,
+      script: scriptInfo.scriptUrl,
+      ...pickBlueprintFields(cfg),
+    }
+    return this._resolveLocalBlueprintToAssetUrls(payload, { upload: uploadAssets })
+  }
+
+  async _buildDeployPlan(appName, infos, { uploadAssets = false, uploadScripts = false } = {}) {
+    const scriptInfo = await this._uploadScriptForApp(appName, infos[0].scriptPath, { upload: uploadScripts })
+    const changes = []
+    for (const info of infos) {
+      const desired = await this._prepareBlueprintPayload(info, scriptInfo, { uploadAssets })
+      const current = this.snapshot?.blueprints?.get(info.id) || null
+      if (!current) {
+        changes.push({ info, desired, current: null, type: 'add', scriptChanged: true, otherChanged: true })
+        continue
+      }
+      const desiredCompare = normalizeBlueprintForCompare(desired)
+      const currentCompare = normalizeBlueprintForCompare(current)
+      if (isEqual(desiredCompare, currentCompare)) {
+        changes.push({ info, desired, current, type: 'unchanged', scriptChanged: false, otherChanged: false })
+        continue
+      }
+      const scriptChanged = desired.script !== current.script
+      const desiredNoScript = normalizeBlueprintForCompareWithoutScript(desired)
+      const currentNoScript = normalizeBlueprintForCompareWithoutScript(current)
+      const otherChanged = !isEqual(desiredNoScript, currentNoScript)
+      changes.push({ info, desired, current, type: 'update', scriptChanged, otherChanged })
+    }
+    return { scriptInfo, changes }
+  }
+
+  _summarizeDeployPlan(plan) {
+    const adds = plan.changes.filter(item => item.type === 'add')
+    const updates = plan.changes.filter(item => item.type === 'update')
+    const unchanged = plan.changes.filter(item => item.type === 'unchanged')
+    const scriptChanges = updates.filter(item => item.scriptChanged).length
+    const configChanges = updates.filter(item => item.otherChanged).length
+    return {
+      adds,
+      updates,
+      unchanged,
+      scriptChanges,
+      configChanges,
+      totalChanges: adds.length + updates.length,
+    }
+  }
+
+  _printDeployPlan(appName, summary) {
+    const addNames = summary.adds.map(item => item.info?.fileBase || item.desired?.name || item.info?.id)
+    const updateNames = summary.updates.map(item => item.info?.fileBase || item.desired?.name || item.info?.id)
+    const unchangedCount = summary.unchanged.length
+    console.log(`📦 Deploy plan for ${appName}:`)
+    if (!summary.totalChanges) {
+      console.log('  • no changes')
+      return
+    }
+    if (summary.adds.length) {
+      console.log(`  • add: ${summary.adds.length}${addNames.length ? ` (${formatNameList(addNames)})` : ''}`)
+    }
+    if (summary.updates.length) {
+      const details = []
+      if (summary.scriptChanges) details.push(`script: ${summary.scriptChanges}`)
+      if (summary.configChanges) details.push(`config: ${summary.configChanges}`)
+      const detailText = details.length ? ` [${details.join(', ')}]` : ''
+      console.log(`  • update: ${summary.updates.length}${detailText}${updateNames.length ? ` (${formatNameList(updateNames)})` : ''}`)
+    }
+    if (unchangedCount) {
+      console.log(`  • unchanged: ${unchangedCount}`)
+    }
+  }
+
+  async _createDeploySnapshot(blueprintIds, { note } = {}) {
+    if (!blueprintIds.length) return null
+    const target = this._getDeployTargetName()
+    return this.client.createDeploySnapshot({
+      ids: blueprintIds,
+      target,
+      note,
+      lockToken: this.deployLockToken,
+    })
+  }
+
   async _deployAllBlueprints() {
     this._logTarget()
     const index = this._indexLocalBlueprints()
@@ -740,19 +973,37 @@ export class DirectAppServer {
     await this._deployBlueprintsForApp(info.appName, [info], index)
   }
 
-  async _deployBlueprintsForApp(appName, infos = null, index = null) {
+  async _deployBlueprintsForApp(appName, infos = null, index = null, options = {}) {
     this._logTarget()
     const blueprintIndex = index || this._indexLocalBlueprints()
     const list = infos || Array.from(blueprintIndex.values()).filter(item => item.appName === appName)
     if (!list.length) return
 
-    const scriptInfo = await this._uploadScriptForApp(appName, list[0].scriptPath)
-    for (const info of list) {
-      await this._deployBlueprint(info, scriptInfo)
+    const preview = !!options.preview || !!options.dryRun
+    const note = typeof options.note === 'string' && options.note.trim() ? options.note.trim() : null
+    const plan = await this._buildDeployPlan(appName, list)
+    const summary = this._summarizeDeployPlan(plan)
+    if (preview) {
+      this._printDeployPlan(appName, summary)
     }
+    if (!summary.totalChanges) return
+    if (options.dryRun) return
+
+    const snapshotIds = [...summary.adds, ...summary.updates]
+      .map(item => item.info?.id)
+      .filter(Boolean)
+    const snapshotNote = note || process.env.DEPLOY_NOTE || null
+
+    await this._withDeployLock(async () => {
+      await this._createDeploySnapshot(snapshotIds, { note: snapshotNote })
+      const scriptInfo = await this._uploadScriptForApp(appName, list[0].scriptPath)
+      for (const info of list) {
+        await this._deployBlueprint(info, scriptInfo)
+      }
+    }, { owner: this._getDeployLockOwner(appName) })
   }
 
-  async _uploadScriptForApp(appName, scriptPath = null) {
+  async _uploadScriptForApp(appName, scriptPath = null, { upload = true } = {}) {
     const resolvedPath = scriptPath || this._getScriptPath(appName)
     if (!resolvedPath || !fs.existsSync(resolvedPath)) {
       throw new Error(`missing_script:${appName}`)
@@ -760,12 +1011,14 @@ export class DirectAppServer {
     const scriptText = fs.readFileSync(resolvedPath, 'utf8')
     const scriptHash = sha256(Buffer.from(scriptText, 'utf8'))
     const scriptFilename = `${scriptHash}.js`
-    await this.client.uploadAsset({
-      filename: scriptFilename,
-      buffer: Buffer.from(scriptText, 'utf8'),
-      mimeType: 'text/javascript',
-    })
-    return { scriptUrl: `asset://${scriptFilename}`, scriptPath: resolvedPath, scriptText }
+    if (upload) {
+      await this.client.uploadAsset({
+        filename: scriptFilename,
+        buffer: Buffer.from(scriptText, 'utf8'),
+        mimeType: 'text/javascript',
+      })
+    }
+    return { scriptUrl: `asset://${scriptFilename}`, scriptPath: resolvedPath, scriptText, scriptHash }
   }
 
   async _deployBlueprint(info, scriptInfo) {
@@ -787,14 +1040,14 @@ export class DirectAppServer {
     const current = this.snapshot?.blueprints?.get(info.id) || null
     if (!current) {
       resolved.version = 0
-      await this.client.request('blueprint_add', { blueprint: resolved })
+      await this.client.request('blueprint_add', { blueprint: resolved, lockToken: this.deployLockToken })
     } else {
       const nextCompare = normalizeBlueprintForCompare(resolved)
       const currentCompare = normalizeBlueprintForCompare(current)
       if (isEqual(nextCompare, currentCompare)) return
       const attempt = async version => {
         resolved.version = version
-        await this.client.request('blueprint_modify', { change: resolved })
+        await this.client.request('blueprint_modify', { change: resolved, lockToken: this.deployLockToken })
       }
       try {
         await attempt((current.version || 0) + 1)
@@ -811,22 +1064,22 @@ export class DirectAppServer {
     }
   }
 
-  async _resolveLocalBlueprintToAssetUrls(cfg) {
+  async _resolveLocalBlueprintToAssetUrls(cfg, { upload = true } = {}) {
     const out = { ...cfg }
 
     if (typeof out.model === 'string') {
-      out.model = await this._resolveLocalAssetToWorldUrl(out.model)
+      out.model = await this._resolveLocalAssetToWorldUrl(out.model, { upload })
     }
 
     if (out.image && typeof out.image === 'object' && typeof out.image.url === 'string') {
-      out.image = { ...out.image, url: await this._resolveLocalAssetToWorldUrl(out.image.url) }
+      out.image = { ...out.image, url: await this._resolveLocalAssetToWorldUrl(out.image.url, { upload }) }
     }
 
     if (out.props && typeof out.props === 'object') {
       const nextProps = {}
       for (const [k, v] of Object.entries(out.props)) {
         if (v && typeof v === 'object' && typeof v.url === 'string') {
-          nextProps[k] = { ...v, url: await this._resolveLocalAssetToWorldUrl(v.url) }
+          nextProps[k] = { ...v, url: await this._resolveLocalAssetToWorldUrl(v.url, { upload }) }
         } else {
           nextProps[k] = v
         }
@@ -837,7 +1090,7 @@ export class DirectAppServer {
     return out
   }
 
-  async _resolveLocalAssetToWorldUrl(url) {
+  async _resolveLocalAssetToWorldUrl(url, { upload = true } = {}) {
     if (typeof url !== 'string') return url
     const normalized = normalizeAssetPath(url)
     if (normalized.startsWith('asset://')) return normalized
@@ -849,7 +1102,9 @@ export class DirectAppServer {
     const hash = sha256(buffer)
     const ext = path.extname(normalized).toLowerCase().replace(/^\./, '') || 'bin'
     const filename = `${hash}.${ext}`
-    await this.client.uploadAsset({ filename, buffer })
+    if (upload) {
+      await this.client.uploadAsset({ filename, buffer })
+    }
     return `asset://${filename}`
   }
 

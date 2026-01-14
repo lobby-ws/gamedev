@@ -6,6 +6,7 @@ import readline from 'readline'
 import { DirectAppServer } from './direct.js'
 import { uuid } from './utils.js'
 import { deriveBlueprintId, isBlueprintDenylist } from './blueprintUtils.js'
+import { applyTargetEnv, parseTargetArgs, resolveTarget } from './targets.js'
 
 function sha256Hex(text) {
   return crypto.createHash('sha256').update(text, 'utf8').digest('hex')
@@ -28,6 +29,45 @@ function isValidAppName(name) {
   if (!trimmed) return false
   if (trimmed.includes('/') || trimmed.includes('\\')) return false
   return true
+}
+
+function parseDeployArgs(args = []) {
+  const options = { dryRun: false, yes: false, note: null }
+  const rest = []
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]
+    if (arg === '--dry-run' || arg === '-n') {
+      options.dryRun = true
+      continue
+    }
+    if (arg === '--yes' || arg === '-y') {
+      options.yes = true
+      continue
+    }
+    if (arg === '--note') {
+      const next = args[i + 1]
+      if (!next || next.startsWith('-')) {
+        throw new Error('Missing value for --note')
+      }
+      options.note = next
+      i += 1
+      continue
+    }
+    if (arg.startsWith('--note=')) {
+      options.note = arg.slice('--note='.length)
+      continue
+    }
+    rest.push(arg)
+  }
+  return { options, rest }
+}
+
+function formatLockSummary(lock) {
+  if (!lock || typeof lock !== 'object') return ''
+  const owner = lock.owner ? `owner: ${lock.owner}` : 'owner: unknown'
+  const expiresIn =
+    typeof lock.expiresInMs === 'number' ? `, expires in ${Math.ceil(lock.expiresInMs / 1000)}s` : ''
+  return `${owner}${expiresIn}`
 }
 
 function listLocalBlueprints(appsDir) {
@@ -56,15 +96,25 @@ function listLocalBlueprints(appsDir) {
 }
 
 export class HyperfyCLI {
-  constructor({ rootDir = process.cwd() } = {}) {
+  constructor({ rootDir = process.cwd(), overrides = {} } = {}) {
     this.rootDir = rootDir
     this.appsDir = path.join(this.rootDir, 'apps')
     this.assetsDir = path.join(this.rootDir, 'assets')
     this.worldFile = path.join(this.rootDir, 'world.json')
 
-    this.worldUrl = process.env.WORLD_URL || null
-    this.adminCode = typeof process.env.ADMIN_CODE === 'string' ? process.env.ADMIN_CODE : null
-    this.deployCode = typeof process.env.DEPLOY_CODE === 'string' ? process.env.DEPLOY_CODE : null
+    this.worldUrl = overrides.worldUrl || process.env.WORLD_URL || null
+    this.adminCode =
+      typeof overrides.adminCode === 'string'
+        ? overrides.adminCode
+        : typeof process.env.ADMIN_CODE === 'string'
+          ? process.env.ADMIN_CODE
+          : null
+    this.deployCode =
+      typeof overrides.deployCode === 'string'
+        ? overrides.deployCode
+        : typeof process.env.DEPLOY_CODE === 'string'
+          ? process.env.DEPLOY_CODE
+          : null
   }
 
   _requireWorldUrl() {
@@ -84,6 +134,26 @@ export class HyperfyCLI {
     rl.close()
     const trimmed = typeof answer === 'string' ? answer.trim() : ''
     return trimmed ? trimmed : null
+  }
+
+  async _confirmPrompt(message) {
+    if (!process.stdin.isTTY) return false
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    })
+    const answer = await new Promise(resolve => {
+      rl.question(message, resolve)
+    })
+    rl.close()
+    const normalized = typeof answer === 'string' ? answer.trim().toLowerCase() : ''
+    return normalized === 'y' || normalized === 'yes'
+  }
+
+  _shouldConfirmDeployTarget() {
+    const target = (process.env.HYPERFY_TARGET || '').toLowerCase()
+    if (target === 'prod' || target === 'production') return true
+    return process.env.HYPERFY_TARGET_CONFIRM === 'true'
   }
 
   async _connectAdminClient() {
@@ -300,7 +370,7 @@ app.on("update", (delta) => {
     }
   }
 
-  async deploy(appName) {
+  async deploy(appName, options = {}) {
     if (!isValidAppName(appName)) {
       console.error(`❌ Invalid app name: ${appName}`)
       return
@@ -317,17 +387,72 @@ app.on("update", (delta) => {
 
     const server = await this._connectAdminClient()
     try {
-      await server.deployApp(appName)
-      console.log(`✅ Deployed ${appName}`)
+      if (!options.dryRun && !options.yes && this._shouldConfirmDeployTarget()) {
+        const target = process.env.HYPERFY_TARGET ? ` "${process.env.HYPERFY_TARGET}"` : ''
+        const ok = await this._confirmPrompt(`Confirm deploy to${target}? (y/N): `)
+        if (!ok) {
+          console.log('❌ Deploy cancelled')
+          return
+        }
+      }
+      await server.deployApp(appName, { dryRun: options.dryRun, note: options.note })
+      if (options.dryRun) {
+        console.log(`✅ Dry run complete`)
+      } else {
+        console.log(`✅ Deployed ${appName}`)
+      }
     } catch (error) {
+      if (error?.code === 'locked' || error?.code === 'deploy_locked') {
+        const detail = formatLockSummary(error.lock)
+        console.error(`❌ Deploy locked${detail ? ` (${detail})` : ''}`)
+        return
+      }
+      if (error?.code === 'deploy_lock_required') {
+        console.error(`❌ Deploy lock required (acquire the lock and retry).`)
+        return
+      }
       console.error(`❌ Error deploying app:`, error?.message || error)
     } finally {
       this._closeAdminClient(server)
     }
   }
 
-  async update(appName) {
-    return this.deploy(appName)
+  async update(appName, options = {}) {
+    return this.deploy(appName, options)
+  }
+
+  async rollback(snapshotId) {
+    console.log(`⏪ Rolling back deploy snapshot...`)
+    const server = await this._connectAdminClient()
+    try {
+      const owner = `hyperfy-cli:${process.env.HYPERFY_TARGET || 'default'}:${process.pid}`
+      const lock = await server.client.acquireDeployLock({ owner })
+      try {
+        const result = await server.client.rollbackDeploySnapshot({ id: snapshotId, lockToken: lock.token })
+        console.log(`✅ Rollback complete`)
+        if (Array.isArray(result?.restored) && result.restored.length) {
+          console.log(`   • Restored ${result.restored.length} blueprint(s)`)
+        }
+        if (Array.isArray(result?.failed) && result.failed.length) {
+          console.log(`⚠️  Failed to restore ${result.failed.length} blueprint(s)`)
+        }
+      } finally {
+        await server.client.releaseDeployLock({ token: lock.token })
+      }
+    } catch (error) {
+      if (error?.code === 'locked' || error?.code === 'deploy_locked') {
+        const detail = formatLockSummary(error.lock)
+        console.error(`❌ Rollback locked${detail ? ` (${detail})` : ''}`)
+        return
+      }
+      if (error?.code === 'deploy_lock_required') {
+        console.error(`❌ Deploy lock required (acquire the lock and retry).`)
+        return
+      }
+      console.error(`❌ Rollback failed:`, error?.message || error)
+    } finally {
+      this._closeAdminClient(server)
+    }
   }
 
   async validate(appName) {
@@ -478,10 +603,17 @@ Commands:
   list                       List local apps in ./apps
   deploy <appName>           Deploy all local blueprints under ./apps/<appName>
   update <appName>           Alias for deploy
+  rollback [snapshotId]      Roll back the latest deploy snapshot (or by id)
   validate <appName>         Verify local script matches world blueprint script(s)
   reset [--force]            Delete local apps/assets/world.json
   status                     Show /admin snapshot summary
   help                       Show this help
+  --target <name>            Use .hyperfy/targets.json entry for WORLD_URL/WORLD_ID/ADMIN_CODE/DEPLOY_CODE
+
+Options:
+  --dry-run, -n              Show deploy plan without applying changes
+  --note <text>              Attach a note to the deploy snapshot
+  --yes, -y                  Skip confirmation prompt (for prod targets)
 
 Environment:
   WORLD_URL                  World server base URL (e.g. http://localhost:5000)
@@ -498,6 +630,24 @@ Notes:
 }
 
 export async function runAppCommand({ command, args = [], rootDir = process.cwd(), helpPrefix } = {}) {
+  let targetName = null
+  try {
+    const parsed = parseTargetArgs(args)
+    targetName = parsed.target
+    args = parsed.args
+  } catch (err) {
+    console.error(`❌ ${err?.message || err}`)
+    return 1
+  }
+  if (targetName) {
+    try {
+      const target = resolveTarget(rootDir, targetName)
+      applyTargetEnv(target)
+    } catch (err) {
+      console.error(`❌ ${err?.message || err}`)
+      return 1
+    }
+  }
   const cli = new HyperfyCLI({ rootDir })
   const commandPrefix = helpPrefix || 'hyperfy apps'
   let exitCode = 0
@@ -513,21 +663,39 @@ export async function runAppCommand({ command, args = [], rootDir = process.cwd(
       break
 
     case 'deploy':
-      if (!args[0]) {
-        console.error('❌ App name required')
-        console.log(`Usage: ${commandPrefix} deploy <appName>`)
+      try {
+        const parsed = parseDeployArgs(args)
+        const appName = parsed.rest[0]
+        if (!appName) {
+          console.error('❌ App name required')
+          console.log(`Usage: ${commandPrefix} deploy <appName>`)
+          return 1
+        }
+        await cli.deploy(appName, parsed.options)
+      } catch (err) {
+        console.error(`❌ ${err?.message || err}`)
         return 1
       }
-      await cli.deploy(args[0])
       break
 
     case 'update':
-      if (!args[0]) {
-        console.error('❌ App name required')
-        console.log(`Usage: ${commandPrefix} update <appName>`)
+      try {
+        const parsed = parseDeployArgs(args)
+        const appName = parsed.rest[0]
+        if (!appName) {
+          console.error('❌ App name required')
+          console.log(`Usage: ${commandPrefix} update <appName>`)
+          return 1
+        }
+        await cli.update(appName, parsed.options)
+      } catch (err) {
+        console.error(`❌ ${err?.message || err}`)
         return 1
       }
-      await cli.update(args[0])
+      break
+
+    case 'rollback':
+      await cli.rollback(args[0])
       break
 
     case 'list':

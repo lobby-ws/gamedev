@@ -35,6 +35,12 @@ function getAdminCodeFromRequest(req) {
   return typeof header === 'string' ? header : null
 }
 
+function getDeployCodeFromRequest(req) {
+  const header = normalizeHeader(req.headers['x-deploy-code'])
+  if (typeof header === 'string') return header
+  return getAdminCodeFromRequest(req)
+}
+
 function sendPacket(ws, name, payload) {
   try {
     ws.send(writePacket(name, payload))
@@ -68,6 +74,15 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
   const subscribers = new Set()
   const playerSubscribers = new Set()
   const runtimeSubscribers = new Set()
+  const db = world?.network?.db
+  const deployLock = {
+    token: null,
+    owner: null,
+    acquiredAt: 0,
+    expiresAt: 0,
+  }
+  const lockTtlSeconds = Number.parseInt(process.env.DEPLOY_LOCK_TTL || '120', 10)
+  const lockTtlMs = Number.isFinite(lockTtlSeconds) && lockTtlSeconds > 0 ? lockTtlSeconds * 1000 : 120000
 
   function broadcast(name, payload) {
     for (const ws of subscribers) {
@@ -88,6 +103,99 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
       return false
     }
     return true
+  }
+
+  function requireDeploy(req, reply) {
+    const adminCode = getAdminCodeFromRequest(req)
+    const builderOk = isAdminCodeValid(adminCode)
+    const deployCode = getDeployCodeFromRequest(req)
+    if (!isDeployCodeValid(deployCode, builderOk)) {
+      reply.code(403).send({ error: 'deploy_required' })
+      return false
+    }
+    return true
+  }
+
+  function normalizeLockState() {
+    if (!deployLock.token) return
+    if (Date.now() >= deployLock.expiresAt) {
+      deployLock.token = null
+      deployLock.owner = null
+      deployLock.acquiredAt = 0
+      deployLock.expiresAt = 0
+    }
+  }
+
+  function getDeployLockStatus() {
+    normalizeLockState()
+    if (!deployLock.token) {
+      return { locked: false }
+    }
+    const ageMs = Math.max(0, Date.now() - deployLock.acquiredAt)
+    const expiresInMs = Math.max(0, deployLock.expiresAt - Date.now())
+    return {
+      locked: true,
+      owner: deployLock.owner,
+      acquiredAt: deployLock.acquiredAt,
+      ageMs,
+      expiresInMs,
+    }
+  }
+
+  function ensureDeployLock(token) {
+    const status = getDeployLockStatus()
+    if (!status.locked) {
+      return { ok: false, error: 'deploy_lock_required' }
+    }
+    if (!token || token !== deployLock.token) {
+      return { ok: false, error: 'deploy_locked', lock: status }
+    }
+    return { ok: true }
+  }
+
+  async function createDeploySnapshot({ ids, target, note } = {}) {
+    if (!db) {
+      throw new Error('db_unavailable')
+    }
+    const now = new Date().toISOString()
+    const snapshotId = crypto.randomUUID()
+    const list = Array.isArray(ids) ? ids : []
+    const blueprints = []
+    const missing = []
+    for (const id of list) {
+      const blueprint = world.blueprints.get(id)
+      if (blueprint?.id) {
+        blueprints.push(blueprint)
+      } else {
+        missing.push(id)
+      }
+    }
+    const meta = {
+      target: typeof target === 'string' ? target : null,
+      note: typeof note === 'string' ? note : null,
+      worldId: world?.network?.worldId || null,
+    }
+    await db('deploy_snapshots').insert({
+      id: snapshotId,
+      data: JSON.stringify(blueprints),
+      meta: JSON.stringify(meta),
+      createdAt: now,
+    })
+    return { id: snapshotId, count: blueprints.length, missing, createdAt: now }
+  }
+
+  async function getDeploySnapshotById(id) {
+    if (!db) {
+      throw new Error('db_unavailable')
+    }
+    return db('deploy_snapshots').where('id', id).first()
+  }
+
+  async function getLatestDeploySnapshot() {
+    if (!db) {
+      throw new Error('db_unavailable')
+    }
+    return db('deploy_snapshots').orderBy('createdAt', 'desc').first()
   }
 
   function sendSnapshot(ws, { includePlayers } = {}) {
@@ -230,6 +338,18 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
               sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
               return
             }
+            if (data.blueprint?.script) {
+              const lockCheck = ensureDeployLock(data?.lockToken)
+              if (!lockCheck.ok) {
+                sendPacket(ws, 'adminResult', {
+                  ok: false,
+                  error: lockCheck.error,
+                  lock: lockCheck.lock,
+                  requestId,
+                })
+                return
+              }
+            }
             const result = network.applyBlueprintAdded(data.blueprint, { ignoreNetworkId })
             if (!result.ok) {
               sendPacket(ws, 'adminResult', { ok: false, error: result.error, requestId })
@@ -254,6 +374,18 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
             if (hasScriptChange && !capabilities.deploy) {
               sendPacket(ws, 'adminResult', { ok: false, error: 'deploy_required', requestId })
               return
+            }
+            if (hasScriptChange) {
+              const lockCheck = ensureDeployLock(data?.lockToken)
+              if (!lockCheck.ok) {
+                sendPacket(ws, 'adminResult', {
+                  ok: false,
+                  error: lockCheck.error,
+                  lock: lockCheck.lock,
+                  requestId,
+                })
+                return
+              }
             }
             const result = network.applyBlueprintModified(data.change, { ignoreNetworkId })
             if (!result.ok) {
@@ -442,6 +574,125 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
       players: serializePlayersForAdmin(world),
       hasAdminCode: !!process.env.ADMIN_CODE,
       adminUrl: process.env.PUBLIC_ADMIN_URL,
+    }
+  })
+
+  fastify.get('/admin/deploy-lock', async (req, reply) => {
+    if (!requireDeploy(req, reply)) return
+    return getDeployLockStatus()
+  })
+
+  fastify.post('/admin/deploy-lock', async (req, reply) => {
+    if (!requireDeploy(req, reply)) return
+    const status = getDeployLockStatus()
+    if (status.locked) {
+      return reply.code(409).send({ error: 'locked', lock: status })
+    }
+    const owner = typeof req.body?.owner === 'string' && req.body.owner.trim() ? req.body.owner.trim() : 'unknown'
+    const ttlSeconds = Number.parseInt(req.body?.ttl, 10)
+    const ttlMs =
+      Number.isFinite(ttlSeconds) && ttlSeconds > 0 ? ttlSeconds * 1000 : lockTtlMs
+    const token = crypto.randomUUID()
+    const now = Date.now()
+    deployLock.token = token
+    deployLock.owner = owner
+    deployLock.acquiredAt = now
+    deployLock.expiresAt = now + ttlMs
+    return { ok: true, token, ttlMs }
+  })
+
+  fastify.put('/admin/deploy-lock', async (req, reply) => {
+    if (!requireDeploy(req, reply)) return
+    const token = req.body?.token
+    const status = getDeployLockStatus()
+    if (!status.locked) {
+      return reply.code(409).send({ error: 'not_locked' })
+    }
+    if (!token || token !== deployLock.token) {
+      return reply.code(409).send({ error: 'not_owner', lock: status })
+    }
+    const ttlSeconds = Number.parseInt(req.body?.ttl, 10)
+    const ttlMs =
+      Number.isFinite(ttlSeconds) && ttlSeconds > 0 ? ttlSeconds * 1000 : lockTtlMs
+    deployLock.expiresAt = Date.now() + ttlMs
+    return { ok: true, ttlMs }
+  })
+
+  fastify.delete('/admin/deploy-lock', async (req, reply) => {
+    if (!requireDeploy(req, reply)) return
+    const token = req.body?.token
+    const status = getDeployLockStatus()
+    if (!status.locked) {
+      return reply.code(409).send({ error: 'not_locked' })
+    }
+    if (!token || token !== deployLock.token) {
+      return reply.code(409).send({ error: 'not_owner', lock: status })
+    }
+    deployLock.token = null
+    deployLock.owner = null
+    deployLock.acquiredAt = 0
+    deployLock.expiresAt = 0
+    return { ok: true }
+  })
+
+  fastify.post('/admin/deploy-snapshots', async (req, reply) => {
+    if (!requireDeploy(req, reply)) return
+    const lockCheck = ensureDeployLock(req.body?.lockToken)
+    if (!lockCheck.ok) {
+      return reply.code(409).send({ error: lockCheck.error, lock: lockCheck.lock })
+    }
+    try {
+      const result = await createDeploySnapshot({
+        ids: req.body?.ids,
+        target: req.body?.target,
+        note: req.body?.note,
+      })
+      return { ok: true, ...result }
+    } catch (err) {
+      console.error('[admin] deploy snapshot failed', err)
+      return reply.code(500).send({ error: 'snapshot_failed' })
+    }
+  })
+
+  fastify.post('/admin/deploy-snapshots/rollback', async (req, reply) => {
+    if (!requireDeploy(req, reply)) return
+    const lockCheck = ensureDeployLock(req.body?.lockToken)
+    if (!lockCheck.ok) {
+      return reply.code(409).send({ error: lockCheck.error, lock: lockCheck.lock })
+    }
+    try {
+      const snapshotId = req.body?.id
+      const row = snapshotId ? await getDeploySnapshotById(snapshotId) : await getLatestDeploySnapshot()
+      if (!row) {
+        return reply.code(404).send({ error: 'not_found' })
+      }
+      const blueprints = JSON.parse(row.data || '[]')
+      const restored = []
+      const failed = []
+      for (const blueprint of blueprints) {
+        if (!blueprint?.id) continue
+        const current = world.blueprints.get(blueprint.id)
+        if (!current) {
+          const result = world.network.applyBlueprintAdded(blueprint)
+          if (result.ok) {
+            restored.push(blueprint.id)
+          } else {
+            failed.push({ id: blueprint.id, error: result.error })
+          }
+          continue
+        }
+        const change = { ...blueprint, version: (current.version || 0) + 1 }
+        const result = world.network.applyBlueprintModified(change)
+        if (result.ok) {
+          restored.push(blueprint.id)
+        } else {
+          failed.push({ id: blueprint.id, error: result.error })
+        }
+      }
+      return { ok: true, snapshotId: row.id, restored, failed }
+    } catch (err) {
+      console.error('[admin] rollback failed', err)
+      return reply.code(500).send({ error: 'rollback_failed' })
     }
   })
 

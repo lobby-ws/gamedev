@@ -10,6 +10,7 @@ import { customAlphabet } from 'nanoid'
 
 import { HyperfyCLI, runAppCommand } from '../app-server/commands.js'
 import { DirectAppServer } from '../app-server/direct.js'
+import { applyTargetEnv, parseTargetArgs, resolveTarget } from '../app-server/targets.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const packageRoot = path.resolve(__dirname, '..')
@@ -345,10 +346,28 @@ function spawnProcess(label, command, args, options) {
   return child
 }
 
-async function startCommand() {
+async function startCommand(args = []) {
+  let target = null
+  try {
+    const parsed = parseTargetArgs(args)
+    target = parsed.target ? resolveTarget(projectDir, parsed.target) : null
+  } catch (err) {
+    console.error(`Error: ${err?.message || err}`)
+    return 1
+  }
   const envResult = ensureEnvForStart()
   if (!envResult.ok) return 1
-  const env = envResult.env
+  let env = envResult.env
+  if (target) {
+    applyTargetEnv(target)
+    env = {
+      ...env,
+      WORLD_URL: target.worldUrl || env.WORLD_URL,
+      WORLD_ID: target.worldId || env.WORLD_ID,
+      ADMIN_CODE: typeof target.adminCode === 'string' ? target.adminCode : env.ADMIN_CODE,
+      DEPLOY_CODE: typeof target.deployCode === 'string' ? target.deployCode : env.DEPLOY_CODE,
+    }
+  }
 
   const baseErrors = validateBaseEnv(env)
   if (baseErrors.length) {
@@ -447,10 +466,24 @@ async function appsCommand(args) {
     return 0
   }
 
+  let command = args[0]
+  let commandArgs = args.slice(1)
+  try {
+    const parsed = parseTargetArgs(args)
+    command = parsed.args[0]
+    commandArgs = parsed.args.slice(1)
+    if (parsed.target) {
+      commandArgs.push('--target', parsed.target)
+    }
+  } catch (err) {
+    console.error(`Error: ${err?.message || err}`)
+    return 1
+  }
+
   const env = readDotEnv(envPath)
   if (env) applyEnvToProcess(env)
 
-  return runAppCommand({ command: args[0], args: args.slice(1), rootDir: projectDir, helpPrefix: 'hyperfy apps' })
+  return runAppCommand({ command, args: commandArgs, rootDir: projectDir, helpPrefix: 'hyperfy apps' })
 }
 
 async function connectAdminServer({ worldUrl, adminCode, rootDir }) {
@@ -615,6 +648,9 @@ Commands:
   world wipe [--force]      Delete the local world runtime directory for this project
   worlds list               List local world directories in ~/.hyperfy
   help                      Show this help
+
+Options:
+  --target <name>           Use .hyperfy/targets.json entry (applies to start/dev/apps)
 `)
 }
 
@@ -624,7 +660,7 @@ async function main() {
   switch (command) {
     case 'start':
     case 'dev':
-      return startCommand()
+      return startCommand(args)
     case 'apps':
       return appsCommand(args)
     case 'project':

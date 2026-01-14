@@ -587,4 +587,13 @@ const migrations = [
       await db('blueprints').insert(blueprint)
     }
   },
+  // add deploy snapshots table
+  async db => {
+    await db.schema.createTable('deploy_snapshots', table => {
+      table.string('id').primary()
+      table.text('data').notNullable()
+      table.text('meta')
+      table.timestamp('createdAt').notNullable()
+    })
+  },
 ]

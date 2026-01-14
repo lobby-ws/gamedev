@@ -149,39 +149,39 @@ This is a tracked, PR-sized implementation checklist for the next authoring/depl
 ## Epic D — Safer deploys (multi-targets, locks, rollback)
 
 ### PR-D1: Multi-target config (M)
-- [ ] Add a repo-local config format for targets (suggested: `.hyperfy/targets.json`):
+- [x] Add a repo-local config format for targets (suggested: `.hyperfy/targets.json`):
   - named targets: `dev`, `staging`, `prod`
   - `worldUrl`, `worldId`, `adminCode`, `deployCode` (as applicable)
-- [ ] Add `--target <name>` to dev-server/app-server CLI and `hyperfy` wrapper commands.
-- [ ] Acceptance: same project can deploy to different targets without editing `.env`.
+- [x] Add `--target <name>` to dev-server/app-server CLI and `hyperfy` wrapper commands.
+- [x] Acceptance: same project can deploy to different targets without editing `.env`.
 - **Touches (likely):** `app-server/commands.js`, `app-server/cli.js`, (optional) `bin/hyperfy.mjs`
 - **Manual test:** define 2 targets → run deploy with `--target staging` → confirms correct URL/worldId printed.
 
 ### PR-D2: Deploy lock/session (M)
-- [ ] Server: add deploy lock primitives (HTTP or WS):
+- [x] Server: add deploy lock primitives (HTTP or WS):
   - acquire lock → returns token + ttl
   - renew lock
   - release lock
   - status (owner + age)
-- [ ] Enforce lock on deploy-capable blueprint changes (at least `script` updates).
-- [ ] App-server: acquire lock before deploy; fail fast with a helpful message if locked.
-- [ ] Acceptance: two deploy agents cannot silently last-writer-wins; second one gets a clear “locked” error.
+- [x] Enforce lock on deploy-capable blueprint changes (at least `script` updates).
+- [x] App-server: acquire lock before deploy; fail fast with a helpful message if locked.
+- [x] Acceptance: two deploy agents cannot silently last-writer-wins; second one gets a clear “locked” error.
 - **Touches (likely):** `src/server/admin.js`, `app-server/direct.js`, `app-server/commands.js`
 - **Manual test:** start two deploy processes → first acquires lock → second gets “locked”; releasing allows second to proceed.
 
 ### PR-D3: Lightweight rollback (M)
-- [ ] Implement “snapshot before deploy”:
+- [x] Implement “snapshot before deploy”:
   - store previous blueprint records (and any other mutated data) under a deploy snapshot id.
   - include optional metadata: target name, timestamp, note.
-- [ ] Implement “rollback last snapshot” endpoint/command.
-- [ ] Acceptance: deploy script change → rollback restores previous script refs/config in runtime.
+- [x] Implement “rollback last snapshot” endpoint/command.
+- [x] Acceptance: deploy script change → rollback restores previous script refs/config in runtime.
 - **Touches (likely):** `src/server/db.js` (new table/migration), `src/server/admin.js`, `app-server/commands.js`
 - **Manual test:** deploy change → verify snapshot created → rollback → verify blueprint points back to previous script hash.
 
 ### PR-D4 (Optional): Deploy diff / dry-run / confirmation (M)
-- [ ] Add a diff summary (local vs remote) before deploy.
-- [ ] Add `--dry-run` and/or confirmation gate for `prod` targets.
-- [ ] Acceptance: operators can see what will change before it changes.
+- [x] Add a diff summary (local vs remote) before deploy.
+- [x] Add `--dry-run` and/or confirmation gate for `prod` targets.
+- [x] Acceptance: operators can see what will change before it changes.
 
 ---
 
