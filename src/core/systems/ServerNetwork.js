@@ -541,6 +541,12 @@ export class ServerNetwork extends System {
   applyEntityModified = async (data, { ignoreNetworkId } = {}) => {
     const entity = this.world.entities.get(data.id)
     if (!entity) return { ok: false, error: 'not_found' }
+    if (data.hasOwnProperty('props')) {
+      if (!entity.isApp) return { ok: false, error: 'invalid_payload' }
+      if (!data.props || typeof data.props !== 'object' || Array.isArray(data.props)) {
+        return { ok: false, error: 'invalid_payload' }
+      }
+    }
     entity.modify(data)
     this.send('entityModified', data, ignoreNetworkId)
     if (entity.isApp) {

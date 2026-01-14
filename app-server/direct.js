@@ -51,6 +51,20 @@ function joinUrl(base, pathname) {
   return `${a}/${b}`
 }
 
+async function normalizePacketData(data) {
+  if (!data) return data
+  if (data instanceof Uint8Array) return data
+  if (ArrayBuffer.isView(data)) {
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+  }
+  if (data instanceof ArrayBuffer) return new Uint8Array(data)
+  if (typeof Blob !== 'undefined' && data instanceof Blob) {
+    const buffer = await data.arrayBuffer()
+    return new Uint8Array(buffer)
+  }
+  return data
+}
+
 function extractAssetFilename(url) {
   if (typeof url !== 'string') return null
   if (!url.startsWith('asset://')) return null
@@ -152,6 +166,7 @@ class WorldAdminClient extends EventEmitter {
 
     await new Promise((resolve, reject) => {
       const ws = new WebSocket(this.wsAdminUrl)
+      ws.binaryType = 'arraybuffer'
       this.ws = ws
 
       const onOpen = () => {
@@ -163,8 +178,15 @@ class WorldAdminClient extends EventEmitter {
         )
       }
 
-      const onMessage = event => {
-        const [method, data] = readPacket(event.data)
+      const onMessage = async event => {
+        let packet
+        try {
+          packet = await normalizePacketData(event.data)
+        } catch (err) {
+          console.error(err)
+          return
+        }
+        const [method, data] = readPacket(packet)
         if (!method) return
         if (method === 'onAdminAuthOk') {
           cleanup()
@@ -204,8 +226,15 @@ class WorldAdminClient extends EventEmitter {
   }
 
   _attachListeners(ws) {
-    ws.addEventListener('message', event => {
-      const [method, data] = readPacket(event.data)
+    ws.addEventListener('message', async event => {
+      let packet
+      try {
+        packet = await normalizePacketData(event.data)
+      } catch (err) {
+        console.error(err)
+        return
+      }
+      const [method, data] = readPacket(packet)
       if (!method) return
 
       if (method === 'onAdminResult') {
@@ -595,10 +624,13 @@ export class DirectAppServer {
 
   _watchWorldFile() {
     if (this.watchers.has('worldFile')) return
-    if (!fs.existsSync(this.worldFile)) return
-    const watcher = fs.watch(this.worldFile, eventType => {
-      if (eventType !== 'change') return
+    if (!fs.existsSync(this.rootDir)) return
+    const filename = path.basename(this.worldFile)
+    const watcher = fs.watch(this.rootDir, { recursive: false }, (eventType, changed) => {
+      if (eventType !== 'change' && eventType !== 'rename') return
+      if (!changed || path.basename(changed) !== filename) return
       if (this.pendingWrites.has(this.worldFile)) return
+      if (!fs.existsSync(this.worldFile)) return
       this._onWorldFileChanged()
     })
     this.watchers.set('worldFile', watcher)
@@ -840,6 +872,8 @@ export class DirectAppServer {
 
     for (const [id, entity] of desired.entries()) {
       const existing = current.get(id)
+      const desiredProps =
+        entity.props && typeof entity.props === 'object' && !Array.isArray(entity.props) ? entity.props : {}
       if (!existing) {
         const data = {
           id: entity.id,
@@ -851,6 +885,7 @@ export class DirectAppServer {
           mover: null,
           uploader: null,
           pinned: entity.pinned,
+          props: desiredProps,
           state: entity.state,
         }
         await this.client.request('entity_add', { entity: data })
@@ -864,6 +899,9 @@ export class DirectAppServer {
       if (!isEqual(existing.quaternion, entity.quaternion)) change.quaternion = entity.quaternion
       if (!isEqual(existing.scale, entity.scale)) change.scale = entity.scale
       if (!isEqual(existing.pinned, entity.pinned)) change.pinned = entity.pinned
+      const existingProps =
+        existing.props && typeof existing.props === 'object' && !Array.isArray(existing.props) ? existing.props : {}
+      if (!isEqual(existingProps, desiredProps)) change.props = desiredProps
       if (!isEqual(existing.state, entity.state)) change.state = entity.state
 
       if (Object.keys(change).length > 1) {

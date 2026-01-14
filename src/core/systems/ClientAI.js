@@ -73,6 +73,7 @@ export class ClientAI extends System {
       mover: null, // this.world.network.id,
       uploader: null,
       pinned: false,
+      props: {},
       state: {},
     }
     const app = this.world.entities.add(appData)

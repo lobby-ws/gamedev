@@ -268,6 +268,7 @@ app.on("update", (delta) => {
         mover: null,
         uploader: null,
         pinned: false,
+        props: {},
         state: options.state || {},
       }
 

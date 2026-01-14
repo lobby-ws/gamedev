@@ -1,6 +1,6 @@
 import moment from 'moment'
 import * as THREE from '../extras/three'
-import { cloneDeep, isBoolean } from 'lodash-es'
+import { cloneDeep, isBoolean, merge } from 'lodash-es'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 
 import { System } from './System'
@@ -276,11 +276,20 @@ export class ClientBuilder extends System {
         this.world.ui.togglePane('players')
       }
     }
-    // unlink
+    // fork template from instance
     if (this.control.keyU.pressed && this.beam.active) {
       const entity = this.selected || this.getEntityAtBeam()
-      if (entity?.isApp) {
+      if (entity?.isApp && !entity.blueprint.scene) {
         this.select(null)
+        const baseProps =
+          entity.blueprint.props && typeof entity.blueprint.props === 'object' && !Array.isArray(entity.blueprint.props)
+            ? entity.blueprint.props
+            : {}
+        const instanceProps =
+          entity.data.props && typeof entity.data.props === 'object' && !Array.isArray(entity.data.props)
+            ? entity.data.props
+            : {}
+        const mergedProps = merge({}, baseProps, instanceProps)
         // duplicate the blueprint
         const nextBlueprint = getNextBlueprintVariant(this.world, entity.blueprint.id)
         const blueprint = {
@@ -293,7 +302,7 @@ export class ClientBuilder extends System {
           desc: entity.blueprint.desc,
           model: entity.blueprint.model,
           script: entity.blueprint.script,
-          props: cloneDeep(entity.blueprint.props),
+          props: cloneDeep(mergedProps),
           preload: entity.blueprint.preload,
           public: entity.blueprint.public,
           locked: entity.blueprint.locked,
@@ -305,13 +314,13 @@ export class ClientBuilder extends System {
         this.world.blueprints.add(blueprint)
         this.world.admin.blueprintAdd(blueprint, { ignoreNetworkId: this.world.network.id })
         // assign new blueprint
-        entity.modify({ blueprint: blueprint.id })
+        entity.modify({ blueprint: blueprint.id, props: {} })
         this.world.admin.entityModify(
-          { id: entity.data.id, blueprint: blueprint.id },
+          { id: entity.data.id, blueprint: blueprint.id, props: {} },
           { ignoreNetworkId: this.world.network.id }
         )
         // toast
-        this.world.emit('toast', 'Unlinked')
+        this.world.emit('toast', 'Template forked')
       }
     }
     // pin/unpin
@@ -402,33 +411,11 @@ export class ClientBuilder extends System {
     if (duplicate) {
       const entity = this.selected || this.getEntityAtBeam()
       if (entity?.isApp && !entity.blueprint.scene) {
-        let blueprintId = entity.data.blueprint
-        // if unique, we also duplicate the blueprint
-        if (entity.blueprint.unique) {
-          const nextBlueprint = getNextBlueprintVariant(this.world, entity.blueprint.id)
-          const blueprint = {
-            id: nextBlueprint.id,
-            version: 0,
-            name: nextBlueprint.name,
-            image: entity.blueprint.image,
-            author: entity.blueprint.author,
-            url: entity.blueprint.url,
-            desc: entity.blueprint.desc,
-            model: entity.blueprint.model,
-            script: entity.blueprint.script,
-            props: cloneDeep(entity.blueprint.props),
-            preload: entity.blueprint.preload,
-            public: entity.blueprint.public,
-            locked: entity.blueprint.locked,
-            frozen: entity.blueprint.frozen,
-            unique: entity.blueprint.unique,
-            scene: entity.blueprint.scene,
-            disabled: entity.blueprint.disabled,
-          }
-          this.world.blueprints.add(blueprint)
-          this.world.admin.blueprintAdd(blueprint, { ignoreNetworkId: this.world.network.id })
-          blueprintId = blueprint.id
-        }
+        const blueprintId = entity.data.blueprint
+        const instanceProps =
+          entity.data.props && typeof entity.data.props === 'object' && !Array.isArray(entity.data.props)
+            ? entity.data.props
+            : {}
         const data = {
           id: uuid(),
           type: 'app',
@@ -439,6 +426,7 @@ export class ClientBuilder extends System {
           mover: this.world.network.id,
           uploader: null,
           pinned: false,
+          props: cloneDeep(instanceProps),
           state: {},
         }
         const dup = this.world.entities.add(data)
@@ -1146,6 +1134,7 @@ export class ClientBuilder extends System {
       mover: null,
       uploader: this.world.network.id,
       pinned: false,
+      props: {},
       state: {},
     }
     const app = this.world.entities.add(data)
@@ -1208,6 +1197,7 @@ export class ClientBuilder extends System {
           mover: null,
           uploader: this.world.network.id,
           pinned: false,
+          props: {},
           state: {},
         }
         const app = this.world.entities.add(data)

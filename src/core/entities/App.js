@@ -1,5 +1,5 @@
 import * as THREE from '../extras/three'
-import { isArray, isFunction, isNumber, isString } from 'lodash-es'
+import { isArray, isFunction, isNumber, isString, merge } from 'lodash-es'
 import moment from 'moment'
 
 import { Entity } from './Entity'
@@ -30,6 +30,9 @@ export class App extends Entity {
   constructor(world, data, local) {
     super(world, data, local)
     this.isApp = true
+    if (!this.data.props || typeof this.data.props !== 'object' || isArray(this.data.props)) {
+      this.data.props = {}
+    }
     this.n = 0
     this.worldNodes = new Set()
     this.hotEvents = 0
@@ -39,6 +42,7 @@ export class App extends Entity {
     this.snaps = []
     this.root = createNode('group')
     this.fields = []
+    this.effectiveProps = undefined
     this.target = null
     this.projectLimit = Infinity
     this.resetOnMove = false
@@ -54,6 +58,24 @@ export class App extends Entity {
   createNode(name, data) {
     const node = createNode(name, data)
     return node
+  }
+
+  computeEffectiveProps() {
+    const blueprintProps = this.blueprint?.props ?? null
+    const entityProps = this.data.props
+    const hasOverrides =
+      entityProps && typeof entityProps === 'object' && !isArray(entityProps) && Object.keys(entityProps).length > 0
+    if (hasOverrides) {
+      return merge({}, blueprintProps || {}, entityProps)
+    }
+    return blueprintProps
+  }
+
+  getEffectiveProps() {
+    if (this.effectiveProps === undefined) {
+      this.effectiveProps = this.computeEffectiveProps()
+    }
+    return this.effectiveProps
   }
 
   async build(crashed) {
@@ -118,6 +140,7 @@ export class App extends Entity {
     if (this.data.uploader && this.data.uploader !== this.world.network.id) this.mode = Modes.LOADING
     // setup
     this.blueprint = blueprint
+    this.effectiveProps = this.computeEffectiveProps()
     this.root = root
     if (!blueprint.scene) {
       this.root.position.fromArray(this.data.position)
@@ -139,7 +162,7 @@ export class App extends Entity {
     if (runScript) {
       this.abortController = new AbortController()
       try {
-        this.script.exec(this.getWorldProxy(), this.getAppProxy(), this.fetch, blueprint.props, this.setTimeout)
+        this.script.exec(this.getWorldProxy(), this.getAppProxy(), this.fetch, this.effectiveProps, this.setTimeout)
         this.scriptError = null
       } catch (err) {
         this.scriptError = serializeError(err)
@@ -315,6 +338,14 @@ export class App extends Entity {
     }
     if (data.hasOwnProperty('state')) {
       this.data.state = data.state
+      rebuild = true
+    }
+    if (data.hasOwnProperty('props')) {
+      if (data.props && typeof data.props === 'object' && !isArray(data.props)) {
+        this.data.props = data.props
+      } else {
+        this.data.props = {}
+      }
       rebuild = true
     }
     if (rebuild) {

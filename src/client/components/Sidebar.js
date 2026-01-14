@@ -19,6 +19,7 @@ import {
   OctagonXIcon,
   PinIcon,
   RocketIcon,
+  RotateCcwIcon,
   SaveIcon,
   SearchIcon,
   SparkleIcon,
@@ -52,7 +53,7 @@ import { HintContext, HintProvider } from './Hint'
 import { useFullscreen } from './useFullscreen'
 import { downloadFile } from '../../core/extras/downloadFile'
 import { hashFile } from '../../core/utils-client'
-import { cloneDeep, isArray, isBoolean, sortBy } from 'lodash-es'
+import { cloneDeep, isArray, isBoolean, isEqual, merge, sortBy } from 'lodash-es'
 import { storage } from '../../core/storage'
 import { ScriptEditor } from './ScriptEditor'
 import { NodeHierarchy } from './NodeHierarchy'
@@ -928,6 +929,7 @@ function Add({ world, hidden }) {
         mover: world.network.id,
         uploader: null,
         pinned: false,
+        props: {},
         state: {},
       }
       const app = world.entities.add(data)
@@ -1280,7 +1282,9 @@ function App({ world, hidden }) {
             <div
               className={cls('app-toggle', { active: blueprint.unique })}
               onClick={() => toggleKey('unique')}
-              onPointerEnter={() => setHint('Make this app unique so that new duplicates are not linked to this one.')}
+              onPointerEnter={() =>
+                setHint('Legacy flag: duplicates no longer fork templates automatically.')
+              }
               onPointerLeave={() => setHint(null)}
             >
               <SparkleIcon size='1.125rem' />
@@ -1409,17 +1413,22 @@ function AppModelBtn({ value, onChange, children }) {
 
 function AppFields({ world, app, blueprint }) {
   const [fields, setFields] = useState(() => app.fields)
-  const props = blueprint.props
+  const [templateMode, setTemplateMode] = useState(false)
+  const templateProps = blueprint.props && typeof blueprint.props === 'object' && !isArray(blueprint.props) ? blueprint.props : {}
+  const instanceProps = app.data.props && typeof app.data.props === 'object' && !isArray(app.data.props) ? app.data.props : {}
+  const effectiveProps = merge({}, templateProps, instanceProps)
+  const activeProps = templateMode ? templateProps : effectiveProps
   useEffect(() => {
     app.onFields = setFields
     return () => {
       app.onFields = null
     }
   }, [])
-  const modify = (key, value) => {
-    if (props[key] === value) return
+  const modifyTemplate = (key, value) => {
     const bp = world.blueprints.get(blueprint.id)
-    const newProps = { ...bp.props, [key]: value }
+    const baseProps = bp.props && typeof bp.props === 'object' && !isArray(bp.props) ? bp.props : {}
+    if (isEqual(baseProps[key], value)) return
+    const newProps = { ...baseProps, [key]: value }
     // update blueprint locally (also rebuilds apps)
     const id = bp.id
     const version = bp.version + 1
@@ -1427,12 +1436,62 @@ function AppFields({ world, app, blueprint }) {
     // broadcast blueprint change to server + other clients
     world.admin.blueprintModify({ id, version, props: newProps }, { ignoreNetworkId: world.network.id })
   }
-  return fields.map(field => (
-    <AppField key={field.key} world={world} props={props} field={field} value={props[field.key]} modify={modify} />
-  ))
+  const modifyInstance = (key, value) => {
+    const currentProps =
+      app.data.props && typeof app.data.props === 'object' && !isArray(app.data.props) ? app.data.props : {}
+    const baseProps = blueprint.props && typeof blueprint.props === 'object' && !isArray(blueprint.props) ? blueprint.props : {}
+    const nextProps = { ...currentProps }
+    if (isEqual(value, baseProps[key])) {
+      delete nextProps[key]
+    } else {
+      nextProps[key] = value
+    }
+    if (isEqual(nextProps, currentProps)) return
+    app.modify({ props: nextProps })
+    world.admin.entityModify({ id: app.data.id, props: nextProps }, { ignoreNetworkId: world.network.id })
+  }
+  const resetOverride = key => {
+    const currentProps =
+      app.data.props && typeof app.data.props === 'object' && !isArray(app.data.props) ? app.data.props : {}
+    if (!Object.prototype.hasOwnProperty.call(currentProps, key)) return
+    const nextProps = { ...currentProps }
+    delete nextProps[key]
+    if (isEqual(nextProps, currentProps)) return
+    app.modify({ props: nextProps })
+    world.admin.entityModify({ id: app.data.id, props: nextProps }, { ignoreNetworkId: world.network.id })
+  }
+  return (
+    <>
+      {fields.length > 0 && (
+        <FieldToggle
+          label='Template Defaults'
+          hint='Edit defaults shared by all instances of this template'
+          trueLabel='Template'
+          falseLabel='Instance'
+          value={templateMode}
+          onChange={value => setTemplateMode(value)}
+        />
+      )}
+      {fields.map(field => {
+        const hasOverride = Object.prototype.hasOwnProperty.call(instanceProps, field.key)
+        return (
+          <AppField
+            key={field.key}
+            world={world}
+            props={activeProps}
+            field={field}
+            value={activeProps[field.key]}
+            modify={templateMode ? modifyTemplate : modifyInstance}
+            showReset={!templateMode && hasOverride}
+            onReset={() => resetOverride(field.key)}
+          />
+        )
+      })}
+    </>
+  )
 }
 
-function AppField({ world, props, field, value, modify }) {
+function AppField({ world, props, field, value, modify, showReset, onReset }) {
   if (field.hidden) {
     return null
   }
@@ -1446,8 +1505,52 @@ function AppField({ world, props, field, value, modify }) {
   if (field.type === 'section') {
     return <Group label={field.label} />
   }
-  if (field.type === 'text') {
+  const wrap = content => {
+    if (!showReset) return content
     return (
+      <div
+        className='app-field'
+        css={css`
+          display: flex;
+          align-items: stretch;
+          .app-field-main {
+            flex: 1;
+          }
+          .app-field-reset {
+            width: 2.25rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: rgba(255, 255, 255, 0.35);
+            background: transparent;
+            border: 0;
+            padding: 0;
+            margin: 0;
+            &:hover {
+              cursor: pointer;
+              color: rgba(255, 255, 255, 0.9);
+            }
+          }
+        `}
+      >
+        <div className='app-field-main'>{content}</div>
+        <button
+          type='button'
+          className='app-field-reset'
+          title='Reset override'
+          onClick={e => {
+            e.preventDefault()
+            e.stopPropagation()
+            onReset?.()
+          }}
+        >
+          <RotateCcwIcon size='1rem' />
+        </button>
+      </div>
+    )
+  }
+  if (field.type === 'text') {
+    return wrap(
       <FieldText
         label={field.label}
         hint={field.hint}
@@ -1458,12 +1561,12 @@ function AppField({ world, props, field, value, modify }) {
     )
   }
   if (field.type === 'textarea') {
-    return (
+    return wrap(
       <FieldTextarea label={field.label} hint={field.hint} value={value} onChange={value => modify(field.key, value)} />
     )
   }
   if (field.type === 'number') {
-    return (
+    return wrap(
       <FieldNumber
         label={field.label}
         hint={field.hint}
@@ -1478,7 +1581,7 @@ function AppField({ world, props, field, value, modify }) {
     )
   }
   if (field.type === 'file') {
-    return (
+    return wrap(
       <FieldFile
         label={field.label}
         hint={field.hint}
@@ -1490,7 +1593,7 @@ function AppField({ world, props, field, value, modify }) {
     )
   }
   if (field.type === 'switch') {
-    return (
+    return wrap(
       <FieldSwitch
         label={field.label}
         hint={field.hint}
@@ -1502,7 +1605,7 @@ function AppField({ world, props, field, value, modify }) {
   }
   if (field.type === 'dropdown') {
     // deprecated, same as switch
-    return (
+    return wrap(
       <FieldSwitch
         label={field.label}
         hint={field.hint}
@@ -1513,7 +1616,7 @@ function AppField({ world, props, field, value, modify }) {
     )
   }
   if (field.type === 'toggle') {
-    return (
+    return wrap(
       <FieldToggle
         label={field.label}
         hint={field.hint}
@@ -1525,7 +1628,7 @@ function AppField({ world, props, field, value, modify }) {
     )
   }
   if (field.type === 'range') {
-    return (
+    return wrap(
       <FieldRange
         label={field.label}
         hint={field.hint}
@@ -1538,7 +1641,7 @@ function AppField({ world, props, field, value, modify }) {
     )
   }
   if (field.type === 'curve') {
-    return (
+    return wrap(
       <FieldCurve
         label={field.label}
         hint={field.hint}
@@ -1553,7 +1656,7 @@ function AppField({ world, props, field, value, modify }) {
     return <FieldBtn label={field.label} hint={field.hint} onClick={field.onClick} />
   }
   if (field.type === 'color') {
-    return (
+    return wrap(
       <FieldColor label={field.label} hint={field.hint} value={value} onChange={value => modify(field.key, value)} />
     )
   }

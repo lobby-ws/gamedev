@@ -256,11 +256,11 @@ export class Apps extends System {
         return entity.data.state
       },
       props(entity) {
-        return entity.blueprint.props
+        return entity.getEffectiveProps()
       },
       config(entity) {
         // deprecated. will be removed
-        return entity.blueprint.props
+        return entity.getEffectiveProps()
       },
       resetOnMove(entity) {
         return entity.resetOnMove
@@ -334,7 +334,11 @@ export class Apps extends System {
         if (!isArray(entity.fields)) {
           entity.fields = []
         }
-        const props = entity.blueprint.props
+        let props = entity.blueprint.props
+        if (!props || typeof props !== 'object' || isArray(props)) {
+          props = {}
+          entity.blueprint.props = props
+        }
         for (const field of entity.fields) {
           // apply file shortcuts
           fileRemaps[field.type]?.(field)

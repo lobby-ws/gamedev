@@ -91,6 +91,11 @@ export class WorldManifest {
         if (typeof entity.pinned !== 'boolean') {
           errors.push(`entities[${index}].pinned must be a boolean`)
         }
+        if (entity.props !== undefined) {
+          if (!entity.props || typeof entity.props !== 'object' || Array.isArray(entity.props)) {
+            errors.push(`entities[${index}].props must be an object`)
+          }
+        }
         if (!entity.state || typeof entity.state !== 'object') {
           errors.push(`entities[${index}].state must be an object`)
         }
@@ -146,6 +151,7 @@ export class WorldManifest {
           quaternion: Array.isArray(e.quaternion) ? e.quaternion.slice(0, 4) : [0, 0, 0, 1],
           scale: Array.isArray(e.scale) ? e.scale.slice(0, 3) : [1, 1, 1],
           pinned: Boolean(e.pinned),
+          props: e.props && typeof e.props === 'object' && !Array.isArray(e.props) ? e.props : {},
           state: e.state && typeof e.state === 'object' ? e.state : {},
         }))
     }
