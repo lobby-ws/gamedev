@@ -83,6 +83,7 @@ backdrop-filter: blur(5px);
 export function Sidebar({ world, ui }) {
   const player = world.entities.player
   const { isAdmin, isBuilder } = useRank(world, player)
+  const [livePlayers, setLivePlayers] = useState(() => storage.get('admin-live', false))
   const [livekit, setLiveKit] = useState(() => world.livekit.status)
   useEffect(() => {
     const onLiveKitStatus = status => {
@@ -93,6 +94,11 @@ export function Sidebar({ world, ui }) {
       world.livekit.off('status', onLiveKitStatus)
     }
   }, [])
+  useEffect(() => {
+    if (!world.isAdminClient || !world.network?.setSubscriptions) return
+    world.network.setSubscriptions({ snapshot: true, players: livePlayers, runtime: false })
+    storage.set('admin-live', livePlayers)
+  }, [livePlayers])
   const activePane = ui.active ? ui.pane : null
   return (
     <HintProvider>
@@ -249,7 +255,9 @@ export function Sidebar({ world, ui }) {
         {ui.pane === 'script' && <Script key={ui.app.data.id} world={world} hidden={!ui.active} />}
         {ui.pane === 'nodes' && <Nodes key={ui.app.data.id} world={world} hidden={!ui.active} />}
         {ui.pane === 'meta' && <Meta key={ui.app.data.id} world={world} hidden={!ui.active} />}
-        {ui.pane === 'players' && <Players world={world} hidden={!ui.active} />}
+        {ui.pane === 'players' && (
+          <Players world={world} hidden={!ui.active} livePlayers={livePlayers} setLivePlayers={setLivePlayers} />
+        )}
       </div>
     </HintProvider>
   )
@@ -1908,11 +1916,12 @@ function getPlayers(world) {
   players = sortBy(players, player => player.enteredAt)
   return players
 }
-function Players({ world, hidden }) {
+function Players({ world, hidden, livePlayers, setLivePlayers }) {
   const { setHint } = useContext(HintContext)
   const localPlayer = world.entities.player
   const isAdmin = localPlayer.isAdmin()
   const [players, setPlayers] = useState(() => getPlayers(world))
+  const canToggleLive = !!world.isAdminClient
   useEffect(() => {
     const onChange = () => {
       setPlayers(getPlayers(world))
@@ -1972,6 +1981,7 @@ function Players({ world, hidden }) {
             border-bottom: 1px solid rgba(255, 255, 255, 0.05);
             display: flex;
             align-items: center;
+            gap: 0.75rem;
           }
           .players-title {
             flex: 1;
@@ -1981,6 +1991,37 @@ function Players({ world, hidden }) {
             white-space: nowrap;
             text-overflow: ellipsis;
             overflow: hidden;
+          }
+          .players-live {
+            height: 2rem;
+            padding: 0 0.75rem;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            background: transparent;
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 0.8rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            white-space: nowrap;
+            &:hover {
+              cursor: pointer;
+              border-color: rgba(255, 255, 255, 0.3);
+              color: white;
+            }
+            &.active {
+              border-color: rgba(64, 136, 255, 0.7);
+              color: white;
+            }
+          }
+          .players-live-dot {
+            width: 0.4rem;
+            height: 0.4rem;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.35);
+          }
+          .players-live.active .players-live-dot {
+            background: #4088ff;
           }
           .players-content {
             flex: 1;
@@ -2026,6 +2067,18 @@ function Players({ world, hidden }) {
       >
         <div className='players-head'>
           <div className='players-title'>Players</div>
+          {canToggleLive && (
+            <button
+              type='button'
+              className={cls('players-live', { active: livePlayers })}
+              onClick={() => setLivePlayers(!livePlayers)}
+              onPointerEnter={() => setHint('Toggle live player overlays')}
+              onPointerLeave={() => setHint(null)}
+            >
+              <span className='players-live-dot' />
+              {livePlayers ? 'Live' : 'Live Off'}
+            </button>
+          )}
         </div>
         <div className='players-content noscrollbar'>
           {players.map(player => (

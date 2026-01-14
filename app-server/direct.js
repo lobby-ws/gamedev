@@ -175,7 +175,7 @@ class WorldAdminClient extends EventEmitter {
           writePacket('adminAuth', {
             code: this.adminCode,
             deployCode: this.deployCode,
-            needsHeartbeat: false,
+            subscriptions: { snapshot: false, players: false, runtime: false },
           })
         )
       }

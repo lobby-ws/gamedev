@@ -66,7 +66,8 @@ function serializeEntitiesForAdmin(world) {
 
 export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
   const subscribers = new Set()
-  const heartbeatSubscribers = new Set()
+  const playerSubscribers = new Set()
+  const runtimeSubscribers = new Set()
 
   function broadcast(name, payload) {
     for (const ws of subscribers) {
@@ -74,8 +75,8 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
     }
   }
 
-  function broadcastHeartbeat(name, payload) {
-    for (const ws of heartbeatSubscribers) {
+  function broadcastPlayers(name, payload) {
+    for (const ws of playerSubscribers) {
       sendPacket(ws, name, payload)
     }
   }
@@ -89,7 +90,7 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
     return true
   }
 
-  function sendSnapshot(ws) {
+  function sendSnapshot(ws, { includePlayers } = {}) {
     sendPacket(ws, 'snapshot', {
       serverTime: performance.now(),
       assetsUrl: assets.url,
@@ -98,7 +99,7 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
       spawn: world.network.spawn,
       blueprints: world.blueprints.serialize(),
       entities: serializeEntitiesForAdmin(world),
-      players: serializePlayersForAdmin(world),
+      players: includePlayers ? serializePlayersForAdmin(world) : [],
       hasAdminCode: !!process.env.ADMIN_CODE,
       adminUrl: process.env.PUBLIC_ADMIN_URL,
     })
@@ -126,13 +127,13 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
     broadcast('spawnModified', data)
   })
   world.network.on('playerJoined', data => {
-    broadcastHeartbeat('playerJoined', data)
+    broadcastPlayers('playerJoined', data)
   })
   world.network.on('playerUpdated', data => {
-    broadcastHeartbeat('playerUpdated', data)
+    broadcastPlayers('playerUpdated', data)
   })
   world.network.on('playerLeft', data => {
-    broadcastHeartbeat('playerLeft', data)
+    broadcastPlayers('playerLeft', data)
   })
 
   fastify.route({
@@ -156,12 +157,13 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
     wsHandler: (ws, _req) => {
       let authed = false
       let defaultNetworkId = null
-      let needsHeartbeat = false
+      let subscriptions = { snapshot: false, players: false, runtime: false }
       let capabilities = { builder: false, deploy: false }
 
       const onClose = () => {
         subscribers.delete(ws)
-        heartbeatSubscribers.delete(ws)
+        playerSubscribers.delete(ws)
+        runtimeSubscribers.delete(ws)
       }
 
       ws.on('close', onClose)
@@ -187,14 +189,24 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
             return
           }
           authed = true
-          needsHeartbeat = !!data?.needsHeartbeat
+          if (data?.subscriptions && typeof data.subscriptions === 'object') {
+            subscriptions = {
+              snapshot: !!data.subscriptions.snapshot,
+              players: !!data.subscriptions.players,
+              runtime: !!data.subscriptions.runtime,
+            }
+          } else if (data?.needsHeartbeat !== undefined) {
+            const wantsHeartbeat = !!data.needsHeartbeat
+            subscriptions = { snapshot: wantsHeartbeat, players: wantsHeartbeat, runtime: false }
+          }
           defaultNetworkId = data?.networkId || null
           capabilities = { builder: builderOk, deploy: deployOk }
           subscribers.add(ws)
-          if (needsHeartbeat) heartbeatSubscribers.add(ws)
+          if (subscriptions.players) playerSubscribers.add(ws)
+          if (subscriptions.runtime) runtimeSubscribers.add(ws)
           sendPacket(ws, 'adminAuthOk', { ok: true, capabilities })
-          if (needsHeartbeat) {
-            sendSnapshot(ws)
+          if (subscriptions.snapshot) {
+            sendSnapshot(ws, { includePlayers: subscriptions.players })
           }
           return
         }

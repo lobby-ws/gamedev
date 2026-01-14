@@ -26,11 +26,19 @@ export class AdminNetwork extends System {
     this.isClient = true
     this.serverTimeOffset = 0
     this.maxUploadSize = null
+    this.subscriptions = { snapshot: true, players: false, runtime: false }
   }
 
-  init({ adminUrl, adminCode } = {}) {
+  init({ adminUrl, adminCode, subscriptions } = {}) {
     this.adminUrl = normalizeAdminUrl(adminUrl)
     this.code = adminCode || storage.get('adminCode') || null
+    if (subscriptions && typeof subscriptions === 'object') {
+      this.subscriptions = {
+        snapshot: !!subscriptions.snapshot,
+        players: !!subscriptions.players,
+        runtime: !!subscriptions.runtime,
+      }
+    }
     const playerId = this.world.entities.player?.data?.id
     if (playerId) this.id = playerId
     this.world.on('admin-code', this.onAdminCode)
@@ -73,6 +81,25 @@ export class AdminNetwork extends System {
     this.onAdminCode(code)
   }
 
+  setSubscriptions(subscriptions) {
+    if (!subscriptions || typeof subscriptions !== 'object') return
+    const next = {
+      snapshot: !!subscriptions.snapshot,
+      players: !!subscriptions.players,
+      runtime: !!subscriptions.runtime,
+    }
+    const wasPlayers = this.subscriptions.players
+    this.subscriptions = next
+    if (wasPlayers && !next.players) {
+      const players = Array.from(this.world.entities.players.values())
+      for (const player of players) {
+        this.world.entities.remove(player.data.id)
+      }
+    }
+    this.disconnect()
+    this.connect()
+  }
+
   onAdminCode = code => {
     this.code = code || null
     storage.set('adminCode', this.code)
@@ -88,7 +115,7 @@ export class AdminNetwork extends System {
     this.ws.send(
       writePacket('adminAuth', {
         code: this.code,
-        needsHeartbeat: true,
+        subscriptions: this.subscriptions,
         networkId: this.id,
       })
     )

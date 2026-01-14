@@ -125,22 +125,22 @@ This is a tracked, PR-sized implementation checklist for the next authoring/depl
 ## Epic C — Admin client “live” flag (runtime overlays)
 
 ### PR-C1: Protocol: subscriptions vs `needsHeartbeat` (M)
-- [ ] Replace/extend `needsHeartbeat` with explicit subscription options, e.g.:
+- [x] Replace/extend `needsHeartbeat` with explicit subscription options, e.g.:
   - `snapshot: true`
   - `players: boolean`
   - `runtime: boolean` (future: gameplay-driven entity/runtime updates)
-- [ ] Server: maintain separate subscriber sets so “non-live” admin sessions:
+- [x] Server: maintain separate subscriber sets so “non-live” admin sessions:
   - still receive authored state + edits
   - do not receive player streams (and later: runtime overlays).
-- [ ] App-server should use a minimal subscription (no players, no runtime overlays).
-- [ ] Acceptance: admin client can connect in non-live mode and does not receive player updates.
+- [x] App-server should use a minimal subscription (no players, no runtime overlays).
+- [x] Acceptance: admin client can connect in non-live mode and does not receive player updates.
 - **Touches (likely):** `src/server/admin.js`, `src/core/systems/AdminNetwork.js`, `app-server/direct.js`
 - **Manual test:** connect admin client in non-live → confirm no `playerUpdated` packets processed; live mode shows players.
 
 ### PR-C2: Admin UI toggle for live mode (S/M)
-- [ ] Add UI toggle (persisted in local storage) controlling the connection subscription.
-- [ ] On toggle, reconnect or send a subscription update message (choose simplest first).
-- [ ] Acceptance: toggling live on/off starts/stops player overlays without breaking building/editing.
+- [x] Add UI toggle (persisted in local storage) controlling the connection subscription.
+- [x] On toggle, reconnect or send a subscription update message (choose simplest first).
+- [x] Acceptance: toggling live on/off starts/stops player overlays without breaking building/editing.
 - **Touches (likely):** `src/client/components/CoreUI.js` (or wherever best), `src/core/systems/AdminNetwork.js`
 - **Manual test:** toggle live while connected → players appear/disappear; building continues to work.
 

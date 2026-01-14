@@ -94,7 +94,7 @@ export class AdminClient extends System {
     this.error = null
     this.sendPacket('adminAuth', {
       code: this.code,
-      needsHeartbeat: false,
+      subscriptions: { snapshot: false, players: false, runtime: false },
       networkId: this.world.network?.id || null,
     })
   }
