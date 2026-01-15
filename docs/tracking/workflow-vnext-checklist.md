@@ -188,9 +188,9 @@ This is a tracked, PR-sized implementation checklist for the next authoring/depl
 ## Epic E — Docs and polish
 
 ### PR-E1: Documentation pass (S/M)
-- [ ] Update `docs/App-server.md` to reflect:
+- [x] Update `docs/App-server.md` to reflect:
   - code is dev-only
   - instance overrides vs template defaults
   - multi-target, lock, rollback
-- [ ] Add a short “Recommended workflow” doc for builders vs developers (admin client vs dev-server).
-- [ ] Acceptance: a new user can understand “what edits happen where” without tribal knowledge.
+- [x] Add a short “Recommended workflow” doc for builders vs developers (admin client vs dev-server).
+- [x] Acceptance: a new user can understand “what edits happen where” without tribal knowledge.

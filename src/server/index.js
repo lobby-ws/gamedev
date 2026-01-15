@@ -208,8 +208,10 @@ fastify.setErrorHandler((err, req, reply) => {
   reply.status(500).send()
 })
 
+const host = process.env.HOST || process.env.BIND_HOST || '0.0.0.0'
+
 try {
-  await fastify.listen({ port, host: '0.0.0.0' })
+  await fastify.listen({ port, host })
 } catch (err) {
   console.error(err)
   console.error(`failed to launch on port ${port}`)

@@ -60,7 +60,9 @@
     "lint": "eslint . --ext .js,.jsx",
     "lint:fix": "eslint . --ext .js,.jsx --fix",
     "format": "prettier --write .",
-    "check": "npm run lint && npm run format"
+    "check": "npm run lint && npm run format",
+    "test": "node --test \"test/integration/**/*.test.js\"",
+    "test:integration": "node --test \"test/integration/**/*.test.js\""
   },
   "bin": {
     "@drama.haus/hyperfy": "bin/hyperfy.mjs"
