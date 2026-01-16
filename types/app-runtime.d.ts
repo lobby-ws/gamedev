@@ -443,6 +443,41 @@ interface UIImageNode extends BaseNode {
   loadImage(src: string): Promise<void>
 }
 
+interface WebViewNode extends BaseNode {
+  src: string | null
+  html: string | null
+  srcdoc: string | null
+  space: 'world' | 'screen'
+  width: number
+  height: number
+  factor: number
+  doubleside: boolean
+  pointerEvents: boolean
+}
+
+interface UIInputNode extends BaseNode {
+  width: number
+  height: number
+  factor: number
+  value: string
+  placeholder: string
+  disabled: boolean
+  fontSize: number
+  color: string
+  backgroundColor: string
+  borderWidth: number
+  borderColor: string
+  borderRadius: number
+  padding: number
+  type: string
+  onFocus?: (value: string) => void
+  onBlur?: (value: string) => void
+  onChange?: (value: string) => void
+  onSubmit?: (value: string) => void
+  focus(): void
+  blur(): void
+}
+
 // Action
 interface ActionNode extends BaseNode {
   label: string
@@ -692,6 +727,34 @@ type UIImageInit = NodeInitBase &
       | 'borderColor'
     >
   >
+type WebViewInit = NodeInitBase &
+  Partial<
+    Pick<WebViewNode, 'src' | 'html' | 'srcdoc' | 'space' | 'width' | 'height' | 'factor' | 'doubleside' | 'pointerEvents'>
+  >
+type UIInputInit = NodeInitBase &
+  Partial<
+    Pick<
+      UIInputNode,
+      | 'width'
+      | 'height'
+      | 'factor'
+      | 'value'
+      | 'placeholder'
+      | 'disabled'
+      | 'fontSize'
+      | 'color'
+      | 'backgroundColor'
+      | 'borderWidth'
+      | 'borderColor'
+      | 'borderRadius'
+      | 'padding'
+      | 'type'
+      | 'onFocus'
+      | 'onBlur'
+      | 'onChange'
+      | 'onSubmit'
+    >
+  >
 type ActionInit = NodeInitBase &
   Partial<Pick<ActionNode, 'label' | 'distance' | 'duration' | 'onStart' | 'onTrigger' | 'onCancel'>>
 
@@ -726,6 +789,8 @@ type NodeNameToType = {
   uiview: UIViewNode
   uitext: UITextNode
   uiimage: UIImageNode
+  webview: WebViewNode
+  uiinput: UIInputNode
 }
 
 type NodeName = keyof NodeNameToType
@@ -775,6 +840,8 @@ type NodeNameToInit = {
   uiview: UIViewInit
   uitext: UITextInit
   uiimage: UIImageInit
+  webview: WebViewInit
+  uiinput: UIInputInit
 }
 
 // -----------------------------
@@ -1132,6 +1199,7 @@ declare global {
     new (x?: number, y?: number, z?: number, order?: Euler['order']): Euler
   }
   const Matrix4: { new (): Matrix4 }
+  const URL: typeof globalThis.URL
 
   // Interpolation helpers (deprecated and buffered variants)
   const LerpVector3: any
@@ -1146,5 +1214,3 @@ declare global {
 }
 
 export {}
-
-

@@ -7,6 +7,7 @@ import { ClientControls } from './systems/ClientControls'
 import { AdminNetwork } from './systems/AdminNetwork'
 import { AdminClient } from './systems/AdminClient'
 import { ClientLoader } from './systems/ClientLoader'
+import { ClientCSS } from './systems/ClientCSS'
 import { ClientGraphics } from './systems/ClientGraphics'
 import { ClientEnvironment } from './systems/ClientEnvironment'
 import { ClientAudio } from './systems/ClientAudio'
@@ -38,6 +39,7 @@ export function createAdminWorld() {
   world.register('network', AdminNetwork)
   world.register('admin', AdminClient)
   world.register('loader', ClientLoader)
+  world.register('css', ClientCSS)
   world.register('graphics', ClientGraphics)
   world.register('environment', ClientEnvironment)
   world.register('audio', ClientAudio)

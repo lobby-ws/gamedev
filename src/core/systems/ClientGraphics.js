@@ -28,6 +28,7 @@ function getRenderer() {
     renderer = new THREE.WebGLRenderer({
       powerPreference: 'high-performance',
       antialias: true,
+      alpha: true,
       // logarithmicDepthBuffer: true,
       // reverseDepthBuffer: true,
     })
@@ -121,6 +122,13 @@ export class ClientGraphics extends System {
     this.resizer = new ResizeObserver(() => {
       this.resize(this.viewport.offsetWidth, this.viewport.offsetHeight)
     })
+    this.renderer.domElement.style.position = 'absolute'
+    this.renderer.domElement.style.top = '0'
+    this.renderer.domElement.style.left = '0'
+    this.renderer.domElement.style.width = '100%'
+    this.renderer.domElement.style.height = '100%'
+    this.renderer.domElement.style.zIndex = '1'
+    this.renderer.domElement.style.pointerEvents = 'none'
     this.viewport.appendChild(this.renderer.domElement)
     this.resizer.observe(this.viewport)
 
@@ -147,6 +155,7 @@ export class ClientGraphics extends System {
   }
 
   render() {
+    this.world.css?.render()
     if (this.renderer.xr.isPresenting || !this.usePostprocessing) {
       this.renderer.render(this.world.stage.scene, this.world.camera)
     } else {

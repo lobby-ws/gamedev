@@ -267,17 +267,6 @@ export class Prim extends Node {
       this.handle.setEmissive(this._emissive)
       this.handle.setEmissiveIntensity(this._emissiveIntensity)
       count++
-    } else {
-      // not visible but add to octree
-      this.sItem = {
-        matrix: this.matrixWorldOffset,
-        geometry,
-        material,
-        getEntity: () => this.ctx.entity,
-        node: this,
-      }
-      this.ctx.world.stage.octree.insert(this.sItem)
-      count++
     }
 
     // Create physics if enabled

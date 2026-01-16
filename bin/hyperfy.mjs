@@ -10,7 +10,7 @@ import { customAlphabet } from 'nanoid'
 
 import { HyperfyCLI, runAppCommand } from '../app-server/commands.js'
 import { DirectAppServer } from '../app-server/direct.js'
-import { applyTargetEnv, parseTargetArgs, resolveTarget } from '../app-server/targets.js'
+import { applyTargetEnv, parseTargetArgs, resolveTarget, readTargets } from '../app-server/targets.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const packageRoot = path.resolve(__dirname, '..')
@@ -59,6 +59,15 @@ function writeDotEnv(filePath, content) {
   fs.writeFileSync(filePath, content.endsWith('\n') ? content : `${content}\n`, 'utf8')
 }
 
+const TARGETS_FILE = path.join('.hyperfy', 'targets.json')
+
+function writeTargetsFile(targets, rootDir = projectDir) {
+  const filePath = path.join(rootDir, TARGETS_FILE)
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  fs.writeFileSync(filePath, JSON.stringify(targets, null, 2) + '\n', 'utf8')
+  return filePath
+}
+
 function isProjectEmpty(dirPath) {
   const ignore = new Set(['.git', '.DS_Store'])
   if (!fs.existsSync(dirPath)) return true
@@ -67,6 +76,10 @@ function isProjectEmpty(dirPath) {
 }
 
 function generateAdminCode() {
+  return crypto.randomBytes(16).toString('base64url')
+}
+
+function generateDeployCode() {
   return crypto.randomBytes(16).toString('base64url')
 }
 
@@ -631,6 +644,333 @@ async function worldCommand(args) {
   return 1
 }
 
+function printFlyHelp() {
+  console.log(`
+Hyperfy Fly
+
+Usage:
+  hyperfy fly <command> [options]
+
+Commands:
+  init                      Generate fly.toml and optional GitHub workflow
+  secrets                   Generate secrets + print fly secrets set command
+  help                      Show this help
+
+Init options:
+  --app <name>              Fly app name (required)
+  --region <code>           Fly region (default: ams)
+  --persist                 Enable volume mount + SAVE_INTERVAL
+  --world-id <id>           WORLD_ID override (default: fly-<app>)
+  --target <name>           Update .hyperfy/targets.json with worldUrl/worldId
+  --force, -f               Overwrite existing fly.toml / workflow
+
+Secrets options:
+  --target <name>           Update .hyperfy/targets.json with generated codes
+  --no-deploy-code          Skip DEPLOY_CODE generation
+  --force, -f               Overwrite existing target codes
+`)
+}
+
+function buildFlyToml({ app, region, worldId, persist }) {
+  const baseUrl = `https://${app}.fly.dev`
+  const wsUrl = `wss://${app}.fly.dev/ws`
+  const apiUrl = `${baseUrl}/api`
+  const assetsUrl = `${baseUrl}/assets`
+  const saveInterval = persist ? 60 : 0
+  const lines = []
+  lines.push(`app = "${app}"`)
+  lines.push(`primary_region = "${region}"`)
+  lines.push('')
+  lines.push('[env]')
+  lines.push('  NODE_ENV = "production"')
+  lines.push('  PORT = "3000"')
+  lines.push('  WORLD = "world"')
+  lines.push(`  WORLD_ID = "${worldId}"`)
+  lines.push(`  PUBLIC_WS_URL = "${wsUrl}"`)
+  lines.push(`  PUBLIC_API_URL = "${apiUrl}"`)
+  lines.push('  ASSETS = "local"')
+  lines.push(`  ASSETS_BASE_URL = "${assetsUrl}"`)
+  lines.push('  PUBLIC_MAX_UPLOAD_SIZE = "12"')
+  lines.push(`  SAVE_INTERVAL = "${saveInterval}"`)
+  lines.push('')
+  lines.push('[http_service]')
+  lines.push('  internal_port = 3000')
+  lines.push('  force_https = true')
+  if (persist) {
+    lines.push('')
+    lines.push('[[mounts]]')
+    lines.push('  source = "data"')
+    lines.push('  destination = "/app/world"')
+  }
+  return lines.join('\n') + '\n'
+}
+
+function buildFlyWorkflow() {
+  return `name: Fly Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: \${{ secrets.FLY_API_TOKEN }}
+`
+}
+
+function parseFlyInitArgs(args) {
+  const options = {
+    app: null,
+    region: 'ams',
+    persist: false,
+    worldId: null,
+    target: null,
+    force: false,
+    help: false,
+  }
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]
+    if (arg === '--help' || arg === '-h') {
+      options.help = true
+      continue
+    }
+    if (arg === '--persist') {
+      options.persist = true
+      continue
+    }
+    if (arg === '--force' || arg === '-f') {
+      options.force = true
+      continue
+    }
+    if (arg === '--app') {
+      const value = args[i + 1]
+      if (!value || value.startsWith('-')) throw new Error('Missing value for --app')
+      options.app = value
+      i += 1
+      continue
+    }
+    if (arg.startsWith('--app=')) {
+      options.app = arg.slice('--app='.length)
+      continue
+    }
+    if (arg === '--region') {
+      const value = args[i + 1]
+      if (!value || value.startsWith('-')) throw new Error('Missing value for --region')
+      options.region = value
+      i += 1
+      continue
+    }
+    if (arg.startsWith('--region=')) {
+      options.region = arg.slice('--region='.length)
+      continue
+    }
+    if (arg === '--world-id') {
+      const value = args[i + 1]
+      if (!value || value.startsWith('-')) throw new Error('Missing value for --world-id')
+      options.worldId = value
+      i += 1
+      continue
+    }
+    if (arg.startsWith('--world-id=')) {
+      options.worldId = arg.slice('--world-id='.length)
+      continue
+    }
+    if (arg === '--target') {
+      const value = args[i + 1]
+      if (!value || value.startsWith('-')) throw new Error('Missing value for --target')
+      options.target = value
+      i += 1
+      continue
+    }
+    if (arg.startsWith('--target=')) {
+      options.target = arg.slice('--target='.length)
+      continue
+    }
+    throw new Error(`Unknown option: ${arg}`)
+  }
+  return options
+}
+
+function parseFlySecretsArgs(args) {
+  const options = {
+    target: null,
+    deployCode: true,
+    force: false,
+    help: false,
+  }
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]
+    if (arg === '--help' || arg === '-h') {
+      options.help = true
+      continue
+    }
+    if (arg === '--force' || arg === '-f') {
+      options.force = true
+      continue
+    }
+    if (arg === '--no-deploy-code') {
+      options.deployCode = false
+      continue
+    }
+    if (arg === '--deploy-code') {
+      options.deployCode = true
+      continue
+    }
+    if (arg === '--target') {
+      const value = args[i + 1]
+      if (!value || value.startsWith('-')) throw new Error('Missing value for --target')
+      options.target = value
+      i += 1
+      continue
+    }
+    if (arg.startsWith('--target=')) {
+      options.target = arg.slice('--target='.length)
+      continue
+    }
+    throw new Error(`Unknown option: ${arg}`)
+  }
+  return options
+}
+
+async function flyInitCommand(args) {
+  let options
+  try {
+    options = parseFlyInitArgs(args)
+  } catch (err) {
+    console.error(`Error: ${err?.message || err}`)
+    return 1
+  }
+  if (options.help) {
+    printFlyHelp()
+    return 0
+  }
+  if (!options.app) {
+    console.error('Error: --app is required for fly init')
+    return 1
+  }
+  const worldId = options.worldId || `fly-${options.app}`
+  const flyTomlPath = path.join(projectDir, 'fly.toml')
+  if (fs.existsSync(flyTomlPath) && !options.force) {
+    console.error('Error: fly.toml already exists (use --force to overwrite)')
+    return 1
+  }
+  fs.writeFileSync(
+    flyTomlPath,
+    buildFlyToml({
+      app: options.app,
+      region: options.region,
+      worldId,
+      persist: options.persist,
+    }),
+    'utf8'
+  )
+  console.log(`Wrote ${flyTomlPath}`)
+
+  const workflowPath = path.join(projectDir, '.github', 'workflows', 'fly-deploy.yml')
+  if (!fs.existsSync(workflowPath) || options.force) {
+    fs.mkdirSync(path.dirname(workflowPath), { recursive: true })
+    fs.writeFileSync(workflowPath, buildFlyWorkflow(), 'utf8')
+    console.log(`Wrote ${workflowPath}`)
+  } else {
+    console.log('Workflow: .github/workflows/fly-deploy.yml already exists, skipping.')
+  }
+
+  if (options.target) {
+    let targets
+    try {
+      targets = readTargets(projectDir) || {}
+    } catch (err) {
+      console.error(`Error: ${err?.message || err}`)
+      return 1
+    }
+    const entry = targets[options.target]
+    const next = entry && typeof entry === 'object' ? { ...entry } : {}
+    next.worldUrl = normalizeBaseUrl(`https://${options.app}.fly.dev`)
+    next.worldId = worldId
+    targets[options.target] = next
+    const filePath = writeTargetsFile(targets, projectDir)
+    console.log(`Updated ${filePath} (${options.target})`)
+  }
+
+  return 0
+}
+
+async function flySecretsCommand(args) {
+  let options
+  try {
+    options = parseFlySecretsArgs(args)
+  } catch (err) {
+    console.error(`Error: ${err?.message || err}`)
+    return 1
+  }
+  if (options.help) {
+    printFlyHelp()
+    return 0
+  }
+
+  const adminCode = generateAdminCode()
+  const jwtSecret = generateJwtSecret()
+  const deployCode = options.deployCode ? generateDeployCode() : null
+  const parts = [`ADMIN_CODE=${adminCode}`, `JWT_SECRET=${jwtSecret}`]
+  if (deployCode) parts.push(`DEPLOY_CODE=${deployCode}`)
+  console.log(`fly secrets set ${parts.join(' ')}`)
+
+  if (options.target) {
+    let targets
+    try {
+      targets = readTargets(projectDir) || {}
+    } catch (err) {
+      console.error(`Error: ${err?.message || err}`)
+      return 1
+    }
+    const entry = targets[options.target]
+    const next = entry && typeof entry === 'object' ? { ...entry } : {}
+    if (!options.force) {
+      if (next.adminCode || (options.deployCode && next.deployCode)) {
+        console.error(`Error: Target "${options.target}" already has codes (use --force to overwrite)`)
+        return 1
+      }
+    }
+    next.adminCode = adminCode
+    if (deployCode) next.deployCode = deployCode
+    next.confirm = true
+    targets[options.target] = next
+    const filePath = writeTargetsFile(targets, projectDir)
+    console.log(`Updated ${filePath} (${options.target})`)
+  }
+
+  return 0
+}
+
+async function flyCommand(args) {
+  if (!args.length || ['help', '--help', '-h'].includes(args[0])) {
+    printFlyHelp()
+    return 0
+  }
+  const action = args[0]
+  const actionArgs = args.slice(1)
+  if (action === 'init') {
+    return flyInitCommand(actionArgs)
+  }
+  if (action === 'secrets') {
+    return flySecretsCommand(actionArgs)
+  }
+  if (action === 'help') {
+    printFlyHelp()
+    return 0
+  }
+  console.error(`Error: Unknown fly command: ${action}`)
+  printFlyHelp()
+  return 1
+}
+
 function printHelp() {
   console.log(`
 Hyperfy CLI
@@ -642,6 +982,7 @@ Commands:
   start                     Start the world (local or remote) + app-server sync
   dev                       Alias for start
   apps <command>            Manage apps (create, list, deploy, update, validate, status)
+  fly <command>             Fly.io deployment helpers
   project reset [--force]   Delete local apps/assets/world.json in this project
   world export              Export world.json + apps/assets from the world
   world import              Import local apps + world.json into the world
@@ -669,6 +1010,8 @@ async function main() {
       return worldCommand(args)
     case 'worlds':
       return worldsCommand(args)
+    case 'fly':
+      return flyCommand(args)
     case 'help':
     case '--help':
     case '-h':

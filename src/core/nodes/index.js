@@ -20,6 +20,8 @@ export { UI as ui } from './UI.js'
 export { UIView as uiview } from './UIView.js'
 export { UIText as uitext } from './UIText.js'
 export { UIImage as uiimage } from './UIImage.js'
+export { WebView as webview } from './WebView.js'
+export { UIInput as uiinput } from './UIInput.js'
 
 export { Controller as controller } from './Controller.js'
 export { RigidBody as rigidbody } from './RigidBody.js'

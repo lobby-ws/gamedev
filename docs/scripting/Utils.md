@@ -33,6 +33,17 @@ Certain `three.js` classes and methods are exposed directly in the scripting API
 
 ---
 
+## URL
+
+The standard [`URL`](https://developer.mozilla.org/en-US/docs/Web/API/URL) class is available in the scripting runtime.
+
+```javascript
+const url = new URL('https://example.com/path?query=1');
+console.log(url.hostname); // "example.com"
+```
+
+---
+
 ## Fetch
 
 The standard `fetch` API is available for making network requests.

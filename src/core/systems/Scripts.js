@@ -32,9 +32,7 @@ export class Scripts extends System {
       Date: {
         now: () => Date.now(),
       },
-      URL: {
-        createObjectURL: blob => URL.createObjectURL(blob),
-      },
+      URL,
       Math,
       eval: undefined,
       harden: undefined,

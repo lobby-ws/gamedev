@@ -11,6 +11,7 @@ export { System } from '../core/systems/System'
 
 export function Client({ wsUrl, onSetup }) {
   const viewportRef = useRef()
+  const cssLayerRef = useRef()
   const uiRef = useRef()
   const world = useMemo(() => createClientWorld(), [])
   const [ui, setUI] = useState(world.ui.state)
@@ -23,6 +24,7 @@ export function Client({ wsUrl, onSetup }) {
   useEffect(() => {
     const init = async () => {
       const viewport = viewportRef.current
+      const cssLayer = cssLayerRef.current
       const ui = uiRef.current
       const baseEnvironment = {
         model: '/base-environment.glb',
@@ -40,7 +42,7 @@ export function Client({ wsUrl, onSetup }) {
         wsUrl = wsUrl()
         if (wsUrl instanceof Promise) wsUrl = await wsUrl
       }
-      const config = { viewport, ui, wsUrl, baseEnvironment }
+      const config = { viewport, cssLayer, ui, wsUrl, baseEnvironment }
       onSetup?.(world, config)
       world.init(config)
     }
@@ -59,10 +61,18 @@ export function Client({ wsUrl, onSetup }) {
         .App__viewport {
           position: absolute;
           inset: 0;
+          overflow: hidden;
+        }
+        .App__cssLayer {
+          position: absolute;
+          inset: 0;
+          z-index: 0;
+          pointer-events: none;
         }
         .App__ui {
           position: absolute;
           inset: 0;
+          z-index: 2;
           pointer-events: none;
           user-select: none;
           display: ${ui.visible ? 'block' : 'none'};
@@ -70,6 +80,7 @@ export function Client({ wsUrl, onSetup }) {
       `}
     >
       <div className='App__viewport' ref={viewportRef}>
+        <div className='App__cssLayer' ref={cssLayerRef} />
         <div className='App__ui' ref={uiRef}>
           <CoreUI world={world} />
         </div>

@@ -17,6 +17,7 @@ function resolveAdminUrl() {
 
 export function AdminClient() {
   const viewportRef = useRef()
+  const cssLayerRef = useRef()
   const uiRef = useRef()
   const world = useMemo(() => createAdminWorld(), [])
   const [ui, setUI] = useState(world.ui.state)
@@ -46,6 +47,7 @@ export function AdminClient() {
   useEffect(() => {
     const init = async () => {
       const viewport = viewportRef.current
+      const cssLayer = cssLayerRef.current
       const ui = uiRef.current
       const baseEnvironment = {
         model: '/base-environment.glb',
@@ -60,7 +62,7 @@ export function AdminClient() {
         fogColor: null,
       }
       const adminUrl = resolveAdminUrl()
-      world.init({ viewport, ui, adminUrl, baseEnvironment })
+      world.init({ viewport, cssLayer, ui, adminUrl, baseEnvironment })
     }
     init()
   }, [])
@@ -78,10 +80,18 @@ export function AdminClient() {
         .Admin__viewport {
           position: absolute;
           inset: 0;
+          overflow: hidden;
+        }
+        .Admin__cssLayer {
+          position: absolute;
+          inset: 0;
+          z-index: 0;
+          pointer-events: none;
         }
         .Admin__ui {
           position: absolute;
           inset: 0;
+          z-index: 2;
           pointer-events: none;
           user-select: none;
           display: ${ui.visible ? 'block' : 'none'};
@@ -89,6 +99,7 @@ export function AdminClient() {
       `}
     >
       <div className='Admin__viewport' ref={viewportRef}>
+        <div className='Admin__cssLayer' ref={cssLayerRef} />
         <div className='Admin__ui' ref={uiRef}>
           <CoreUI world={world} />
           {authError && <AdminAuthOverlay world={world} error={authError} />}

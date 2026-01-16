@@ -8,6 +8,7 @@ import { ClientControls } from './systems/ClientControls'
 import { ClientNetwork } from './systems/ClientNetwork'
 import { AdminClient } from './systems/AdminClient'
 import { ClientLoader } from './systems/ClientLoader'
+import { ClientCSS } from './systems/ClientCSS'
 import { ClientGraphics } from './systems/ClientGraphics'
 import { ClientEnvironment } from './systems/ClientEnvironment'
 import { ClientAudio } from './systems/ClientAudio'
@@ -34,6 +35,7 @@ export function createClientWorld() {
   world.register('network', ClientNetwork)
   world.register('admin', AdminClient)
   world.register('loader', ClientLoader)
+  world.register('css', ClientCSS)
   world.register('graphics', ClientGraphics)
   world.register('environment', ClientEnvironment)
   world.register('audio', ClientAudio)
