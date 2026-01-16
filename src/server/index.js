@@ -17,6 +17,7 @@ import { Storage } from './Storage'
 import { assets } from './assets'
 import { cleaner } from './cleaner'
 import { admin } from './admin'
+import { createRegistryState, getRegistryPublicStatus, registerWithRegistry } from './registry'
 
 const rootDir = path.join(__dirname, '../')
 // Resolve world directory relative to the consumer project (cwd), not the package root
@@ -87,6 +88,8 @@ await world.init({
   assets,
   storage,
 })
+
+const registryState = createRegistryState()
 
 fastify.register(cors)
 fastify.register(compress)
@@ -162,7 +165,7 @@ fastify.get('/health', async (request, reply) => {
   try {
     // Basic health check
     const health = {
-      status: 'ok',
+      ok: true,
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
     }
@@ -171,7 +174,7 @@ fastify.get('/health', async (request, reply) => {
   } catch (error) {
     console.error('Health check failed:', error)
     return reply.code(503).send({
-      status: 'error',
+      ok: false,
       timestamp: new Date().toISOString(),
     })
   }
@@ -180,24 +183,27 @@ fastify.get('/health', async (request, reply) => {
 fastify.get('/status', async (request, reply) => {
   try {
     const status = {
-      uptime: Math.round(world.time),
-      protected: process.env.ADMIN_CODE !== undefined ? true : false,
-      connectedUsers: [],
-      commitHash: process.env.COMMIT_HASH,
-    }
-    for (const socket of world.network.sockets.values()) {
-      status.connectedUsers.push({
-        id: socket.player.data.userId,
-        position: socket.player.position.value.toArray(),
-        name: socket.player.data.name,
-      })
+      ok: true,
+      worldId: world?.network?.worldId || null,
+      title: world.settings.title || 'World',
+      description: world.settings.desc || '',
+      imageUrl: world.resolveURL(world.settings.image?.url) || null,
+      playerCount: world?.network?.sockets?.size || 0,
+      playerLimit: world.settings.playerLimit ?? null,
+      commitHash: process.env.COMMIT_HASH || null,
+      listable: registryState.listable,
+      updatedAt: new Date().toISOString(),
     }
 
+    const registry = getRegistryPublicStatus(registryState)
+    if (registry) status.registry = registry
+
+    reply.header('Cache-Control', 'no-store')
     return reply.code(200).send(status)
   } catch (error) {
     console.error('Status failed:', error)
     return reply.code(503).send({
-      status: 'error',
+      ok: false,
       timestamp: new Date().toISOString(),
     })
   }
@@ -217,6 +223,11 @@ try {
   console.error(`failed to launch on port ${port}`)
   process.exit(1)
 }
+
+void registerWithRegistry(registryState, {
+  worldId: world?.network?.worldId || null,
+  commitHash: process.env.COMMIT_HASH || null,
+})
 
 async function worldNetwork(fastify) {
   fastify.get('/ws', { websocket: true }, (ws, req) => {
