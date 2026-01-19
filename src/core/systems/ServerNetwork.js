@@ -325,7 +325,6 @@ export class ServerNetwork extends System {
         maxUploadSize: process.env.PUBLIC_MAX_UPLOAD_SIZE,
         settings: this.world.settings.serialize(),
         chat: this.world.chat.serialize(),
-        ai: this.world.ai.serialize(),
         blueprints: this.world.blueprints.serialize(),
         entities: this.world.entities.serialize(),
         livekit,
@@ -712,13 +711,6 @@ export class ServerNetwork extends System {
 
   onPlayerSessionAvatar = (socket, data) => {
     this.sendTo(data.networkId, 'playerSessionAvatar', data.avatar)
-  }
-
-  onAi = (socket, action) => {
-    if (!socket.player.isBuilder()) {
-      return console.error('player attempted to use ai but they are not a builder')
-    }
-    this.world.ai.onAction(action)
   }
 
   onPing = (socket, time) => {

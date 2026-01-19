@@ -137,7 +137,6 @@ export class ClientNetwork extends System {
     this.world.settings.deserialize(data.settings)
     this.world.settings.setHasAdminCode(data.hasAdminCode)
     this.world.chat.deserialize(data.chat)
-    this.world.ai.deserialize(data.ai)
     this.world.blueprints.deserialize(data.blueprints)
     this.world.entities.deserialize(data.entities)
     this.world.livekit?.deserialize(data.livekit)

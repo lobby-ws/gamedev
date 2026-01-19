@@ -6,7 +6,6 @@ import { ServerNetwork } from './systems/ServerNetwork'
 import { ServerLoader } from './systems/ServerLoader'
 import { ServerEnvironment } from './systems/ServerEnvironment'
 import { ServerMonitor } from './systems/ServerMonitor'
-import { ServerAI } from './systems/ServerAI'
 
 export function createServerWorld() {
   const world = new World()
@@ -16,6 +15,5 @@ export function createServerWorld() {
   world.register('loader', ServerLoader)
   world.register('environment', ServerEnvironment)
   world.register('monitor', ServerMonitor)
-  world.register('ai', ServerAI)
   return world
 }

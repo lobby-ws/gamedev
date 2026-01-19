@@ -215,12 +215,6 @@ function buildDefaultEnv({ worldUrl, worldId, adminCode, jwtSecret }) {
   lines.push('LIVEKIT_API_KEY=')
   lines.push('LIVEKIT_API_SECRET=')
   lines.push('')
-  lines.push('# AI')
-  lines.push('AI_PROVIDER=anthropic')
-  lines.push('AI_MODEL=claude-sonnet-4-20250514')
-  lines.push('AI_EFFORT=medium')
-  lines.push('AI_API_KEY=')
-  lines.push('')
   lines.push('# Hooks to connect to a local app dev server')
   lines.push('PUBLIC_DEV_SERVER=false')
   return lines.join('\n') + '\n'

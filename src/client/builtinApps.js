@@ -101,4 +101,22 @@ export const BUILTIN_APP_TEMPLATES = [
     scene: false,
     disabled: false,
   },
+  {
+    name: 'Webview',
+    image: {
+      url: 'asset://Webview.png',
+    },
+    model: 'asset://Webview.glb',
+    script: 'asset://Webview.js',
+    props: {
+      url: "https://www.youtube.com/embed/jfKfPfyJRdk?autoplay=1"
+    },
+    preload: false,
+    public: false,
+    locked: false,
+    frozen: false,
+    unique: false,
+    scene: false,
+    disabled: false,
+  },
 ]
