@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import fs from 'fs'
 import path from 'path'
-import os from 'os'
 import crypto from 'crypto'
 import readline from 'readline'
 import { fileURLToPath } from 'url'
@@ -161,7 +160,7 @@ function isLocalWorld({ worldUrl }) {
 }
 
 function getWorldDir(worldId) {
-  return path.join(os.homedir(), '.hyperfy', worldId)
+  return path.join(projectDir, '.hyperfy', worldId)
 }
 
 function hasKey(env, key) {
@@ -531,7 +530,7 @@ async function projectCommand(args) {
 
 async function worldsCommand(args) {
   if (!args.length || ['help', '--help', '-h'].includes(args[0]) || args[0] === 'list') {
-    const root = path.join(os.homedir(), '.hyperfy')
+    const root = path.join(projectDir, '.hyperfy')
     if (!fs.existsSync(root)) {
       console.log('Worlds: No local worlds found.')
       return 0
@@ -982,7 +981,7 @@ Commands:
   world export              Export world.json + apps/assets from the world (use --include-built-scripts for scripts)
   world import              Import local apps + world.json into the world
   world wipe [--force]      Delete the local world runtime directory for this project
-  worlds list               List local world directories in ~/.hyperfy
+  worlds list               List local world directories in ./.hyperfy
   help                      Show this help
 
 Options:

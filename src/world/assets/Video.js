@@ -127,7 +127,7 @@ video.volume = volume
 
 app.add(video)
 
-if (!src) return
+if (!src) throw new Error("no src in video!");
 
 if (sync) {
   if (world.isServer) {
