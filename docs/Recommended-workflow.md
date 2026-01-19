@@ -16,8 +16,9 @@ When app-server is running, your instance edits are persisted into `world.json`,
 
 ### Developers (app-server / CLI)
 
-- Use app-server to sync local files to the world via `/admin`.
-- Edit template defaults in `apps/<appName>/*.json` and scripts in `apps/<appName>/index.js`.
+- Use `hyperfy dev` to run the dev server + continuous sync via `/admin`.
+- Edit template defaults in `apps/<appName>/*.json` and scripts in `apps/<appName>/index.ts` (or `index.js`).
+- Use `hyperfy apps deploy` for explicit prod/staging updates; avoid continuous sync in prod.
 - Use `world.json` for layout and per-instance overrides when you want changes tracked in git.
 - Use targets (`--target staging`, `--target prod`) for multi-environment deploys.
 
@@ -25,6 +26,7 @@ Recommended commands:
 
 ```bash
 hyperfy dev --target dev
+hyperfy apps build myApp
 hyperfy apps deploy myApp --target staging --dry-run
 hyperfy apps deploy myApp --target prod --note "release-1"
 hyperfy apps rollback

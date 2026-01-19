@@ -616,7 +616,8 @@ async function worldCommand(args) {
     try {
       server = await connectAdminServer({ worldUrl, adminCode: env.ADMIN_CODE, rootDir: projectDir })
       if (action === 'export') {
-        await server.exportWorldToDisk()
+        const includeBuiltScripts = args.includes('--include-built-scripts')
+        await server.exportWorldToDisk(undefined, { includeBuiltScripts })
         console.log('✅ World export complete')
       } else {
         await server.importWorldFromDisk()
@@ -975,10 +976,10 @@ Usage:
 Commands:
   start                     Start the world (local or remote) + app-server sync
   dev                       Alias for start
-  apps <command>            Manage apps (create, list, deploy, update, validate, status)
+  apps <command>            Manage apps (create, list, build, clean, deploy, update, validate, status)
   fly <command>             Fly.io deployment helpers
   project reset [--force]   Delete local apps/assets/world.json in this project
-  world export              Export world.json + apps/assets from the world
+  world export              Export world.json + apps/assets from the world (use --include-built-scripts for scripts)
   world import              Import local apps + world.json into the world
   world wipe [--force]      Delete the local world runtime directory for this project
   worlds list               List local world directories in ~/.hyperfy

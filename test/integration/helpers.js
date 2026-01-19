@@ -272,6 +272,10 @@ export class AdminWsClient {
 
 export async function stopAppServer(server) {
   if (!server) return
+  if (typeof server.stop === 'function') {
+    await server.stop()
+    return
+  }
   server.reconnecting = false
   if (server.pendingManifestWrite) {
     clearTimeout(server.pendingManifestWrite)
@@ -287,6 +291,19 @@ export async function stopAppServer(server) {
       } catch {}
     }
     server.watchers.clear()
+  }
+  if (server.appWatchers?.size) {
+    const entries = Array.from(server.appWatchers.values())
+    server.appWatchers.clear()
+    for (const entry of entries) {
+      entry.disposed = true
+      try {
+        await entry.ready
+        if (entry.dispose) {
+          await entry.dispose()
+        }
+      } catch {}
+    }
   }
   try {
     server.client?.removeAllListeners?.('disconnect')

@@ -2,10 +2,13 @@ import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
 import { EventEmitter } from 'events'
+import { fileURLToPath } from 'url'
 import { isEqual } from 'lodash-es'
 import { uuid } from './utils.js'
 import { WorldManifest } from './WorldManifest.js'
 import { deriveBlueprintId, parseBlueprintId, isBlueprintDenylist } from './blueprintUtils.js'
+import { buildApp, createAppWatch, formatBuildErrors } from './appBundler.js'
+import { BUILTIN_APP_TEMPLATES, BUILTIN_BLUEPRINT_IDS, SCENE_TEMPLATE } from './templates/builtins.js'
 import { readPacket, writePacket } from '../src/core/packets.js'
 
 const BLUEPRINT_FIELDS = [
@@ -146,6 +149,16 @@ function formatNameList(items, limit = 6) {
   if (items.length <= limit) return items.join(', ')
   const shown = items.slice(0, limit).join(', ')
   return `${shown} (+${items.length - limit} more)`
+}
+
+const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+
+function resolveBuiltinScriptPath(filename) {
+  const buildPath = path.join(PACKAGE_ROOT, 'build', 'world', 'assets', filename)
+  if (fs.existsSync(buildPath)) return buildPath
+  const srcPath = path.join(PACKAGE_ROOT, 'src', 'world', 'assets', filename)
+  if (fs.existsSync(srcPath)) return srcPath
+  return null
 }
 
 class WorldAdminClient extends EventEmitter {
@@ -490,6 +503,7 @@ export class DirectAppServer {
     this.snapshot = null
     this.loggedTarget = false
     this.deployLockToken = null
+    this.appWatchers = new Map()
   }
 
   async connect() {
@@ -550,7 +564,7 @@ export class DirectAppServer {
     const hasApps = this._hasLocalApps()
 
     if (!hasWorldFile && !hasApps) {
-      await this.exportWorldToDisk(snapshot)
+      await this._bootstrapEmptyProject(snapshot)
     } else if (!hasWorldFile && hasApps) {
       throw new Error(
         'world.json missing; cannot safely apply exact world layout. ' +
@@ -577,7 +591,119 @@ export class DirectAppServer {
     console.log(`✅ Connected to ${this.worldUrl} (/admin)`) 
   }
 
-  async exportWorldToDisk(snapshot = this.snapshot) {
+  async _bootstrapEmptyProject(snapshot) {
+    if (!this._isDefaultWorldSnapshot(snapshot)) {
+      const err = new Error(
+        'Local project is empty and this world already has content. ' +
+          'Script code is not downloaded by default. ' +
+          'Run "hyperfy world export --include-built-scripts" to scaffold from the world.'
+      )
+      err.code = 'empty_project_requires_export'
+      throw err
+    }
+    const manifest = await this._scaffoldLocalProject()
+    await this._deployAllBlueprints()
+    await this._applyManifestToWorld(manifest)
+  }
+
+  _isDefaultWorldSnapshot(snapshot) {
+    const blueprints = Array.isArray(snapshot?.blueprints) ? snapshot.blueprints : []
+    for (const blueprint of blueprints) {
+      if (!blueprint?.id) continue
+      if (!BUILTIN_BLUEPRINT_IDS.has(blueprint.id)) return false
+    }
+    const entities = Array.isArray(snapshot?.entities) ? snapshot.entities : []
+    const appEntities = entities.filter(entity => entity?.type === 'app')
+    if (appEntities.length > 1) return false
+    if (appEntities.length === 1 && appEntities[0].blueprint !== SCENE_TEMPLATE.fileBase) return false
+    return true
+  }
+
+  _createDefaultManifest() {
+    const manifest = this.manifest.createEmpty()
+    manifest.entities = [
+      {
+        id: uuid(),
+        blueprint: SCENE_TEMPLATE.fileBase,
+        position: [0, 0, 0],
+        quaternion: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+        pinned: false,
+        props: {},
+        state: {},
+      },
+    ]
+    return manifest
+  }
+
+  _writeAppRuntimeTypesFile() {
+    const filePath = path.join(this.rootDir, 'hyperfy.app-runtime.d.ts')
+    const content = '/// <reference types="@drama.haus/hyperfy/app-runtime" />\n'
+    if (fs.existsSync(filePath)) {
+      const existing = fs.readFileSync(filePath, 'utf8')
+      if (existing === content) return
+    }
+    this._writeFileAtomic(filePath, content)
+  }
+
+  _readBuiltinScript(template) {
+    const scriptPath = resolveBuiltinScriptPath(template.scriptAsset)
+    if (!scriptPath) {
+      throw new Error(`missing_builtin_script:${template.scriptAsset}`)
+    }
+    return fs.readFileSync(scriptPath, 'utf8')
+  }
+
+  async _scaffoldLocalProject() {
+    ensureDir(this.appsDir)
+    const templates = [...BUILTIN_APP_TEMPLATES, SCENE_TEMPLATE]
+    for (const template of templates) {
+      const appDir = path.join(this.appsDir, template.appName)
+      ensureDir(appDir)
+
+      const blueprintPath = path.join(appDir, `${template.fileBase}.json`)
+      if (!fs.existsSync(blueprintPath)) {
+        this._writeFileAtomic(blueprintPath, JSON.stringify(template.config, null, 2) + '\n')
+      }
+
+      const scriptPath = path.join(appDir, 'index.ts')
+      if (!fs.existsSync(scriptPath)) {
+        const script = this._readBuiltinScript(template)
+        const content = `// @ts-nocheck\n${script}`
+        this._writeFileAtomic(scriptPath, content)
+      }
+    }
+
+    this._writeAppRuntimeTypesFile()
+    const manifest = this._createDefaultManifest()
+    this._writeWorldFile(manifest)
+    return manifest
+  }
+
+  async stop() {
+    this.reconnecting = false
+    if (this.pendingManifestWrite) {
+      clearTimeout(this.pendingManifestWrite)
+      this.pendingManifestWrite = null
+    }
+    for (const timer of this.deployTimers.values()) {
+      clearTimeout(timer)
+    }
+    this.deployTimers.clear()
+    await this._disposeAppWatchers()
+    const watcherKeys = Array.from(this.watchers.keys())
+    for (const key of watcherKeys) {
+      this._closeWatcher(key)
+    }
+    try {
+      this.client?.removeAllListeners?.('disconnect')
+    } catch {}
+    try {
+      this.client?.ws?.close()
+    } catch {}
+  }
+
+  async exportWorldToDisk(snapshot = this.snapshot, { includeBuiltScripts = false } = {}) {
     const nextSnapshot = snapshot || (await this.client.getSnapshot())
     this.assetsUrl = nextSnapshot.assetsUrl
     if (!this.snapshot) this._initSnapshot(nextSnapshot)
@@ -588,7 +714,7 @@ export class DirectAppServer {
     const blueprints = Array.isArray(nextSnapshot.blueprints) ? nextSnapshot.blueprints : []
     for (const blueprint of blueprints) {
       if (!blueprint?.id) continue
-      await this._writeBlueprintToDisk({ blueprint, force: true })
+      await this._writeBlueprintToDisk({ blueprint, force: true, includeBuiltScripts })
     }
   }
 
@@ -629,7 +755,16 @@ export class DirectAppServer {
         console.warn(`⚠️  Disconnected from ${this.worldUrl}, reconnecting...`)
         const snapshot = await this.connect()
         if (!fs.existsSync(this.worldFile) && !this._hasLocalApps()) {
-          await this.exportWorldToDisk(snapshot)
+          try {
+            await this._bootstrapEmptyProject(snapshot)
+          } catch (err) {
+            if (err?.code === 'empty_project_requires_export') {
+              console.error(`❌ ${err.message}`)
+              this.reconnecting = false
+              return
+            }
+            throw err
+          }
         } else if (fs.existsSync(this.worldFile)) {
           const manifest = this.manifest.read()
           if (!manifest) {
@@ -702,7 +837,90 @@ export class DirectAppServer {
     this._watchAssetsDir()
     this._watchWorldFile()
     for (const appName of listSubdirs(this.appsDir)) {
-      this._watchAppDir(appName)
+      this._watchAppDir(appName, { skipInitialBuild: true })
+    }
+  }
+
+  _startAppWatch(appName, { skipInitialBuild = false } = {}) {
+    if (this.appWatchers.has(appName)) return
+    if (!this._getScriptPath(appName)) return
+    const state = {
+      hasError: false,
+      skipInitialBuild: !!skipInitialBuild,
+      disposed: false,
+      dispose: null,
+      ready: null,
+    }
+    this.appWatchers.set(appName, state)
+    state.ready = createAppWatch({
+      rootDir: this.rootDir,
+      appName,
+      onBuild: result => {
+        this._onAppBuild(appName, result)
+      },
+    })
+      .then(async dispose => {
+        state.dispose = dispose
+        if (state.disposed) {
+          await dispose().catch(() => {})
+          state.dispose = null
+        }
+      })
+      .catch(err => {
+        this.appWatchers.delete(appName)
+        if (!state.disposed) {
+          console.error(`❌ Failed to watch app "${appName}":`, err?.message || err)
+        }
+      })
+  }
+
+  async _stopAppWatch(appName) {
+    const state = this.appWatchers.get(appName)
+    if (!state) return
+    this.appWatchers.delete(appName)
+    state.disposed = true
+    try {
+      await state.ready
+      if (state.dispose) {
+        await state.dispose()
+        state.dispose = null
+      }
+    } catch {}
+  }
+
+  async _disposeAppWatchers() {
+    const entries = Array.from(this.appWatchers.keys())
+    for (const appName of entries) {
+      await this._stopAppWatch(appName)
+    }
+  }
+
+  _onAppBuild(appName, result) {
+    const state = this.appWatchers.get(appName)
+    if (!state) return
+    const errors = Array.isArray(result?.errors) ? result.errors : []
+    if (state.skipInitialBuild) {
+      state.skipInitialBuild = false
+      if (errors.length) {
+        state.hasError = true
+        this._logAppBuildErrors(appName, errors)
+      }
+      return
+    }
+    if (errors.length) {
+      state.hasError = true
+      this._logAppBuildErrors(appName, errors)
+      return
+    }
+    state.hasError = false
+    this._scheduleDeployApp(appName, { build: false })
+  }
+
+  _logAppBuildErrors(appName, errors) {
+    console.error(`❌ App build failed for ${appName}`)
+    const details = formatBuildErrors(errors)
+    for (const line of details) {
+      console.error(`   ${line}`)
     }
   }
 
@@ -712,17 +930,22 @@ export class DirectAppServer {
     const watcher = fs.watch(this.appsDir, { recursive: false }, (eventType, filename) => {
       if (eventType !== 'rename' || !filename) return
       const abs = path.join(this.appsDir, filename)
-      if (!fs.existsSync(abs)) return
+      if (!fs.existsSync(abs)) {
+        this._stopAppWatch(filename)
+        this._closeWatcher(abs)
+        return
+      }
       if (!fs.statSync(abs).isDirectory()) return
       this._watchAppDir(filename)
     })
     this.watchers.set('appsDir', watcher)
   }
 
-  _watchAppDir(appName) {
+  _watchAppDir(appName, { skipInitialBuild = false } = {}) {
     const appPath = path.join(this.appsDir, appName)
-    if (this.watchers.has(appPath)) return
     if (!fs.existsSync(appPath)) return
+    this._startAppWatch(appName, { skipInitialBuild })
+    if (this.watchers.has(appPath)) return
     const watcher = fs.watch(appPath, { recursive: false }, (eventType, filename) => {
       if (!filename) return
       const abs = path.join(appPath, filename)
@@ -730,7 +953,7 @@ export class DirectAppServer {
       if (!fs.existsSync(abs) && eventType === 'change') return
 
       if (filename === 'index.js' || filename === 'index.ts') {
-        if (fs.existsSync(abs)) this._scheduleDeployApp(appName)
+        if (fs.existsSync(abs)) this._startAppWatch(appName)
         return
       }
 
@@ -742,6 +965,15 @@ export class DirectAppServer {
       }
     })
     this.watchers.set(appPath, watcher)
+  }
+
+  _closeWatcher(key) {
+    const watcher = this.watchers.get(key)
+    if (!watcher) return
+    try {
+      watcher.close()
+    } catch {}
+    this.watchers.delete(key)
   }
 
   _watchWorldFile() {
@@ -803,12 +1035,12 @@ export class DirectAppServer {
     }
   }
 
-  _scheduleDeployApp(appName) {
+  _scheduleDeployApp(appName, { build = true } = {}) {
     const key = `app:${appName}`
     if (this.deployTimers.has(key)) clearTimeout(this.deployTimers.get(key))
     const timer = setTimeout(() => {
       this.deployTimers.delete(key)
-      this._deployBlueprintsForApp(appName).catch(err => {
+      this._deployBlueprintsForApp(appName, null, null, { build }).catch(err => {
         console.error(`❌ Deploy failed for ${appName}:`, err?.message || err)
       })
     }, 750)
@@ -877,8 +1109,15 @@ export class DirectAppServer {
     return this._resolveLocalBlueprintToAssetUrls(payload, { upload: uploadAssets })
   }
 
-  async _buildDeployPlan(appName, infos, { uploadAssets = false, uploadScripts = false } = {}) {
-    const scriptInfo = await this._uploadScriptForApp(appName, infos[0].scriptPath, { upload: uploadScripts })
+  async _buildDeployPlan(
+    appName,
+    infos,
+    { uploadAssets = false, uploadScripts = false, build = true } = {}
+  ) {
+    const scriptInfo = await this._uploadScriptForApp(appName, infos[0].scriptPath, {
+      upload: uploadScripts,
+      build,
+    })
     const changes = []
     for (const info of infos) {
       const desired = await this._prepareBlueprintPayload(info, scriptInfo, { uploadAssets })
@@ -979,9 +1218,10 @@ export class DirectAppServer {
     const list = infos || Array.from(blueprintIndex.values()).filter(item => item.appName === appName)
     if (!list.length) return
 
+    const build = options.build !== false
     const preview = !!options.preview || !!options.dryRun
     const note = typeof options.note === 'string' && options.note.trim() ? options.note.trim() : null
-    const plan = await this._buildDeployPlan(appName, list)
+    const plan = await this._buildDeployPlan(appName, list, { build })
     const summary = this._summarizeDeployPlan(plan)
     if (preview) {
       this._printDeployPlan(appName, summary)
@@ -996,17 +1236,30 @@ export class DirectAppServer {
 
     await this._withDeployLock(async () => {
       await this._createDeploySnapshot(snapshotIds, { note: snapshotNote })
-      const scriptInfo = await this._uploadScriptForApp(appName, list[0].scriptPath)
+      const scriptInfo = await this._uploadScriptForApp(appName, list[0].scriptPath, { build })
       for (const info of list) {
         await this._deployBlueprint(info, scriptInfo)
       }
     }, { owner: this._getDeployLockOwner(appName) })
   }
 
-  async _uploadScriptForApp(appName, scriptPath = null, { upload = true } = {}) {
-    const resolvedPath = scriptPath || this._getScriptPath(appName)
+  async _uploadScriptForApp(appName, scriptPath = null, { upload = true, build = true } = {}) {
+    let buildResult = null
+    if (build) {
+      buildResult = await buildApp({ rootDir: this.rootDir, appName })
+      if (buildResult.errors?.length) {
+        const details = formatBuildErrors(buildResult.errors)
+        const suffix = details.length ? `:\n${details.join('\n')}` : ''
+        const err = new Error(`App build failed for ${appName}${suffix}`)
+        err.code = 'build_failed'
+        throw err
+      }
+    }
+
+    const resolvedPath =
+      buildResult?.outfile || path.join(this.rootDir, 'dist', 'apps', `${appName}.js`)
     if (!resolvedPath || !fs.existsSync(resolvedPath)) {
-      throw new Error(`missing_script:${appName}`)
+      throw new Error(`missing_built_script:${appName}`)
     }
     const scriptText = fs.readFileSync(resolvedPath, 'utf8')
     const scriptHash = sha256(Buffer.from(scriptText, 'utf8'))
@@ -1250,7 +1503,7 @@ export class DirectAppServer {
     }
   }
 
-  async _writeBlueprintToDisk({ blueprint, force }) {
+  async _writeBlueprintToDisk({ blueprint, force, includeBuiltScripts = false }) {
     const { appName, fileBase } = parseBlueprintId(blueprint.id)
     const appPath = path.join(this.appsDir, appName)
     ensureDir(appPath)
@@ -1266,12 +1519,15 @@ export class DirectAppServer {
       }
     }
 
-    const scriptPath = path.join(appPath, 'index.js')
-    const shouldWriteScript = force || !fs.existsSync(scriptPath)
-    if (shouldWriteScript) {
-      const script = await this._downloadScript(blueprint.script)
-      if (script != null) {
-        this._writeFileAtomic(scriptPath, script)
+    if (includeBuiltScripts) {
+      const scriptPath = path.join(appPath, 'index.ts')
+      const shouldWriteScript = force || !fs.existsSync(scriptPath)
+      if (shouldWriteScript) {
+        const script = await this._downloadScript(blueprint.script)
+        if (script != null) {
+          const header = script.startsWith('// @ts-nocheck') ? '' : '// @ts-nocheck\n'
+          this._writeFileAtomic(scriptPath, `${header}${script}`)
+        }
       }
     }
   }
@@ -1457,6 +1713,12 @@ export async function main() {
   }
   const server = new DirectAppServer({ worldUrl, adminCode, deployCode })
   await server.start()
+  const shutdown = async () => {
+    await server.stop()
+    process.exit(0)
+  }
+  process.on('SIGINT', shutdown)
+  process.on('SIGTERM', shutdown)
   await new Promise(() => {})
 }
 
