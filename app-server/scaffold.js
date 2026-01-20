@@ -8,6 +8,8 @@ import { uuid } from './utils.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const TEMPLATES_DIR = path.join(__dirname, 'templates')
+const DOCS_TEMPLATE_DIR = path.join(__dirname, '..', 'docs')
+const CLAUDE_MD_TEMPLATE = path.join(TEMPLATES_DIR, 'claude', 'CLAUDE.md')
 const CLAUDE_SKILL_TEMPLATE = path.join(
   TEMPLATES_DIR,
   'claude',
@@ -194,6 +196,22 @@ function writeFileWithPolicy(filePath, content, { force, writeFile, report }) {
   return exists ? 'updated' : 'created'
 }
 
+function copyDirWithPolicy(srcDir, destDir, { force, writeFile, report }) {
+  if (!fs.existsSync(srcDir)) return
+  const entries = fs.readdirSync(srcDir, { withFileTypes: true })
+  for (const entry of entries) {
+    const srcPath = path.join(srcDir, entry.name)
+    const destPath = path.join(destDir, entry.name)
+    if (entry.isDirectory()) {
+      copyDirWithPolicy(srcPath, destPath, { force, writeFile, report })
+      continue
+    }
+    if (!entry.isFile()) continue
+    const buffer = fs.readFileSync(srcPath)
+    writeFileWithPolicy(destPath, buffer, { force, writeFile, report })
+  }
+}
+
 function resolveBuiltinScriptPath(filename) {
   const buildPath = path.join(__dirname, '..', 'build', 'world', 'assets', filename)
   if (fs.existsSync(buildPath)) return buildPath
@@ -314,12 +332,29 @@ export function scaffoldBaseProject({
     report,
   })
 
+  copyDirWithPolicy(DOCS_TEMPLATE_DIR, path.join(rootDir, 'docs'), {
+    force,
+    writeFile,
+    report,
+  })
+
   if (fs.existsSync(CLAUDE_SKILL_TEMPLATE)) {
     const skillContent = readText(CLAUDE_SKILL_TEMPLATE)
     if (skillContent != null) {
       writeFileWithPolicy(
         path.join(rootDir, '.claude', 'skills', 'hyperfy-app-scripting', 'SKILL.md'),
         skillContent.endsWith('\n') ? skillContent : `${skillContent}\n`,
+        { force, writeFile, report }
+      )
+    }
+  }
+
+  if (fs.existsSync(CLAUDE_MD_TEMPLATE)) {
+    const docContent = readText(CLAUDE_MD_TEMPLATE)
+    if (docContent != null) {
+      writeFileWithPolicy(
+        path.join(rootDir, 'CLAUDE.md'),
+        docContent.endsWith('\n') ? docContent : `${docContent}\n`,
         { force, writeFile, report }
       )
     }
