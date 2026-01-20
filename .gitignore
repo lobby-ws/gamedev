@@ -9,4 +9,4 @@ build/
 /world*
 data/
 
-project/
+local_project/

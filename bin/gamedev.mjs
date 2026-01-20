@@ -445,6 +445,97 @@ async function startCommand(args = []) {
   return new Promise(() => {})
 }
 
+async function appServerCommand(args = []) {
+  let target = null
+  try {
+    const parsed = parseTargetArgs(args)
+    target = parsed.target ? resolveTarget(projectDir, parsed.target) : null
+  } catch (err) {
+    console.error(`Error: ${err?.message || err}`)
+    return 1
+  }
+
+  const envResult = ensureEnvForStart()
+  if (!envResult.ok) return 1
+  let env = envResult.env
+  if (target) {
+    applyTargetEnv(target)
+    env = {
+      ...env,
+      WORLD_URL: target.worldUrl || env.WORLD_URL,
+      WORLD_ID: target.worldId || env.WORLD_ID,
+      ADMIN_CODE: typeof target.adminCode === 'string' ? target.adminCode : env.ADMIN_CODE,
+      DEPLOY_CODE: typeof target.deployCode === 'string' ? target.deployCode : env.DEPLOY_CODE,
+    }
+  }
+
+  const baseErrors = validateBaseEnv(env)
+  if (baseErrors.length) {
+    console.error('Error: Issues in .env:')
+    for (const error of baseErrors) {
+      console.error(`  - ${error}`)
+    }
+    console.error('Hint: Update .env and try again.')
+    return 1
+  }
+
+  const localMode = isLocalWorld({ worldUrl: env.WORLD_URL, worldId: env.WORLD_ID })
+
+  const artifacts = resolveServerPaths({ needsWorldServer: false })
+  if (!artifacts) return 1
+
+  const appProjectDir = path.join(projectDir, 'project')
+  fs.mkdirSync(appProjectDir, { recursive: true })
+
+  if (localMode) {
+    console.log(`World: Local world detected, waiting for server (${env.WORLD_URL})`)
+    const ready = await waitForWorldReady(env.WORLD_URL)
+    if (!ready) {
+      console.error('Error: Local world server did not become ready in time.')
+      console.error('Hint: Start the world server separately or run "gamedev dev".')
+      return 1
+    }
+  } else {
+    console.log('World: Remote world detected, skipping local world server.')
+  }
+
+  const envBase = { ...process.env, ...env }
+  const children = []
+
+  console.log('Sync: Starting app-server sync')
+  children.push(
+    spawnProcess('app server', process.execPath, [artifacts.appServerPath], {
+      cwd: appProjectDir,
+      env: envBase,
+    })
+  )
+
+  let shuttingDown = false
+  const shutdown = (code = 0) => {
+    if (shuttingDown) return
+    shuttingDown = true
+    for (const child of children) {
+      if (child && !child.killed) {
+        child.kill('SIGTERM')
+      }
+    }
+    setTimeout(() => process.exit(code), 250)
+  }
+
+  process.on('SIGINT', () => shutdown(0))
+  process.on('SIGTERM', () => shutdown(0))
+
+  for (const child of children) {
+    child.on('exit', (code, signal) => {
+      if (shuttingDown) return
+      const exitCode = signal ? 1 : code || 0
+      shutdown(exitCode)
+    })
+  }
+
+  return new Promise(() => {})
+}
+
 function printInitHelp() {
   console.log(`
 Gamedev Init
@@ -978,6 +1069,7 @@ Usage:
 Commands:
   init                      Scaffold a new world project in the current folder
   dev                       Start the world (local or remote) + app-server sync
+  app-server                Start app-server sync only (no world server)
   apps <command>            Manage apps (create, list, build, clean, deploy, update, validate, status)
   fly <command>             Fly.io deployment helpers
   world export              Export world.json + apps/assets from the world (use --include-built-scripts for scripts)
@@ -985,7 +1077,7 @@ Commands:
   help                      Show this help
 
 Options:
-  --target <name>           Use .lobby/targets.json entry (applies to dev/apps)
+  --target <name>           Use .lobby/targets.json entry (applies to dev/app-server/apps)
 `)
 }
 
@@ -997,6 +1089,8 @@ async function main() {
       return initCommand(args)
     case 'dev':
       return startCommand(args)
+    case 'app-server':
+      return appServerCommand(args)
     case 'apps':
       return appsCommand(args)
     case 'world':

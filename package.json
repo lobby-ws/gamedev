@@ -48,7 +48,8 @@
     "real-time"
   ],
   "scripts": {
-    "dev": "node scripts/build.mjs --dev",
+    "dev:runtime": "node scripts/build.mjs --dev",
+    "dev": "bash -c 'npm run dev:runtime & node bin/gamedev.mjs app-server & wait'",
     "build": "node scripts/build.mjs",
     "start": "node build/index.js",
     "prepublishOnly": "npm run build",
