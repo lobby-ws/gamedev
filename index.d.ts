@@ -1,7 +1,7 @@
 // Re-export App Runtime ambient declarations as a type-only module consumers can reference
 // Usage:
-//  - Per-file:   /// <reference types="hyperfy/app-runtime" />
-//  - tsconfig:   { "compilerOptions": { "types": ["hyperfy/app-runtime"] } }
+//  - Per-file:   /// <reference types="gamedev/app-runtime" />
+//  - tsconfig:   { "compilerOptions": { "types": ["gamedev/app-runtime"] } }
 export * as AppRuntime from './types/app-runtime'
 
 export declare function server(env?: Record<string, string | number | boolean | undefined>): Promise<void>

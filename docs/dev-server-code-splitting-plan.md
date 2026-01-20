@@ -168,7 +168,7 @@ Create:
 - `world.json` containing only the default scene entity at `[0,0,0]` and default settings/spawn:
   - Mirror the new-world migration expectations (one `$scene` entity)
 - `hyperfy.app-runtime.d.ts`:
-  - `/// <reference types="@drama.haus/hyperfy/app-runtime" />`
+  - `/// <reference types="gamedev/app-runtime" />`
 
 Then:
 - Build bundles to `dist/apps/*.js`.

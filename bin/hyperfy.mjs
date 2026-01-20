@@ -9,6 +9,7 @@ import { customAlphabet } from 'nanoid'
 
 import { HyperfyCLI, runAppCommand } from '../app-server/commands.js'
 import { DirectAppServer } from '../app-server/direct.js'
+import { scaffoldBaseProject, scaffoldBuiltins, writeManifest } from '../app-server/scaffold.js'
 import { applyTargetEnv, parseTargetArgs, resolveTarget, readTargets } from '../app-server/targets.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -464,6 +465,105 @@ async function startCommand(args = []) {
   }
 
   return new Promise(() => {})
+}
+
+function printInitHelp() {
+  console.log(`
+Hyperfy Init
+
+Usage:
+  hyperfy init [options]
+
+Options:
+  --name <package>          Package name (defaults to folder name)
+  --force, -f               Overwrite existing scaffold files
+  --help, -h                Show this help
+`)
+}
+
+function parseInitArgs(args) {
+  const options = { name: null, force: false, help: false }
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]
+    if (arg === '--help' || arg === '-h') {
+      options.help = true
+      continue
+    }
+    if (arg === '--force' || arg === '-f') {
+      options.force = true
+      continue
+    }
+    if (arg === '--name') {
+      const value = args[i + 1]
+      if (!value || value.startsWith('-')) throw new Error('Missing value for --name')
+      options.name = value
+      i += 1
+      continue
+    }
+    if (arg.startsWith('--name=')) {
+      options.name = arg.slice('--name='.length)
+      continue
+    }
+    throw new Error(`Unknown option: ${arg}`)
+  }
+  return options
+}
+
+async function initCommand(args = []) {
+  let options
+  try {
+    options = parseInitArgs(args)
+  } catch (err) {
+    console.error(`Error: ${err?.message || err}`)
+    return 1
+  }
+  if (options.help) {
+    printInitHelp()
+    return 0
+  }
+
+  let baseReport
+  let builtinsReport
+  let manifestReport
+  try {
+    baseReport = scaffoldBaseProject({
+      rootDir: projectDir,
+      packageName: options.name,
+      force: options.force,
+    })
+    const builtins = scaffoldBuiltins({
+      rootDir: projectDir,
+      force: options.force,
+    })
+    builtinsReport = builtins.report
+    manifestReport = writeManifest({
+      rootDir: projectDir,
+      manifest: builtins.manifest,
+      force: options.force,
+    })
+  } catch (err) {
+    console.error(`Error: Init failed: ${err?.message || err}`)
+    return 1
+  }
+
+  const created = [...baseReport.created, ...builtinsReport.created, ...manifestReport.created]
+  const updated = [...baseReport.updated, ...builtinsReport.updated, ...manifestReport.updated]
+  const skipped = [...baseReport.skipped, ...builtinsReport.skipped, ...manifestReport.skipped]
+
+  if (created.length) {
+    console.log(`✅ Created ${created.length} file(s)`)
+  }
+  if (updated.length) {
+    console.log(`✏️  Updated ${updated.length} file(s)`)
+  }
+  if (!created.length && !updated.length) {
+    console.log('ℹ️  Nothing to scaffold (all files already exist)')
+  }
+  if (skipped.length && (created.length || updated.length)) {
+    console.log(`↪️  Skipped ${skipped.length} existing file(s)`)
+  }
+
+  return 0
 }
 
 async function appsCommand(args) {
@@ -973,6 +1073,7 @@ Usage:
   hyperfy <command> [options]
 
 Commands:
+  init                      Scaffold a new world project in the current folder
   start                     Start the world (local or remote) + app-server sync
   dev                       Alias for start
   apps <command>            Manage apps (create, list, build, clean, deploy, update, validate, status)
@@ -993,6 +1094,8 @@ async function main() {
   const [command, ...args] = process.argv.slice(2)
 
   switch (command) {
+    case 'init':
+      return initCommand(args)
     case 'start':
     case 'dev':
       return startCommand(args)

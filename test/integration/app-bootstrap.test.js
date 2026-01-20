@@ -26,7 +26,7 @@ test('scaffold writes builtins and world manifest', async () => {
 
   const typesPath = path.join(rootDir, 'hyperfy.app-runtime.d.ts')
   const typesContent = await fs.readFile(typesPath, 'utf8')
-  assert.equal(typesContent.trim(), '/// <reference types="@drama.haus/hyperfy/app-runtime" />')
+  assert.equal(typesContent.trim(), '/// <reference types="gamedev/app-runtime" />')
 
   const modelConfig = await readJson(path.join(rootDir, 'apps', 'Model', 'Model.json'))
   assert.equal(modelConfig.model, 'asset://Model.glb')

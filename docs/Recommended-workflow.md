@@ -2,6 +2,13 @@
 
 This is a practical split between builders (world layout) and developers (app code) that keeps changes predictable and easy to sync.
 
+If you are starting from scratch, scaffold a project first:
+
+```bash
+npx hyperfy init
+npm install
+```
+
 ---
 
 ### Builders (admin client)

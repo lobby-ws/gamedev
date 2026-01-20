@@ -2,13 +2,13 @@ import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
 import { EventEmitter } from 'events'
-import { fileURLToPath } from 'url'
 import { isEqual } from 'lodash-es'
 import { uuid } from './utils.js'
 import { WorldManifest } from './WorldManifest.js'
 import { deriveBlueprintId, parseBlueprintId, isBlueprintDenylist } from './blueprintUtils.js'
 import { buildApp, createAppWatch, formatBuildErrors } from './appBundler.js'
-import { BUILTIN_APP_TEMPLATES, BUILTIN_BLUEPRINT_IDS, SCENE_TEMPLATE } from './templates/builtins.js'
+import { scaffoldBaseProject, scaffoldBuiltins } from './scaffold.js'
+import { BUILTIN_BLUEPRINT_IDS, SCENE_TEMPLATE } from './templates/builtins.js'
 import { readPacket, writePacket } from '../src/core/packets.js'
 
 const BLUEPRINT_FIELDS = [
@@ -149,16 +149,6 @@ function formatNameList(items, limit = 6) {
   if (items.length <= limit) return items.join(', ')
   const shown = items.slice(0, limit).join(', ')
   return `${shown} (+${items.length - limit} more)`
-}
-
-const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-
-function resolveBuiltinScriptPath(filename) {
-  const buildPath = path.join(PACKAGE_ROOT, 'build', 'world', 'assets', filename)
-  if (fs.existsSync(buildPath)) return buildPath
-  const srcPath = path.join(PACKAGE_ROOT, 'src', 'world', 'assets', filename)
-  if (fs.existsSync(srcPath)) return srcPath
-  return null
 }
 
 class WorldAdminClient extends EventEmitter {
@@ -619,63 +609,9 @@ export class DirectAppServer {
     return true
   }
 
-  _createDefaultManifest() {
-    const manifest = this.manifest.createEmpty()
-    manifest.entities = [
-      {
-        id: uuid(),
-        blueprint: SCENE_TEMPLATE.fileBase,
-        position: [0, 0, 0],
-        quaternion: [0, 0, 0, 1],
-        scale: [1, 1, 1],
-        pinned: false,
-        props: {},
-        state: {},
-      },
-    ]
-    return manifest
-  }
-
-  _writeAppRuntimeTypesFile() {
-    const filePath = path.join(this.rootDir, 'hyperfy.app-runtime.d.ts')
-    const content = '/// <reference types="@drama.haus/hyperfy/app-runtime" />\n'
-    if (fs.existsSync(filePath)) {
-      const existing = fs.readFileSync(filePath, 'utf8')
-      if (existing === content) return
-    }
-    this._writeFileAtomic(filePath, content)
-  }
-
-  _readBuiltinScript(template) {
-    const scriptPath = resolveBuiltinScriptPath(template.scriptAsset)
-    if (!scriptPath) {
-      throw new Error(`missing_builtin_script:${template.scriptAsset}`)
-    }
-    return fs.readFileSync(scriptPath, 'utf8')
-  }
-
   async _scaffoldLocalProject() {
-    ensureDir(this.appsDir)
-    const templates = [...BUILTIN_APP_TEMPLATES, SCENE_TEMPLATE]
-    for (const template of templates) {
-      const appDir = path.join(this.appsDir, template.appName)
-      ensureDir(appDir)
-
-      const blueprintPath = path.join(appDir, `${template.fileBase}.json`)
-      if (!fs.existsSync(blueprintPath)) {
-        this._writeFileAtomic(blueprintPath, JSON.stringify(template.config, null, 2) + '\n')
-      }
-
-      const scriptPath = path.join(appDir, 'index.ts')
-      if (!fs.existsSync(scriptPath)) {
-        const script = this._readBuiltinScript(template)
-        const content = `// @ts-nocheck\n${script}`
-        this._writeFileAtomic(scriptPath, content)
-      }
-    }
-
-    this._writeAppRuntimeTypesFile()
-    const manifest = this._createDefaultManifest()
+    scaffoldBaseProject({ rootDir: this.rootDir, writeFile: this._writeFileAtomic.bind(this) })
+    const { manifest } = scaffoldBuiltins({ rootDir: this.rootDir, writeFile: this._writeFileAtomic.bind(this) })
     this._writeWorldFile(manifest)
     return manifest
   }
