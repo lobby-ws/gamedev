@@ -696,26 +696,6 @@ export class ServerNetwork extends System {
     socket.send('pong', time)
   }
 
-  onEvmConnect = (socket, address) => {
-    this.world.evm.onEvmConnect(socket, address)
-  }
-
-  onEvmDisconnect = socket => {
-    this.world.evm.onEvmDisconnect(socket)
-  }
-
-  onEvmDeposit = async (socket, data) => {
-    const { amount, depositId } = data || {}
-    try {
-      if (!depositId) throw new Error('deposit_id_missing')
-      const result = await this.world.evm.deposit(socket.player, amount, depositId)
-      this.sendTo(socket.id, 'depositResult', { depositId, success: true, response: result })
-    } catch (err) {
-      const message = err?.message || err?.toString?.() || 'deposit_failed'
-      this.sendTo(socket.id, 'depositResult', { depositId, success: false, error: message })
-    }
-  }
-
   onDepositResponse = async (socket, data) => {
     try {
       await this.world.evm.onDepositResponse(socket, data)
