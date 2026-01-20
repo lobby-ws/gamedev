@@ -1,7 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 
-const TARGETS_FILE = path.join('.hyperfy', 'targets.json')
+const TARGETS_FILE = path.join('.lobby', 'targets.json')
 
 export function parseTargetArgs(args = []) {
   let target = null

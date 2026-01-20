@@ -16,7 +16,7 @@ description: Hyperfy world-project app scripting workflow and constraints. Use w
 1. Identify the target app(s) and update the entry script at `apps/<AppName>/index.ts`.
 2. Update blueprint defaults in `apps/<AppName>/*.json` (model, props, flags).
 3. Keep per-instance overrides in `world.json`.
-4. Use `hyperfy dev` for continuous sync; use `hyperfy apps build --all` and `hyperfy apps deploy <app>` for explicit deploys.
+4. Use `gamedev dev` for continuous sync; use `gamedev apps build --all` and `gamedev apps deploy <app>` for explicit deploys.
 
 ## Runtime Constraints
 
@@ -38,4 +38,4 @@ description: Hyperfy world-project app scripting workflow and constraints. Use w
 ## Guardrails
 
 - Do not edit `dist/` (build output).
-- Do not edit `.hyperfy/*` except `targets.json` (local only).
+- Do not edit `.lobby/*` except `targets.json` (local only).

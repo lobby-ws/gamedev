@@ -29,9 +29,9 @@ dist/
 !.env.example
 
 # Local world state
-.hyperfy/*
-!.hyperfy/
-!.hyperfy/targets.example.json
+.lobby/*
+!.lobby/
+!.lobby/targets.example.json
 
 # Claude local settings
 .claude/settings.local.json
@@ -56,7 +56,7 @@ const DEFAULT_TSCONFIG = {
 
 function normalizePackageName(name, fallback) {
   const raw = (name || '').trim() || (fallback || '').trim()
-  const base = raw || 'hyperfy-world'
+  const base = raw || 'lobby-world'
   const scopeMatch = base.startsWith('@') ? base.split('/') : null
   if (scopeMatch && scopeMatch.length === 2) {
     const scope = scopeMatch[0].toLowerCase().replace(/[^a-z0-9._-]+/g, '')
@@ -64,7 +64,7 @@ function normalizePackageName(name, fallback) {
     if (scope && pkg) return `${scope}/${pkg}`
   }
   const normalized = base.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')
-  return normalized || 'hyperfy-world'
+  return normalized || 'lobby-world'
 }
 
 function buildPackageJson({ packageName, sdkName, sdkVersion }) {
@@ -79,8 +79,8 @@ function buildPackageJson({ packageName, sdkName, sdkVersion }) {
     private: true,
     type: 'module',
     scripts: {
-      dev: 'hyperfy dev',
-      build: 'hyperfy apps build --all',
+      dev: 'gamedev dev',
+      build: 'gamedev apps build --all',
       typecheck: 'tsc --noEmit',
     },
     devDependencies,
@@ -101,7 +101,7 @@ function resolveSdkVersion() {
 
 function buildEnvExample() {
   return `# Hyperfy project environment (example)
-# Run "hyperfy dev" to generate a local .env automatically.
+# Run "gamedev dev" to generate a local .env automatically.
 WORLD_URL=http://localhost:5000
 WORLD_ID=local-your-world-id
 ADMIN_CODE=your-admin-code
@@ -202,6 +202,58 @@ function resolveBuiltinScriptPath(filename) {
   return null
 }
 
+function resolveBuiltinAssetPath(filename) {
+  const buildPath = path.join(__dirname, '..', 'build', 'world', 'assets', filename)
+  if (fs.existsSync(buildPath)) return buildPath
+  const srcPath = path.join(__dirname, '..', 'src', 'world', 'assets', filename)
+  if (fs.existsSync(srcPath)) return srcPath
+  return null
+}
+
+function collectAssetFilenames(value, out) {
+  if (!out) out = new Set()
+  if (typeof value === 'string') {
+    if (value.startsWith('asset://')) {
+      out.add(value.slice('asset://'.length))
+    } else if (value.startsWith('assets/')) {
+      out.add(value.slice('assets/'.length))
+    }
+    return out
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectAssetFilenames(item, out)
+    }
+    return out
+  }
+  if (value && typeof value === 'object') {
+    for (const item of Object.values(value)) {
+      collectAssetFilenames(item, out)
+    }
+  }
+  return out
+}
+
+function toLocalAssetUrls(value) {
+  if (typeof value === 'string') {
+    if (value.startsWith('asset://')) {
+      return `assets/${value.slice('asset://'.length)}`
+    }
+    return value
+  }
+  if (Array.isArray(value)) {
+    return value.map(item => toLocalAssetUrls(item))
+  }
+  if (value && typeof value === 'object') {
+    const next = {}
+    for (const [key, item] of Object.entries(value)) {
+      next[key] = toLocalAssetUrls(item)
+    }
+    return next
+  }
+  return value
+}
+
 function readBuiltinScript(template) {
   const scriptPath = resolveBuiltinScriptPath(template.scriptAsset)
   if (!scriptPath) {
@@ -250,7 +302,7 @@ export function scaffoldBaseProject({
     report,
   })
 
-  writeFileWithPolicy(path.join(rootDir, '.hyperfy', 'targets.example.json'), buildTargetsExample(), {
+  writeFileWithPolicy(path.join(rootDir, '.lobby', 'targets.example.json'), buildTargetsExample(), {
     force,
     writeFile,
     report,
@@ -296,16 +348,21 @@ export function createDefaultManifest() {
 export function scaffoldBuiltins({ rootDir, force = false, writeFile } = {}) {
   const report = { created: [], updated: [], skipped: [] }
   const appsDir = path.join(rootDir, 'apps')
+  const assetsDir = path.join(rootDir, 'assets')
   ensureDir(appsDir)
 
   const templates = [...BUILTIN_APP_TEMPLATES, SCENE_TEMPLATE]
+  const assetFiles = new Set()
+
   for (const template of templates) {
+    collectAssetFilenames(template.config, assetFiles)
     const appDir = path.join(appsDir, template.appName)
     ensureDir(appDir)
 
     const blueprintPath = path.join(appDir, `${template.fileBase}.json`)
     if (!fs.existsSync(blueprintPath) || force) {
-      writeFileWithPolicy(blueprintPath, JSON.stringify(template.config, null, 2) + '\n', {
+      const localConfig = toLocalAssetUrls(template.config)
+      writeFileWithPolicy(blueprintPath, JSON.stringify(localConfig, null, 2) + '\n', {
         force,
         writeFile,
         report,
@@ -317,6 +374,34 @@ export function scaffoldBuiltins({ rootDir, force = false, writeFile } = {}) {
       const script = readBuiltinScript(template)
       const content = `// @ts-nocheck\n${script}`
       writeFileWithPolicy(scriptPath, content, { force, writeFile, report })
+    }
+  }
+
+  if (assetFiles.size) {
+    ensureDir(assetsDir)
+    for (const filename of assetFiles) {
+      const srcPath = resolveBuiltinAssetPath(filename)
+      if (!srcPath) {
+        throw new Error(`missing_builtin_asset:${filename}`)
+      }
+      const destPath = path.join(assetsDir, filename)
+      const exists = fs.existsSync(destPath)
+      if (exists && !force) {
+        report.skipped.push(destPath)
+        continue
+      }
+      const buffer = fs.readFileSync(srcPath)
+      if (writeFile) {
+        writeFile(destPath, buffer)
+      } else {
+        ensureDir(path.dirname(destPath))
+        fs.writeFileSync(destPath, buffer)
+      }
+      if (exists) {
+        report.updated.push(destPath)
+      } else {
+        report.created.push(destPath)
+      }
     }
   }
 

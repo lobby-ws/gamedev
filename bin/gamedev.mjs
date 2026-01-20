@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url'
 import { spawn } from 'child_process'
 import { customAlphabet } from 'nanoid'
 
-import { HyperfyCLI, runAppCommand } from '../app-server/commands.js'
+import { runAppCommand } from '../app-server/commands.js'
 import { DirectAppServer } from '../app-server/direct.js'
 import { scaffoldBaseProject, scaffoldBuiltins, writeManifest } from '../app-server/scaffold.js'
 import { applyTargetEnv, parseTargetArgs, resolveTarget, readTargets } from '../app-server/targets.js'
@@ -59,20 +59,13 @@ function writeDotEnv(filePath, content) {
   fs.writeFileSync(filePath, content.endsWith('\n') ? content : `${content}\n`, 'utf8')
 }
 
-const TARGETS_FILE = path.join('.hyperfy', 'targets.json')
+const TARGETS_FILE = path.join('.lobby', 'targets.json')
 
 function writeTargetsFile(targets, rootDir = projectDir) {
   const filePath = path.join(rootDir, TARGETS_FILE)
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
   fs.writeFileSync(filePath, JSON.stringify(targets, null, 2) + '\n', 'utf8')
   return filePath
-}
-
-function isProjectEmpty(dirPath) {
-  const ignore = new Set(['.git', '.DS_Store'])
-  if (!fs.existsSync(dirPath)) return true
-  const entries = fs.readdirSync(dirPath, { withFileTypes: true })
-  return entries.every(entry => ignore.has(entry.name))
 }
 
 function generateAdminCode() {
@@ -161,7 +154,7 @@ function isLocalWorld({ worldUrl }) {
 }
 
 function getWorldDir(worldId) {
-  return path.join(projectDir, '.hyperfy', worldId)
+  return path.join(projectDir, '.lobby', worldId)
 }
 
 function hasKey(env, key) {
@@ -282,15 +275,6 @@ function validateLocalEnv(env, derived) {
   return issues
 }
 
-async function confirmAction(prompt) {
-  if (!process.stdin.isTTY) return false
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
-  const answer = await new Promise(resolve => rl.question(prompt, resolve))
-  rl.close()
-  const normalized = (answer || '').trim().toLowerCase()
-  return normalized === 'y' || normalized === 'yes'
-}
-
 async function promptValue(prompt) {
   if (!process.stdin.isTTY) return null
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
@@ -302,12 +286,6 @@ async function promptValue(prompt) {
 
 function ensureEnvForStart() {
   if (!fs.existsSync(envPath)) {
-    if (!isProjectEmpty(projectDir)) {
-      console.error('Error: Missing .env in a non-empty project.')
-      console.error('Hint: Create a .env with WORLD_URL, WORLD_ID, ADMIN_CODE, and world server settings.')
-      return { ok: false }
-    }
-
     const worldId = `local-${uuid()}`
     const adminCode = generateAdminCode()
     const jwtSecret = generateJwtSecret()
@@ -469,10 +447,10 @@ async function startCommand(args = []) {
 
 function printInitHelp() {
   console.log(`
-Hyperfy Init
+Gamedev Init
 
 Usage:
-  hyperfy init [options]
+  gamedev init [options]
 
 Options:
   --name <package>          Package name (defaults to folder name)
@@ -563,12 +541,15 @@ async function initCommand(args = []) {
     console.log(`↪️  Skipped ${skipped.length} existing file(s)`)
   }
 
+  const envResult = ensureEnvForStart()
+  if (!envResult.ok) return 1
+
   return 0
 }
 
 async function appsCommand(args) {
   if (!args.length || ['help', '--help', '-h'].includes(args[0])) {
-    await runAppCommand({ command: 'help', args: [], rootDir: projectDir, helpPrefix: 'hyperfy apps' })
+    await runAppCommand({ command: 'help', args: [], rootDir: projectDir, helpPrefix: 'gamedev apps' })
     return 0
   }
 
@@ -589,7 +570,7 @@ async function appsCommand(args) {
   const env = readDotEnv(envPath)
   if (env) applyEnvToProcess(env)
 
-  return runAppCommand({ command, args: commandArgs, rootDir: projectDir, helpPrefix: 'hyperfy apps' })
+  return runAppCommand({ command, args: commandArgs, rootDir: projectDir, helpPrefix: 'gamedev apps' })
 }
 
 async function connectAdminServer({ worldUrl, adminCode, rootDir }) {
@@ -610,53 +591,6 @@ async function connectAdminServer({ worldUrl, adminCode, rootDir }) {
   }
 }
 
-async function projectCommand(args) {
-  if (!args.length || ['help', '--help', '-h'].includes(args[0])) {
-    printHelp()
-    return 0
-  }
-
-  if (args[0] !== 'reset') {
-    console.error(`Error: Unknown project command: ${args[0]}`)
-    printHelp()
-    return 1
-  }
-
-  const force = args.includes('--force') || args.includes('-f')
-  const cli = new HyperfyCLI({ rootDir: projectDir })
-  await cli.reset({ force })
-  return 0
-}
-
-async function worldsCommand(args) {
-  if (!args.length || ['help', '--help', '-h'].includes(args[0]) || args[0] === 'list') {
-    const root = path.join(projectDir, '.hyperfy')
-    if (!fs.existsSync(root)) {
-      console.log('Worlds: No local worlds found.')
-      return 0
-    }
-    const entries = fs
-      .readdirSync(root, { withFileTypes: true })
-      .filter(entry => entry.isDirectory())
-      .map(entry => entry.name)
-
-    if (!entries.length) {
-      console.log('Worlds: No local worlds found.')
-      return 0
-    }
-
-    console.log('Worlds: Local worlds:')
-    for (const entry of entries) {
-      console.log(`  - ${entry}`)
-    }
-    return 0
-  }
-
-  console.error(`Error: Unknown worlds command: ${args[0]}`)
-  printHelp()
-  return 1
-}
-
 async function worldCommand(args) {
   if (!args.length || ['help', '--help', '-h'].includes(args[0])) {
     printHelp()
@@ -665,7 +599,7 @@ async function worldCommand(args) {
 
   const action = args[0]
 
-  if (action === 'export' || action === 'import' || action === 'wipe') {
+  if (action === 'export' || action === 'import') {
     const env = readDotEnv(envPath)
     if (!env) {
       console.error('Error: Missing .env in this project.')
@@ -678,37 +612,6 @@ async function worldCommand(args) {
     if (!worldUrl || !worldId) {
       console.error('Error: Missing WORLD_URL or WORLD_ID in .env')
       return 1
-    }
-
-    if (action === 'wipe') {
-      if (!isLocalWorld({ worldUrl })) {
-        console.error('Error: WORLD_URL does not indicate a local world. Refusing to wipe.')
-        return 1
-      }
-
-      const worldDir = getWorldDir(worldId)
-      if (!fs.existsSync(worldDir)) {
-        console.log(`Worlds: No local world found at ${worldDir}`)
-        return 0
-      }
-
-      const force = args.includes('--force') || args.includes('-f')
-      if (!force) {
-        const ok = await confirmAction(`Delete local world data at ${worldDir}? (y/N): `)
-        if (!ok) {
-          console.log('World wipe cancelled')
-          return 1
-        }
-      }
-
-      try {
-        fs.rmSync(worldDir, { recursive: true, force: true })
-        console.log(`Deleted ${worldDir}`)
-        return 0
-      } catch (error) {
-        console.error(`Error: Failed to delete ${worldDir}`, error?.message || error)
-        return 1
-      }
     }
 
     let server
@@ -740,10 +643,10 @@ async function worldCommand(args) {
 
 function printFlyHelp() {
   console.log(`
-Hyperfy Fly
+Gamedev Fly
 
 Usage:
-  hyperfy fly <command> [options]
+  gamedev fly <command> [options]
 
 Commands:
   init                      Generate fly.toml and optional GitHub workflow
@@ -755,11 +658,11 @@ Init options:
   --region <code>           Fly region (default: ams)
   --persist                 Enable volume mount + SAVE_INTERVAL
   --world-id <id>           WORLD_ID override (default: fly-<app>)
-  --target <name>           Update .hyperfy/targets.json with worldUrl/worldId
+  --target <name>           Update .lobby/targets.json with worldUrl/worldId
   --force, -f               Overwrite existing fly.toml / workflow
 
 Secrets options:
-  --target <name>           Update .hyperfy/targets.json with generated codes
+  --target <name>           Update .lobby/targets.json with generated codes
   --no-deploy-code          Skip DEPLOY_CODE generation
   --force, -f               Overwrite existing target codes
 `)
@@ -1067,26 +970,22 @@ async function flyCommand(args) {
 
 function printHelp() {
   console.log(`
-Hyperfy CLI
+Gamedev CLI
 
 Usage:
-  hyperfy <command> [options]
+  gamedev <command> [options]
 
 Commands:
   init                      Scaffold a new world project in the current folder
-  start                     Start the world (local or remote) + app-server sync
-  dev                       Alias for start
+  dev                       Start the world (local or remote) + app-server sync
   apps <command>            Manage apps (create, list, build, clean, deploy, update, validate, status)
   fly <command>             Fly.io deployment helpers
-  project reset [--force]   Delete local apps/assets/world.json in this project
   world export              Export world.json + apps/assets from the world (use --include-built-scripts for scripts)
   world import              Import local apps + world.json into the world
-  world wipe [--force]      Delete the local world runtime directory for this project
-  worlds list               List local world directories in ./.hyperfy
   help                      Show this help
 
 Options:
-  --target <name>           Use .hyperfy/targets.json entry (applies to start/dev/apps)
+  --target <name>           Use .lobby/targets.json entry (applies to dev/apps)
 `)
 }
 
@@ -1096,17 +995,12 @@ async function main() {
   switch (command) {
     case 'init':
       return initCommand(args)
-    case 'start':
     case 'dev':
       return startCommand(args)
     case 'apps':
       return appsCommand(args)
-    case 'project':
-      return projectCommand(args)
     case 'world':
       return worldCommand(args)
-    case 'worlds':
-      return worldsCommand(args)
     case 'fly':
       return flyCommand(args)
     case 'help':

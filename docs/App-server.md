@@ -1,6 +1,6 @@
 # App-server
 
-App-server is the dev server that syncs local files to a world via `/admin`. It is intended for development only and can overwrite world state, so avoid running it against prod targets. For prod/staging, prefer explicit deploys (`hyperfy apps deploy`).
+App-server is the dev server that syncs local files to a world via `/admin`. It is intended for development only and can overwrite world state, so avoid running it against prod targets. For prod/staging, prefer explicit deploys (`gamedev apps deploy`).
 
 ---
 
@@ -28,15 +28,15 @@ Notes
   - `assets/` (downloaded referenced assets)
   - `world.json` (world layout + per-entity overrides)
 - If you want to pull script code from an existing world, use:
-  - `hyperfy world export --include-built-scripts`
-- `hyperfy dev` is the recommended entrypoint for continuous sync and will ask for confirmation on prod targets.
+  - `gamedev world export --include-built-scripts`
+- `gamedev dev` is the recommended entrypoint for continuous sync and will ask for confirmation on prod targets.
 - No browser Dev Tools / localhost relay is required.
 
 ---
 
 ### Multi-target config
 
-Define targets in `.hyperfy/targets.json` and pass `--target <name>` to the CLI or app-server.
+Define targets in `.lobby/targets.json` and pass `--target <name>` to the CLI or app-server.
 
 ```json
 {
@@ -58,8 +58,8 @@ Define targets in `.hyperfy/targets.json` and pass `--target <name>` to the CLI 
 
 ```bash
 node app-server/server.js --target dev
-hyperfy dev --target dev
-hyperfy apps deploy myApp --target prod
+gamedev dev --target dev
+gamedev apps deploy myApp --target prod
 ```
 
 ---
@@ -99,10 +99,10 @@ Tips
 - Each deploy creates a snapshot of the affected blueprints. Rollback restores the last snapshot (or a specific snapshot id).
 
 ```bash
-hyperfy apps deploy myApp --dry-run
-hyperfy apps deploy myApp --note "fix font sizing"
-hyperfy apps rollback
-hyperfy apps rollback <snapshotId>
+gamedev apps deploy myApp --dry-run
+gamedev apps deploy myApp --note "fix font sizing"
+gamedev apps rollback
+gamedev apps rollback <snapshotId>
 ```
 
 For prod targets, the CLI asks for confirmation unless you pass `--yes`.
@@ -111,7 +111,7 @@ For prod targets, the CLI asks for confirmation unless you pass `--yes`.
 
 ### Troubleshooting
 
-- Bootstrap didn’t happen: ensure the target world is empty/default or run `hyperfy world export --include-built-scripts`.
+- Bootstrap didn’t happen: ensure the target world is empty/default or run `gamedev world export --include-built-scripts`.
 - Unauthorized: ensure `ADMIN_CODE` matches the world server `ADMIN_CODE`.
 - Script updates rejected: ensure `DEPLOY_CODE` matches and the deploy lock is free.
 - WORLD_ID mismatch: set `WORLD_ID` to match the target world id.

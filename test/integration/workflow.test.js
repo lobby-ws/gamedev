@@ -222,7 +222,7 @@ test('workflow vnext integrations (server/app-server)', { timeout: 120000 }, asy
   await t.test('D1 targets config resolves without env', async () => {
     await withWorldServer(async world => {
       const rootDir = await createTempDir('hyperfy-targets-')
-      const targetDir = path.join(rootDir, '.hyperfy')
+      const targetDir = path.join(rootDir, '.lobby')
       fs.mkdirSync(targetDir, { recursive: true })
       const targetsPath = path.join(targetDir, 'targets.json')
       fs.writeFileSync(

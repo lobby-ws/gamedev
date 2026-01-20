@@ -17,7 +17,7 @@ async function main() {
     console.error(`❌ ${err?.message || err}`)
     process.exit(1)
   }
-  const exitCode = await runAppCommand({ command, args, helpPrefix: 'hyperfy' })
+  const exitCode = await runAppCommand({ command, args, helpPrefix: 'gamedev apps' })
   process.exit(exitCode)
 }
 

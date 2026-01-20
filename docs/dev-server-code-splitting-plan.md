@@ -27,7 +27,7 @@ It is written as a **tracked checklist** and organized into **PR-sized steps** f
   - Dev server is safe for development; prod deploy should be explicit and avoid world layout sync.
 - Remove default “fetch scripts from runtime” behavior:
   - By default, dev server does not download script code from the world.
-  - Provide an escape hatch: `hyperfy world export --include-built-scripts`.
+- Provide an escape hatch: `gamedev world export --include-built-scripts`.
 
 ---
 
@@ -140,18 +140,18 @@ Use when actively developing. Safe assumptions:
 ### Prod mode (explicit deploy only)
 Use for staging/prod worlds where gameplay may be in progress.
 - Do **not** run the continuous dev server (world layout sync is disruptive).
-- Use `hyperfy apps deploy <app>` to update scripts/blueprints explicitly.
+- Use `gamedev apps deploy <app>` to update scripts/blueprints explicitly.
 - Deploy remains protected by the existing deploy lock + snapshots (`src/server/admin.js`).
 
 CLI UX guidance:
-- Treat `hyperfy dev` (alias `hyperfy start`) as a development workflow.
+- Treat `gamedev dev` as a development workflow.
 - For prod targets, require an explicit confirmation / opt-in to run continuous sync (similar to existing deploy confirmation).
 
 ---
 
 ## Bootstrap / Initialization Behavior
 
-### `hyperfy start` in an empty project folder
+### `gamedev dev` in an empty project folder
 Instead of pulling code from the runtime server, scaffold local state from built-in templates and then push to the runtime:
 
 Create:
@@ -179,16 +179,16 @@ Then:
 Default behavior should be safe:
 - Error with a message explaining that script code is not fetched from the world anymore.
 - Provide the escape hatch:
-  - `hyperfy world export --include-built-scripts`
+  - `gamedev world export --include-built-scripts`
 
 ---
 
-## `hyperfy world export --include-built-scripts`
+## `gamedev world export --include-built-scripts`
 
 Purpose: migrate an existing world into a local project when you need the script code.
 
 Behavior:
-- Default `hyperfy world export`:
+- Default `gamedev world export`:
   - exports `world.json`, blueprint JSON, and any referenced non-built-in assets
   - does **not** write `apps/<app>/index.*`
 - With `--include-built-scripts`:
@@ -255,7 +255,7 @@ Behavior:
 - [x] Update `app-server/direct.js#_writeBlueprintToDisk`:
   - remove default `_downloadScript` → `apps/<app>/index.js` behavior
   - keep downloading referenced assets as today
-- [x] Extend `hyperfy world export` (in `bin/hyperfy.mjs`) to support:
+- [x] Extend `gamedev world export` (in `bin/gamedev.mjs`) to support:
   - `--include-built-scripts`
 - [x] Thread the flag to `DirectAppServer.exportWorldToDisk({ includeBuiltScripts })`
   - when true: download script and write to `apps/<app>/index.ts` (`// @ts-nocheck`)
@@ -265,15 +265,15 @@ Behavior:
 - [x] Add explicit language in docs that app-server is a **dev server**:
   - update `docs/App-server.md`
   - update `docs/Recommended-workflow.md`
-- [x] Add `hyperfy dev` messaging as the recommended entrypoint for continuous sync
+- [x] Add `gamedev dev` messaging as the recommended entrypoint for continuous sync
 - [x] Add guardrails for prod targets:
   - if target indicates prod (`confirm: true` or `HYPERFY_TARGET=prod`), require confirmation to run continuous sync
-  - leave `hyperfy apps deploy` as the recommended prod workflow
+  - leave `gamedev apps deploy` as the recommended prod workflow
 
 ### PR 7 (Optional) — Quality-of-life commands
-- [x] Add `hyperfy apps build <app>` (build only; no deploy)
-- [x] Add `hyperfy apps build --all` (build all apps)
-- [x] Add `hyperfy apps clean` to remove `dist/apps/*` (optional; keep out of default flow since artifacts should be saved)
+- [x] Add `gamedev apps build <app>` (build only; no deploy)
+- [x] Add `gamedev apps build --all` (build all apps)
+- [x] Add `gamedev apps clean` to remove `dist/apps/*` (optional; keep out of default flow since artifacts should be saved)
 
 ---
 
@@ -290,11 +290,11 @@ Behavior:
     - deploy occurs
     - runtime reflects changes
 - Export behavior:
-  - `hyperfy world export` does not write `index.ts`
-  - `hyperfy world export --include-built-scripts` writes `apps/<app>/index.ts`
+  - `gamedev world export` does not write `index.ts`
+  - `gamedev world export --include-built-scripts` writes `apps/<app>/index.ts`
 - Prod safety:
   - prod target refuses/asks confirmation for continuous sync
-  - `hyperfy apps deploy` remains explicit and works
+  - `gamedev apps deploy` remains explicit and works
 
 ---
 

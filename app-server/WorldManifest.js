@@ -22,7 +22,7 @@ export class WorldManifest {
       if (parsed.formatVersion !== 2) {
         throw new Error(
           'Invalid world.json format version. Expected formatVersion 2.\n' +
-            'Run "hyperfy world export" to regenerate world.json (formatVersion 2).'
+            'Run "gamedev world export" to regenerate world.json (formatVersion 2).'
         )
       }
 

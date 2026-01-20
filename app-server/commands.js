@@ -246,7 +246,7 @@ export class HyperfyCLI {
     const blueprints = listLocalBlueprints(this.appsDir)
     if (blueprints.length === 0) {
       console.log(`📝 No local blueprints found in ${this.appsDir}`)
-      console.log(`💡 Run "hyperfy world export" to pull blueprints from the world.`)
+      console.log(`💡 Run "gamedev world export" to pull blueprints from the world.`)
       console.log(`   Use --include-built-scripts if you need script code locally.`)
       return
     }
@@ -399,7 +399,7 @@ app.on("update", (delta) => {
       console.log(`✅ Successfully created app in world: ${appName}`)
       console.log(`   • Blueprint: ${blueprintId}`)
       console.log(`   • Entity:    ${entityId}`)
-      console.log(`💡 Run "hyperfy world export" to sync into ${this.appsDir}.`)
+      console.log(`💡 Run "gamedev world export" to sync into ${this.appsDir}.`)
       console.log(`   Use --include-built-scripts if you need script code locally.`)
     } catch (error) {
       console.error(`❌ Error creating app:`, error?.message || error)
@@ -563,7 +563,7 @@ app.on("update", (delta) => {
         console.log(`✅ Script validation passed for ${appName}`)
         console.log(`🔗 Hash: ${localHash}`)
       } else {
-        console.log(`💡 Run 'hyperfy apps deploy ${appName}' (or save the file with app-server running)`) 
+        console.log(`💡 Run 'gamedev apps deploy ${appName}' (or save the file with app-server running)`) 
       }
     } catch (error) {
       console.error(`❌ Error validating app:`, error?.message || error)
@@ -677,9 +677,9 @@ app.on("update", (delta) => {
     }
   }
 
-  showHelp({ commandPrefix = 'hyperfy apps' } = {}) {
+  showHelp({ commandPrefix = 'gamedev apps' } = {}) {
     console.log(`
-🚀 Hyperfy CLI (direct /admin mode)
+🚀 Gamedev CLI (direct /admin mode)
 
 Usage:
   ${commandPrefix} <command> [options]
@@ -697,7 +697,7 @@ Commands:
   reset [--force]            Delete local apps/assets/world.json
   status                     Show /admin snapshot summary
   help                       Show this help
-  --target <name>            Use .hyperfy/targets.json entry for WORLD_URL/WORLD_ID/ADMIN_CODE/DEPLOY_CODE
+  --target <name>            Use .lobby/targets.json entry for WORLD_URL/WORLD_ID/ADMIN_CODE/DEPLOY_CODE
 
 Options:
   --dry-run, -n              Show deploy plan without applying changes
@@ -739,7 +739,7 @@ export async function runAppCommand({ command, args = [], rootDir = process.cwd(
     }
   }
   const cli = new HyperfyCLI({ rootDir })
-  const commandPrefix = helpPrefix || 'hyperfy apps'
+  const commandPrefix = helpPrefix || 'gamedev apps'
   let exitCode = 0
 
   switch (command) {

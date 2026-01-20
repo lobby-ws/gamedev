@@ -558,7 +558,7 @@ export class DirectAppServer {
     } else if (!hasWorldFile && hasApps) {
       throw new Error(
         'world.json missing; cannot safely apply exact world layout. ' +
-          'Run "hyperfy world export" to generate it from the world, or create world.json to seed a new world.'
+          'Run "gamedev world export" to generate it from the world, or create world.json to seed a new world.'
       )
     } else {
       const manifest = this.manifest.read()
@@ -586,7 +586,7 @@ export class DirectAppServer {
       const err = new Error(
         'Local project is empty and this world already has content. ' +
           'Script code is not downloaded by default. ' +
-          'Run "hyperfy world export --include-built-scripts" to scaffold from the world.'
+          'Run "gamedev world export --include-built-scripts" to scaffold from the world.'
       )
       err.code = 'empty_project_requires_export'
       throw err
@@ -657,7 +657,7 @@ export class DirectAppServer {
   async importWorldFromDisk() {
     const manifest = this.manifest.read()
     if (!manifest) {
-      throw new Error('world.json missing. Run "hyperfy world export" to generate it first.')
+      throw new Error('world.json missing. Run "gamedev world export" to generate it first.')
     }
     const errors = this.manifest.validate(manifest)
     if (errors.length) {

@@ -1,12 +1,13 @@
 {
   "name": "gamedev",
-  "version": "0.0.2-alpha.0",
+  "version": "0.0.4-alpha.2",
   "type": "module",
   "main": "index.node.js",
   "types": "index.d.ts",
   "files": [
     "build/**",
     "app-server/**",
+    "src/core/packets.js",
     "index.node.js",
     "index.node-client.js",
     "index.d.ts",
@@ -65,7 +66,7 @@
     "test:integration": "node --test \"test/integration/**/*.test.js\""
   },
   "bin": {
-    "@drama.haus/hyperfy": "bin/hyperfy.mjs"
+    "gamedev": "bin/gamedev.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.859.0",

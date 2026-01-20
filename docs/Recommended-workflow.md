@@ -5,7 +5,7 @@ This is a practical split between builders (world layout) and developers (app co
 If you are starting from scratch, scaffold a project first:
 
 ```bash
-npx hyperfy init
+npx gamedev init
 npm install
 ```
 
@@ -23,20 +23,20 @@ When app-server is running, your instance edits are persisted into `world.json`,
 
 ### Developers (app-server / CLI)
 
-- Use `hyperfy dev` to run the dev server + continuous sync via `/admin`.
+- Use `gamedev dev` to run the dev server + continuous sync via `/admin`.
 - Edit template defaults in `apps/<appName>/*.json` and scripts in `apps/<appName>/index.ts` (or `index.js`).
-- Use `hyperfy apps deploy` for explicit prod/staging updates; avoid continuous sync in prod.
+- Use `gamedev apps deploy` for explicit prod/staging updates; avoid continuous sync in prod.
 - Use `world.json` for layout and per-instance overrides when you want changes tracked in git.
 - Use targets (`--target staging`, `--target prod`) for multi-environment deploys.
 
 Recommended commands:
 
 ```bash
-hyperfy dev --target dev
-hyperfy apps build myApp
-hyperfy apps deploy myApp --target staging --dry-run
-hyperfy apps deploy myApp --target prod --note "release-1"
-hyperfy apps rollback
+gamedev dev --target dev
+gamedev apps build myApp
+gamedev apps deploy myApp --target staging --dry-run
+gamedev apps deploy myApp --target prod --note "release-1"
+gamedev apps rollback
 ```
 
 ---
