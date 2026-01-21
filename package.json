@@ -8,6 +8,7 @@
     "build/**",
     "app-server/**",
     "docs/**",
+    "src/**",
     "src/core/packets.js",
     "index.node.js",
     "index.node-client.js",

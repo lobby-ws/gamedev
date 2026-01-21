@@ -1,6 +1,7 @@
 # Docs
 
 Project docs are copied into `docs/` on init. Start with `docs/scripting/README.md`.
+Engine source and reference docs are also available in `node_modules/gamedev/src/` and `node_modules/gamedev/docs/` after install.
 
 ## Creating Apps
 
