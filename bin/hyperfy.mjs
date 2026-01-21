@@ -19,7 +19,7 @@ const envPath = path.join(projectDir, '.env')
 const ALPHABET = '1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
 const uuid = customAlphabet(ALPHABET, 10)
 
-const DEFAULT_WORLD_URL = 'http://localhost:5000'
+const DEFAULT_WORLD_URL = 'http://localhost:4000'
 
 function normalizeBaseUrl(url) {
   if (!url) return ''
@@ -362,7 +362,7 @@ async function startCommand() {
 
   const derived = deriveUrls(env.WORLD_URL)
   if (!derived) {
-    console.error('Error: WORLD_URL is invalid. Expected a full URL like http://localhost:5000')
+    console.error('Error: WORLD_URL is invalid. Expected a full URL like http://localhost:4000')
     return 1
   }
 

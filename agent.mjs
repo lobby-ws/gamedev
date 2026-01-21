@@ -98,7 +98,7 @@ if (!world.loader.getFile || !world.loader.insert) {
   }
 }
 
-const wsUrl = 'ws://localhost:5000/ws'
+const wsUrl = 'ws://localhost:4000/ws'
 
 // TODO:
 // - running two of these fails the second one because they both try to use the same authToken and get kicked (one per world)

@@ -472,7 +472,7 @@ Commands:
   help                       Show this help
 
 Environment:
-  WORLD_URL                  World server base URL (e.g. http://localhost:5000)
+  WORLD_URL                  World server base URL (e.g. http://localhost:4000)
   WORLD_ID                   World ID (must match remote worldId)
   ADMIN_CODE                 Admin code (if the world requires it)
 
