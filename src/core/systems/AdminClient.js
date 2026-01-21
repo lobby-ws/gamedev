@@ -32,11 +32,20 @@ export class AdminClient extends System {
     this.error = null
     this.queue = []
     this.code = null
+    this.deployCode = storage.get('deployCode')
+    this.deployLockToken = null
+    this.deployLockScope = null
     this.requireCode = false
   }
 
-  init({ adminUrl, requireAdminCode } = {}) {
+  init({ adminUrl, requireAdminCode, deployCode } = {}) {
     this.code = storage.get('adminCode')
+    if (deployCode !== undefined) {
+      this.deployCode = deployCode || null
+      storage.set('deployCode', this.deployCode)
+    } else if (this.deployCode === undefined) {
+      this.deployCode = storage.get('deployCode')
+    }
     if (adminUrl) {
       this.adminUrl = normalizeAdminUrl(adminUrl)
       this.requireCode = !!requireAdminCode
@@ -54,6 +63,15 @@ export class AdminClient extends System {
     this.code = code
     storage.set('adminCode', code)
     this.world.emit('admin-code', code)
+    this.error = null
+    this.disconnect()
+    this.connect()
+  }
+
+  setDeployCode(code) {
+    this.deployCode = code
+    storage.set('deployCode', code)
+    this.world.emit('deploy-code', code)
     this.error = null
     this.disconnect()
     this.connect()
@@ -94,6 +112,7 @@ export class AdminClient extends System {
     this.error = null
     this.sendPacket('adminAuth', {
       code: this.code,
+      deployCode: this.deployCode,
       subscriptions: { snapshot: false, players: false, runtime: false },
       networkId: this.world.network?.id || null,
     })
@@ -169,19 +188,112 @@ export class AdminClient extends System {
     if (!uploadResp.ok) throw new Error('upload_failed')
   }
 
-  blueprintAdd(blueprint, { ignoreNetworkId } = {}) {
+  getDeployHeaders() {
+    const headers = {}
+    if (this.code) headers['X-Admin-Code'] = this.code
+    if (this.deployCode) headers['X-Deploy-Code'] = this.deployCode
+    return Object.keys(headers).length > 0 ? headers : undefined
+  }
+
+  async acquireDeployLock({ owner, ttl, scope } = {}) {
+    if (!this.adminUrl) throw new Error('admin_url_missing')
+    const headers = this.getDeployHeaders() || {}
+    const payload = {}
+    if (owner) payload.owner = owner
+    if (ttl) payload.ttl = ttl
+    if (scope) payload.scope = scope
+    const res = await fetch(joinUrl(this.adminUrl, '/admin/deploy-lock'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers,
+      },
+      body: JSON.stringify(payload),
+    })
+    if (res.status === 403) {
+      const error = new Error('deploy_required')
+      error.code = 'deploy_required'
+      throw error
+    }
+    if (res.status === 409) {
+      let data = null
+      try {
+        data = await res.json()
+      } catch {}
+      const code = data?.error || 'locked'
+      const error = new Error(code)
+      error.code = code
+      error.lock = data?.lock
+      throw error
+    }
+    if (!res.ok) {
+      const error = new Error('deploy_lock_failed')
+      error.code = 'deploy_lock_failed'
+      throw error
+    }
+    const data = await res.json()
+    this.deployLockToken = data?.token || null
+    this.deployLockScope = scope || null
+    return data
+  }
+
+  async releaseDeployLock(token, scope) {
+    if (!this.adminUrl) throw new Error('admin_url_missing')
+    const lockToken = token || this.deployLockToken
+    if (!lockToken) return { ok: true }
+    const lockScope = scope || this.deployLockScope
+    const payload = { token: lockToken }
+    if (lockScope) payload.scope = lockScope
+    const headers = this.getDeployHeaders() || {}
+    const res = await fetch(joinUrl(this.adminUrl, '/admin/deploy-lock'), {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers,
+      },
+      body: JSON.stringify(payload),
+    })
+    if (res.status === 403) {
+      const error = new Error('deploy_required')
+      error.code = 'deploy_required'
+      throw error
+    }
+    if (!res.ok) {
+      let data = null
+      try {
+        data = await res.json()
+      } catch {}
+      const code = data?.error || 'deploy_lock_release_failed'
+      const error = new Error(code)
+      error.code = code
+      throw error
+    }
+    if (lockToken === this.deployLockToken) {
+      this.deployLockToken = null
+      this.deployLockScope = null
+    }
+    try {
+      return await res.json()
+    } catch {
+      return { ok: true }
+    }
+  }
+
+  blueprintAdd(blueprint, { ignoreNetworkId, lockToken } = {}) {
     this.send({
       type: 'blueprint_add',
       blueprint,
       networkId: ignoreNetworkId,
+      lockToken,
     })
   }
 
-  blueprintModify(change, { ignoreNetworkId } = {}) {
+  blueprintModify(change, { ignoreNetworkId, lockToken } = {}) {
     this.send({
       type: 'blueprint_modify',
       change,
       networkId: ignoreNetworkId,
+      lockToken,
     })
   }
 

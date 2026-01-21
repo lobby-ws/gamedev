@@ -96,6 +96,7 @@ Tips
 ### Deploy safety (locks, snapshots, rollback)
 
 - App-server acquires a deploy lock before applying script changes. If another deploy agent holds the lock, you will see a "locked" error.
+- Deploy locks are scoped per app; global locks still block all scopes. `.hyp` imports lock by blueprint id (or `$scene`).
 - Each deploy creates a snapshot of the affected blueprints. Rollback restores the last snapshot (or a specific snapshot id).
 
 ```bash

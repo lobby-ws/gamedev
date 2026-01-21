@@ -10,6 +10,7 @@ import { uuid } from '../utils'
 import { ControlPriorities } from '../extras/ControlPriorities'
 import { DEG2RAD, RAD2DEG } from '../extras/general'
 import { createNode } from '../extras/createNode'
+import { importApp } from '../extras/appTools'
 
 const FORWARD = new THREE.Vector3(0, 0, -1)
 const SNAP_DISTANCE = 1
@@ -1054,7 +1055,7 @@ export class ClientBuilder extends System {
     }
     // check file size
     const maxSize = this.world.network.maxUploadSize * 1024 * 1024
-    if (file.size > maxSize) {
+    if (ext !== 'hyp' && file.size > maxSize) {
       this.world.chat.add({
         id: uuid(),
         from: null,
@@ -1081,12 +1082,172 @@ export class ClientBuilder extends System {
       this.toggle(true)
     }
     const transform = this.getSpawnTransform()
+    if (ext === 'hyp') {
+      this.addApp(file, transform)
+    }
     if (ext === 'glb') {
       this.addModel(file, transform)
     }
     if (ext === 'vrm') {
       const canPlace = this.canBuild()
       this.addAvatar(file, transform, canPlace)
+    }
+  }
+
+  async addApp(file, transform) {
+    let lockToken = null
+    let blueprint = null
+    let app = null
+    try {
+      const info = await importApp(file)
+      const maxUploadSize = Number(this.world.network.maxUploadSize)
+      if (Number.isFinite(maxUploadSize) && maxUploadSize > 0) {
+        const maxBytes = maxUploadSize * 1024 * 1024
+        for (const asset of info.assets) {
+          if (asset.file.size > maxBytes) {
+            this.world.chat.add({
+              id: uuid(),
+              from: null,
+              fromId: null,
+              body: `File size too large (>${maxUploadSize}mb)`,
+              createdAt: moment().toISOString(),
+            })
+            console.error(`File too large. Maximum size is ${maxUploadSize}MB`)
+            return
+          }
+        }
+      }
+      for (const asset of info.assets) {
+        if (asset.type) {
+          this.world.loader.insert(asset.type, asset.url, asset.file)
+        } else {
+          this.world.loader.setFile?.(asset.url, asset.file)
+        }
+      }
+      if (info.blueprint.scene) {
+        const confirmed = await this.world.ui.confirm({
+          title: 'Scene',
+          message: 'Do you want to replace your current scene with this one?',
+          confirmText: 'Replace',
+          cancelText: 'Cancel',
+        })
+        if (!confirmed) return
+        const scene = this.world.blueprints.getScene()
+        const importedProps =
+          info.blueprint.props && typeof info.blueprint.props === 'object' && !Array.isArray(info.blueprint.props)
+            ? info.blueprint.props
+            : {}
+        const change = {
+          id: scene.id,
+          version: scene.version + 1,
+          name: info.blueprint.name,
+          image: info.blueprint.image,
+          author: info.blueprint.author,
+          url: info.blueprint.url,
+          desc: info.blueprint.desc,
+          model: info.blueprint.model,
+          script: info.blueprint.script,
+          props: importedProps,
+          preload: info.blueprint.preload,
+          public: info.blueprint.public,
+          locked: info.blueprint.locked,
+          frozen: info.blueprint.frozen,
+          unique: info.blueprint.unique,
+          scene: info.blueprint.scene,
+          disabled: info.blueprint.disabled,
+        }
+        if (Object.prototype.hasOwnProperty.call(change, 'script')) {
+          const result = await this.world.admin.acquireDeployLock({
+            owner: this.world.network.id,
+            scope: '$scene',
+          })
+          lockToken = result?.token || this.world.admin.deployLockToken
+        }
+        await Promise.all(info.assets.map(asset => this.world.admin.upload(asset.file)))
+        this.world.blueprints.modify(change)
+        this.world.admin.blueprintModify(change, { ignoreNetworkId: this.world.network.id, lockToken })
+        this.world.emit('toast', 'Imported app')
+        return
+      }
+      const importedProps =
+        info.blueprint.props && typeof info.blueprint.props === 'object' && !Array.isArray(info.blueprint.props)
+          ? info.blueprint.props
+          : {}
+      blueprint = {
+        id: uuid(),
+        version: 0,
+        name: info.blueprint.name,
+        image: info.blueprint.image,
+        author: info.blueprint.author,
+        url: info.blueprint.url,
+        desc: info.blueprint.desc,
+        model: info.blueprint.model,
+        script: info.blueprint.script,
+        props: importedProps,
+        preload: info.blueprint.preload,
+        public: info.blueprint.public,
+        locked: info.blueprint.locked,
+        frozen: info.blueprint.frozen,
+        unique: info.blueprint.unique,
+        scene: info.blueprint.scene,
+        disabled: info.blueprint.disabled,
+      }
+      if (blueprint.script) {
+        const result = await this.world.admin.acquireDeployLock({
+          owner: this.world.network.id,
+          scope: blueprint.id,
+        })
+        lockToken = result?.token || this.world.admin.deployLockToken
+      }
+      this.world.blueprints.add(blueprint)
+      this.world.admin.blueprintAdd(blueprint, { ignoreNetworkId: this.world.network.id, lockToken })
+      const data = {
+        id: uuid(),
+        type: 'app',
+        blueprint: blueprint.id,
+        position: transform.position,
+        quaternion: transform.quaternion,
+        scale: [1, 1, 1],
+        mover: null,
+        uploader: this.world.network.id,
+        pinned: false,
+        props: {},
+        state: {},
+      }
+      app = this.world.entities.add(data)
+      this.world.admin.entityAdd(data, { ignoreNetworkId: this.world.network.id })
+      await Promise.all(info.assets.map(asset => this.world.admin.upload(asset.file)))
+      app.onUploaded()
+      this.world.emit('toast', 'Imported app')
+    } catch (err) {
+      if (app) {
+        app.destroy(true)
+      }
+      if (blueprint) {
+        this.world.blueprints.remove(blueprint.id)
+        this.world.admin
+          ?.blueprintRemove?.(blueprint.id)
+          .catch(removeErr => console.error('failed to remove blueprint', removeErr))
+      }
+      const code = err?.code || err?.error || err?.message
+      if (code === 'locked' || code === 'deploy_locked') {
+        this.world.emit('toast', 'Deploy locked')
+        return
+      }
+      if (code === 'deploy_required') {
+        this.world.emit('toast', 'Deploy lock required')
+        return
+      }
+      console.error(err)
+      this.world.emit('toast', 'Import failed')
+    } finally {
+      if (lockToken && this.world.admin?.releaseDeployLock) {
+        try {
+          await this.world.admin.releaseDeployLock(lockToken)
+        } catch (releaseErr) {
+          console.error('failed to release deploy lock', releaseErr)
+        }
+      }
     }
   }
 

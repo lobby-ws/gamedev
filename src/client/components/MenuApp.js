@@ -15,7 +15,6 @@ import {
   MenuLine,
   MenuSection,
 } from './Menu'
-import { downloadFile } from '../../core/extras/downloadFile'
 import { hashFile } from '../../core/utils-client'
 import { isArray, isBoolean, isEqual, merge } from 'lodash-es'
 import { css } from '@firebolt-dev/css'

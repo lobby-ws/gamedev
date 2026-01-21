@@ -51,6 +51,7 @@ import {
 import { HintContext, HintProvider } from './Hint'
 import { useFullscreen } from './useFullscreen'
 import { downloadFile } from '../../core/extras/downloadFile'
+import { exportApp } from '../../core/extras/appTools'
 import { hashFile } from '../../core/utils-client'
 import { cloneDeep, isArray, isBoolean, isEqual, merge, sortBy } from 'lodash-es'
 import { storage } from '../../core/storage'
@@ -100,6 +101,17 @@ export function Sidebar({ world, ui }) {
     storage.set('admin-live', livePlayers)
   }, [livePlayers])
   const activePane = ui.active ? ui.pane : null
+  const downloadApp = async () => {
+    const app = ui.app
+    if (!app?.blueprint) return
+    try {
+      const file = await exportApp(app.blueprint, world.loader.loadFile)
+      downloadFile(file)
+    } catch (err) {
+      console.error(err)
+      world.emit('toast', 'Export failed')
+    }
+  }
   return (
     <HintProvider>
       <div
@@ -243,6 +255,9 @@ export function Sidebar({ world, ui }) {
                 onClick={() => world.ui.togglePane('meta')}
               >
                 <TagIcon size='1.25rem' />
+              </Btn>
+              <Btn onClick={downloadApp}>
+                <DownloadIcon size='1.25rem' />
               </Btn>
             </Section>
           )}

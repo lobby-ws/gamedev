@@ -376,8 +376,9 @@ class WorldAdminClient extends EventEmitter {
     return upload.json()
   }
 
-  async getDeployLockStatus() {
-    const res = await fetch(joinUrl(this.httpBase, '/admin/deploy-lock'), {
+  async getDeployLockStatus({ scope } = {}) {
+    const suffix = scope ? `?scope=${encodeURIComponent(scope)}` : ''
+    const res = await fetch(joinUrl(this.httpBase, `/admin/deploy-lock${suffix}`), {
       headers: this.adminHeaders({}, { includeDeploy: true }),
     })
     if (!res.ok) {
@@ -386,11 +387,13 @@ class WorldAdminClient extends EventEmitter {
     return res.json()
   }
 
-  async acquireDeployLock({ owner, ttl } = {}) {
+  async acquireDeployLock({ owner, ttl, scope } = {}) {
+    const payload = { owner, ttl }
+    if (scope) payload.scope = scope
     const res = await fetch(joinUrl(this.httpBase, '/admin/deploy-lock'), {
       method: 'POST',
       headers: this.adminHeaders({ 'Content-Type': 'application/json' }, { includeDeploy: true }),
-      body: JSON.stringify({ owner, ttl }),
+      body: JSON.stringify(payload),
     })
     if (!res.ok) {
       const data = await res.json().catch(() => null)
@@ -402,11 +405,13 @@ class WorldAdminClient extends EventEmitter {
     return res.json()
   }
 
-  async renewDeployLock({ token, ttl } = {}) {
+  async renewDeployLock({ token, ttl, scope } = {}) {
+    const payload = { token, ttl }
+    if (scope) payload.scope = scope
     const res = await fetch(joinUrl(this.httpBase, '/admin/deploy-lock'), {
       method: 'PUT',
       headers: this.adminHeaders({ 'Content-Type': 'application/json' }, { includeDeploy: true }),
-      body: JSON.stringify({ token, ttl }),
+      body: JSON.stringify(payload),
     })
     if (!res.ok) {
       const data = await res.json().catch(() => null)
@@ -418,11 +423,13 @@ class WorldAdminClient extends EventEmitter {
     return res.json()
   }
 
-  async releaseDeployLock({ token } = {}) {
+  async releaseDeployLock({ token, scope } = {}) {
+    const payload = { token }
+    if (scope) payload.scope = scope
     const res = await fetch(joinUrl(this.httpBase, '/admin/deploy-lock'), {
       method: 'DELETE',
       headers: this.adminHeaders({ 'Content-Type': 'application/json' }, { includeDeploy: true }),
-      body: JSON.stringify({ token }),
+      body: JSON.stringify(payload),
     })
     if (!res.ok) {
       const data = await res.json().catch(() => null)
@@ -434,11 +441,13 @@ class WorldAdminClient extends EventEmitter {
     return res.json()
   }
 
-  async createDeploySnapshot({ ids, target, note, lockToken } = {}) {
+  async createDeploySnapshot({ ids, target, note, lockToken, scope } = {}) {
+    const payload = { ids, target, note, lockToken }
+    if (scope) payload.scope = scope
     const res = await fetch(joinUrl(this.httpBase, '/admin/deploy-snapshots'), {
       method: 'POST',
       headers: this.adminHeaders({ 'Content-Type': 'application/json' }, { includeDeploy: true }),
-      body: JSON.stringify({ ids, target, note, lockToken }),
+      body: JSON.stringify(payload),
     })
     if (!res.ok) {
       const data = await res.json().catch(() => null)
@@ -450,11 +459,13 @@ class WorldAdminClient extends EventEmitter {
     return res.json()
   }
 
-  async rollbackDeploySnapshot({ id, lockToken } = {}) {
+  async rollbackDeploySnapshot({ id, lockToken, scope } = {}) {
+    const payload = { id, lockToken }
+    if (scope) payload.scope = scope
     const res = await fetch(joinUrl(this.httpBase, '/admin/deploy-snapshots/rollback'), {
       method: 'POST',
       headers: this.adminHeaders({ 'Content-Type': 'application/json' }, { includeDeploy: true }),
-      body: JSON.stringify({ id, lockToken }),
+      body: JSON.stringify(payload),
     })
     if (!res.ok) {
       const data = await res.json().catch(() => null)
@@ -484,6 +495,7 @@ export class DirectAppServer {
       deployCode: this.deployCode,
     })
     this.deployTimers = new Map()
+    this.deployQueues = new Map()
     this.pendingWrites = new Set()
     this.watchers = new Map()
     this.reconnecting = false
@@ -492,7 +504,6 @@ export class DirectAppServer {
     this.assetsUrl = null
     this.snapshot = null
     this.loggedTarget = false
-    this.deployLockToken = null
     this.appWatchers = new Map()
   }
 
@@ -1001,29 +1012,23 @@ export class DirectAppServer {
     return `app-server${label}:${target}:${process.pid}`
   }
 
-  async _acquireDeployLock({ owner } = {}) {
+  async _acquireDeployLock({ owner, scope } = {}) {
     const lockOwner = owner || this._getDeployLockOwner()
-    const result = await this.client.acquireDeployLock({ owner: lockOwner })
-    this.deployLockToken = result.token
-    return result.token
+    const result = await this.client.acquireDeployLock({ owner: lockOwner, scope })
+    return { token: result.token, scope }
   }
 
-  async _releaseDeployLock() {
-    const token = this.deployLockToken
+  async _releaseDeployLock({ token, scope } = {}) {
     if (!token) return
-    try {
-      await this.client.releaseDeployLock({ token })
-    } finally {
-      this.deployLockToken = null
-    }
+    await this.client.releaseDeployLock({ token, scope })
   }
 
-  async _withDeployLock(fn, { owner } = {}) {
-    await this._acquireDeployLock({ owner })
+  async _withDeployLock(fn, { owner, scope } = {}) {
+    const lock = await this._acquireDeployLock({ owner, scope })
     try {
-      return await fn()
+      return await fn(lock)
     } finally {
-      await this._releaseDeployLock()
+      await this._releaseDeployLock(lock)
     }
   }
 
@@ -1117,14 +1122,15 @@ export class DirectAppServer {
     }
   }
 
-  async _createDeploySnapshot(blueprintIds, { note } = {}) {
+  async _createDeploySnapshot(blueprintIds, { note, lockToken, scope } = {}) {
     if (!blueprintIds.length) return null
     const target = this._getDeployTargetName()
     return this.client.createDeploySnapshot({
       ids: blueprintIds,
       target,
       note,
-      lockToken: this.deployLockToken,
+      lockToken,
+      scope,
     })
   }
 
@@ -1149,6 +1155,21 @@ export class DirectAppServer {
   }
 
   async _deployBlueprintsForApp(appName, infos = null, index = null, options = {}) {
+    const prior = this.deployQueues.get(appName) || Promise.resolve()
+    const run = prior
+      .catch(() => {})
+      .then(() => this._deployBlueprintsForAppInternal(appName, infos, index, options))
+    let chained = run
+    chained = run.finally(() => {
+      if (this.deployQueues.get(appName) === chained) {
+        this.deployQueues.delete(appName)
+      }
+    })
+    this.deployQueues.set(appName, chained)
+    return chained
+  }
+
+  async _deployBlueprintsForAppInternal(appName, infos = null, index = null, options = {}) {
     this._logTarget()
     const blueprintIndex = index || this._indexLocalBlueprints()
     const list = infos || Array.from(blueprintIndex.values()).filter(item => item.appName === appName)
@@ -1170,13 +1191,13 @@ export class DirectAppServer {
       .filter(Boolean)
     const snapshotNote = note || process.env.DEPLOY_NOTE || null
 
-    await this._withDeployLock(async () => {
-      await this._createDeploySnapshot(snapshotIds, { note: snapshotNote })
+    await this._withDeployLock(async lock => {
+      await this._createDeploySnapshot(snapshotIds, { note: snapshotNote, lockToken: lock.token, scope: lock.scope })
       const scriptInfo = await this._uploadScriptForApp(appName, list[0].scriptPath, { build })
       for (const info of list) {
-        await this._deployBlueprint(info, scriptInfo)
+        await this._deployBlueprint(info, scriptInfo, { lockToken: lock.token })
       }
-    }, { owner: this._getDeployLockOwner(appName) })
+    }, { owner: this._getDeployLockOwner(appName), scope: appName })
   }
 
   async _uploadScriptForApp(appName, scriptPath = null, { upload = true, build = true } = {}) {
@@ -1210,7 +1231,7 @@ export class DirectAppServer {
     return { scriptUrl: `asset://${scriptFilename}`, scriptPath: resolvedPath, scriptText, scriptHash }
   }
 
-  async _deployBlueprint(info, scriptInfo) {
+  async _deployBlueprint(info, scriptInfo, { lockToken } = {}) {
     const cfg = readJson(info.configPath)
     if (!cfg || typeof cfg !== 'object') {
       console.error(`❌ Invalid blueprint config: ${info.configPath}`)
@@ -1229,14 +1250,14 @@ export class DirectAppServer {
     const current = this.snapshot?.blueprints?.get(info.id) || null
     if (!current) {
       resolved.version = 0
-      await this.client.request('blueprint_add', { blueprint: resolved, lockToken: this.deployLockToken })
+      await this.client.request('blueprint_add', { blueprint: resolved, lockToken })
     } else {
       const nextCompare = normalizeBlueprintForCompare(resolved)
       const currentCompare = normalizeBlueprintForCompare(current)
       if (isEqual(nextCompare, currentCompare)) return
       const attempt = async version => {
         resolved.version = version
-        await this.client.request('blueprint_modify', { change: resolved, lockToken: this.deployLockToken })
+        await this.client.request('blueprint_modify', { change: resolved, lockToken })
       }
       try {
         await attempt((current.version || 0) + 1)

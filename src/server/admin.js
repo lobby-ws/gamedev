@@ -75,12 +75,7 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
   const playerSubscribers = new Set()
   const runtimeSubscribers = new Set()
   const db = world?.network?.db
-  const deployLock = {
-    token: null,
-    owner: null,
-    acquiredAt: 0,
-    expiresAt: 0,
-  }
+  const deployLocks = new Map()
   const lockTtlSeconds = Number.parseInt(process.env.DEPLOY_LOCK_TTL || '120', 10)
   const lockTtlMs = Number.isFinite(lockTtlSeconds) && lockTtlSeconds > 0 ? lockTtlSeconds * 1000 : 120000
 
@@ -116,44 +111,109 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
     return true
   }
 
-  function normalizeLockState() {
-    if (!deployLock.token) return
-    if (Date.now() >= deployLock.expiresAt) {
-      deployLock.token = null
-      deployLock.owner = null
-      deployLock.acquiredAt = 0
-      deployLock.expiresAt = 0
+  function normalizeLockScope(scope) {
+    if (typeof scope !== 'string') return 'global'
+    const trimmed = scope.trim()
+    return trimmed ? trimmed : 'global'
+  }
+
+  function pruneExpiredDeployLocks() {
+    const now = Date.now()
+    for (const [scope, lock] of deployLocks.entries()) {
+      if (!lock || now >= lock.expiresAt) {
+        deployLocks.delete(scope)
+      }
     }
   }
 
-  function getDeployLockStatus() {
-    normalizeLockState()
-    if (!deployLock.token) {
-      return { locked: false }
-    }
-    const ageMs = Math.max(0, Date.now() - deployLock.acquiredAt)
-    const expiresInMs = Math.max(0, deployLock.expiresAt - Date.now())
+  function getLockStatus(lock, scope) {
+    if (!lock) return { locked: false }
+    const ageMs = Math.max(0, Date.now() - lock.acquiredAt)
+    const expiresInMs = Math.max(0, lock.expiresAt - Date.now())
     return {
       locked: true,
-      owner: deployLock.owner,
-      acquiredAt: deployLock.acquiredAt,
+      owner: lock.owner,
+      acquiredAt: lock.acquiredAt,
       ageMs,
       expiresInMs,
+      scope,
     }
   }
 
-  function ensureDeployLock(token) {
-    const status = getDeployLockStatus()
-    if (!status.locked) {
+  function getDeployLockStatus(scope) {
+    const normalizedScope = normalizeLockScope(scope)
+    pruneExpiredDeployLocks()
+    if (normalizedScope !== 'global') {
+      const globalLock = deployLocks.get('global')
+      if (globalLock) return getLockStatus(globalLock, 'global')
+    }
+    const lock = deployLocks.get(normalizedScope)
+    if (!lock) {
+      return { locked: false }
+    }
+    return getLockStatus(lock, normalizedScope)
+  }
+
+  function getBlockingLockStatus(scope) {
+    const normalizedScope = normalizeLockScope(scope)
+    pruneExpiredDeployLocks()
+    const globalLock = deployLocks.get('global')
+    if (globalLock) return getLockStatus(globalLock, 'global')
+    if (normalizedScope === 'global') {
+      for (const [key, lock] of deployLocks.entries()) {
+        if (key === 'global') continue
+        return getLockStatus(lock, key)
+      }
+      return null
+    }
+    const scopedLock = deployLocks.get(normalizedScope)
+    if (!scopedLock) return null
+    return getLockStatus(scopedLock, normalizedScope)
+  }
+
+  function findDeployLockByToken(token) {
+    if (!token) return null
+    pruneExpiredDeployLocks()
+    for (const [scope, lock] of deployLocks.entries()) {
+      if (lock?.token === token) {
+        return { scope, lock }
+      }
+    }
+    return null
+  }
+
+  function ensureDeployLock(token, scope) {
+    pruneExpiredDeployLocks()
+    const normalizedScope = normalizeLockScope(scope)
+    const globalLock = deployLocks.get('global')
+    if (globalLock) {
+      if (token && token === globalLock.token) {
+        return { ok: true }
+      }
+      return { ok: false, error: 'deploy_locked', lock: getLockStatus(globalLock, 'global') }
+    }
+    const lock = deployLocks.get(normalizedScope)
+    if (!lock) {
       return { ok: false, error: 'deploy_lock_required' }
     }
-    if (!token || token !== deployLock.token) {
-      return { ok: false, error: 'deploy_locked', lock: status }
+    if (!token || token !== lock.token) {
+      return { ok: false, error: 'deploy_locked', lock: getLockStatus(lock, normalizedScope) }
     }
     return { ok: true }
   }
 
-  async function createDeploySnapshot({ ids, target, note } = {}) {
+  function deriveLockScopeFromBlueprintId(id) {
+    if (typeof id !== 'string' || !id.trim()) return 'global'
+    if (id === '$scene') return '$scene'
+    const idx = id.indexOf('__')
+    if (idx !== -1) {
+      const appName = id.slice(0, idx)
+      return appName ? appName : 'global'
+    }
+    return id
+  }
+
+  async function createDeploySnapshot({ ids, target, note, scope } = {}) {
     if (!db) {
       throw new Error('db_unavailable')
     }
@@ -173,6 +233,7 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
     const meta = {
       target: typeof target === 'string' ? target : null,
       note: typeof note === 'string' ? note : null,
+      scope: typeof scope === 'string' && scope.trim() ? scope.trim() : null,
       worldId: world?.network?.worldId || null,
     }
     await db('deploy_snapshots').insert({
@@ -339,7 +400,8 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
               return
             }
             if (data.blueprint?.script) {
-              const lockCheck = ensureDeployLock(data?.lockToken)
+              const scope = deriveLockScopeFromBlueprintId(data.blueprint.id)
+              const lockCheck = ensureDeployLock(data?.lockToken, scope)
               if (!lockCheck.ok) {
                 sendPacket(ws, 'adminResult', {
                   ok: false,
@@ -376,7 +438,8 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
               return
             }
             if (hasScriptChange) {
-              const lockCheck = ensureDeployLock(data?.lockToken)
+              const scope = deriveLockScopeFromBlueprintId(change.id)
+              const lockCheck = ensureDeployLock(data?.lockToken, scope)
               if (!lockCheck.ok) {
                 sendPacket(ws, 'adminResult', {
                   ok: false,
@@ -579,73 +642,103 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
 
   fastify.get('/admin/deploy-lock', async (req, reply) => {
     if (!requireDeploy(req, reply)) return
-    return getDeployLockStatus()
+    const scope = normalizeHeader(req.query?.scope)
+    return getDeployLockStatus(scope)
   })
 
   fastify.post('/admin/deploy-lock', async (req, reply) => {
     if (!requireDeploy(req, reply)) return
-    const status = getDeployLockStatus()
-    if (status.locked) {
+    const rawScope = normalizeHeader(req.body?.scope)
+    const status = getBlockingLockStatus(rawScope)
+    if (status?.locked) {
       return reply.code(409).send({ error: 'locked', lock: status })
     }
+    const scope = normalizeLockScope(rawScope)
     const owner = typeof req.body?.owner === 'string' && req.body.owner.trim() ? req.body.owner.trim() : 'unknown'
     const ttlSeconds = Number.parseInt(req.body?.ttl, 10)
     const ttlMs =
       Number.isFinite(ttlSeconds) && ttlSeconds > 0 ? ttlSeconds * 1000 : lockTtlMs
     const token = crypto.randomUUID()
     const now = Date.now()
-    deployLock.token = token
-    deployLock.owner = owner
-    deployLock.acquiredAt = now
-    deployLock.expiresAt = now + ttlMs
+    deployLocks.set(scope, {
+      token,
+      owner,
+      acquiredAt: now,
+      expiresAt: now + ttlMs,
+    })
     return { ok: true, token, ttlMs }
   })
 
   fastify.put('/admin/deploy-lock', async (req, reply) => {
     if (!requireDeploy(req, reply)) return
     const token = req.body?.token
-    const status = getDeployLockStatus()
-    if (!status.locked) {
+    const rawScope = normalizeHeader(req.body?.scope)
+    const hasExplicitScope = typeof rawScope === 'string' && rawScope.trim()
+    let scope = normalizeLockScope(rawScope)
+    if (!hasExplicitScope) {
+      const found = findDeployLockByToken(token)
+      if (found) scope = found.scope
+    }
+    pruneExpiredDeployLocks()
+    const lock = deployLocks.get(scope)
+    if (!lock) {
       return reply.code(409).send({ error: 'not_locked' })
     }
-    if (!token || token !== deployLock.token) {
-      return reply.code(409).send({ error: 'not_owner', lock: status })
+    if (!token || token !== lock.token) {
+      return reply.code(409).send({ error: 'not_owner', lock: getLockStatus(lock, scope) })
     }
     const ttlSeconds = Number.parseInt(req.body?.ttl, 10)
     const ttlMs =
       Number.isFinite(ttlSeconds) && ttlSeconds > 0 ? ttlSeconds * 1000 : lockTtlMs
-    deployLock.expiresAt = Date.now() + ttlMs
+    lock.expiresAt = Date.now() + ttlMs
     return { ok: true, ttlMs }
   })
 
   fastify.delete('/admin/deploy-lock', async (req, reply) => {
     if (!requireDeploy(req, reply)) return
     const token = req.body?.token
-    const status = getDeployLockStatus()
-    if (!status.locked) {
+    const rawScope = normalizeHeader(req.body?.scope)
+    const hasExplicitScope = typeof rawScope === 'string' && rawScope.trim()
+    let scope = normalizeLockScope(rawScope)
+    if (!hasExplicitScope) {
+      const found = findDeployLockByToken(token)
+      if (found) scope = found.scope
+    }
+    pruneExpiredDeployLocks()
+    const lock = deployLocks.get(scope)
+    if (!lock) {
       return reply.code(409).send({ error: 'not_locked' })
     }
-    if (!token || token !== deployLock.token) {
-      return reply.code(409).send({ error: 'not_owner', lock: status })
+    if (!token || token !== lock.token) {
+      return reply.code(409).send({ error: 'not_owner', lock: getLockStatus(lock, scope) })
     }
-    deployLock.token = null
-    deployLock.owner = null
-    deployLock.acquiredAt = 0
-    deployLock.expiresAt = 0
+    deployLocks.delete(scope)
     return { ok: true }
   })
 
   fastify.post('/admin/deploy-snapshots', async (req, reply) => {
     if (!requireDeploy(req, reply)) return
-    const lockCheck = ensureDeployLock(req.body?.lockToken)
+    const ids = req.body?.ids
+    const scopeSet = new Set()
+    if (Array.isArray(ids)) {
+      for (const id of ids) {
+        scopeSet.add(deriveLockScopeFromBlueprintId(id))
+      }
+    }
+    if (scopeSet.size > 1) {
+      return reply.code(400).send({ error: 'multi_scope_not_supported' })
+    }
+    const scope = normalizeHeader(req.body?.scope)
+    const lockCheck = ensureDeployLock(req.body?.lockToken, scope)
     if (!lockCheck.ok) {
       return reply.code(409).send({ error: lockCheck.error, lock: lockCheck.lock })
     }
     try {
       const result = await createDeploySnapshot({
-        ids: req.body?.ids,
+        ids,
         target: req.body?.target,
         note: req.body?.note,
+        scope,
       })
       return { ok: true, ...result }
     } catch (err) {
@@ -656,7 +749,8 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
 
   fastify.post('/admin/deploy-snapshots/rollback', async (req, reply) => {
     if (!requireDeploy(req, reply)) return
-    const lockCheck = ensureDeployLock(req.body?.lockToken)
+    const scope = normalizeHeader(req.body?.scope)
+    const lockCheck = ensureDeployLock(req.body?.lockToken, scope)
     if (!lockCheck.ok) {
       return reply.code(409).send({ error: lockCheck.error, lock: lockCheck.lock })
     }
