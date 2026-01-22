@@ -801,15 +801,29 @@ export class DirectAppServer {
     }
   }
 
-  _startAppWatch(appName, { skipInitialBuild = false } = {}) {
+  _refreshAppWatch(appName, { skipInitialBuild = false } = {}) {
+    const entryPath = this._getScriptPath(appName)
+    const state = this.appWatchers.get(appName)
+    if (!entryPath) {
+      if (state) void this._stopAppWatch(appName)
+      return
+    }
+    if (state?.entryPath === entryPath) return
+    if (state) void this._stopAppWatch(appName)
+    this._startAppWatch(appName, { skipInitialBuild, entryPath })
+  }
+
+  _startAppWatch(appName, { skipInitialBuild = false, entryPath = null } = {}) {
     if (this.appWatchers.has(appName)) return
-    if (!this._getScriptPath(appName)) return
+    const resolvedEntry = entryPath || this._getScriptPath(appName)
+    if (!resolvedEntry) return
     const state = {
       hasError: false,
       skipInitialBuild: !!skipInitialBuild,
       disposed: false,
       dispose: null,
       ready: null,
+      entryPath: resolvedEntry,
     }
     this.appWatchers.set(appName, state)
     state.ready = createAppWatch({
@@ -904,7 +918,7 @@ export class DirectAppServer {
   _watchAppDir(appName, { skipInitialBuild = false } = {}) {
     const appPath = path.join(this.appsDir, appName)
     if (!fs.existsSync(appPath)) return
-    this._startAppWatch(appName, { skipInitialBuild })
+    this._refreshAppWatch(appName, { skipInitialBuild })
     if (this.watchers.has(appPath)) return
     const watcher = fs.watch(appPath, { recursive: false }, (eventType, filename) => {
       if (!filename) return
@@ -913,7 +927,7 @@ export class DirectAppServer {
       if (!fs.existsSync(abs) && eventType === 'change') return
 
       if (filename === 'index.js' || filename === 'index.ts') {
-        if (fs.existsSync(abs)) this._startAppWatch(appName)
+        this._refreshAppWatch(appName)
         return
       }
 
