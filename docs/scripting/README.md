@@ -8,18 +8,7 @@ Once scripting is stable we'll move toward a forward compatible model, which wil
 
 ## Lifecycle
 
-App scripts execute in every environment (server + each client). The top-level module code runs once per build in that environment, so treat it as initialization.
-
-Use `world.isServer` and `world.isClient` to split logic, and store shared server state on `app.state` so late-joining clients can initialize correctly.
-
-Update events:
-- `app.on('fixedUpdate', ...)` for fixed timestep logic
-- `app.on('update', ...)` for per-frame logic
-- `app.on('lateUpdate', ...)` for post-frame logic
-- `app.on('animate', ...)` for distance-based animation ticks
-
-Cleanup:
-- `app.on('destroy', ...)` fires when an app is rebuilt or removed. Unsubscribe events, release controls, and clear timers there.
+TODO: explain the app lifecycle across client and server
 
 ## Apps
 
@@ -44,15 +33,6 @@ The [Utils](./utils.md) documentation provides a set of miscellaneous globals av
 ## Networking
 
 Hyperfy [Networking](./Networking.md) happens inside of Apps, using methods from both the `App` and `World` APIs. You can either send events between the client and server on the same app, or send messages to external apps on the server. 
-
-## Bundling and Imports
-
-App scripts are bundled into a single file per app before deployment. Import rules:
-
-- Relative imports (`./` or `../`) are allowed within the same app folder.
-- Bare imports are allowed only if they resolve to `node_modules`.
-- Node builtins (`fs`, `path`, `crypto`, `node:*`) are not allowed.
-- Cross-app imports (e.g. `apps/OtherApp/...`) are blocked.
 
 ## Globals
 

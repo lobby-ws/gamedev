@@ -87,7 +87,13 @@ Defaults to `null`.
 ### `.pointerEvents`: Boolean
 
 Whether the UI should receive or ignore pointer events. Defaults to `true`.
-If you are building informational screen-space UI that does not need to respond to pointer events, this should be set to `false` for an improved user experience.
+
+When `true`, the UI can be interacted with via pointer events (raycasted in world-space, or clickable in screen-space).
+When `false`, the UI is not raycast-able and pointer events will pass through it.
+
+If you are building informational screen-space UI that does not need to respond to pointer events, this should be set to `false` for improved performance and user experience.
+
+Note: This property controls whether the UI is interactive at all. To handle specific pointer interactions, use the pointer event callbacks inherited from Node (`.onPointerEnter`, `.onPointerDown`, etc.).
 
 ### `.backgroundColor`: String
 

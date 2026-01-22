@@ -63,6 +63,17 @@ NOTE: Blender GLTF exporter renames objects in some cases, eg by removing spaces
 
 Creates and returns a node of the specified name.
 
+### `.asset(relativePath)`: String
+
+Resolves relative asset paths to absolute URLs that can be used to load app assets like images, models, or audio files.
+
+**Example:**
+```javascript
+const image = app.create('image')
+image.src = app.asset('./assets/sprite.png')
+app.add(image)
+```
+
 ### `.control(options)`
 
 Gives you control to listen for inputs and modify things like camera position. See [Control(/docs/scripting/app/Control.md) for more info.

@@ -52,7 +52,43 @@ Removes `otherNode` if it is a child of this node.
 
 Traverses this and all descendents calling `callback` with the node in the first argument.
 
+## Pointer Events
 
+All pointer event callbacks receive an event object with the following properties:
+- `type`: String - The event type (`'pointerenter'`, `'pointerleave'`, `'pointerdown'`, or `'pointerup'`)
+- `stopPropagation()`: Function - Call to prevent the event from bubbling to parent nodes
+
+### `.onPointerEnter`: Function
+
+Callback function that is called when the pointer enters this node.
+
+### `.onPointerLeave`: Function
+
+Callback function that is called when the pointer leaves this node.
+
+### `.onPointerDown`: Function
+
+Callback function that is called when the pointer button is pressed down on this node.
+
+### `.onPointerUp`: Function
+
+Callback function that is called when the pointer button is released on this node.
+
+## Examples
+
+### Pointer Events
+
+```javascript
+const box = app.create('prim', {
+  type: 'box',
+  size: [1, 1, 1],
+  color: 'blue',
+})
+
+box.onPointerEnter = () => {
+  box.color = 'red'
+}
+```
 
 
 

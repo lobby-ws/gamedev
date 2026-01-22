@@ -1,25 +1,25 @@
-# .hyp File Format
+# .hyp File Format Documentation
 
-The `.hyp` file format bundles a blueprint configuration with its associated assets so apps can be exported and re-imported.
-
-You can:
-- Export from the in-world App menu via `Download`.
-- Import by drag-and-dropping a `.hyp` file into the viewport.
+The `.hyp` file format is a custom binary format used for Hyperfy Apps that bundles a blueprint configuration with its associated assets.
 
 ## File Structure
 
-A `.hyp` file consists of three sections:
+A `.hyp` file consists of three main sections:
 
 1. Header Size (4 bytes)
-   - Uint32 (little-endian) indicating the size of the header JSON in bytes
+   - Uint32 value (little-endian) indicating the size of the header JSON in bytes
+
 2. Header (JSON)
-   - Contains the `blueprint` and `assets` metadata
+   - Contains two main objects:
+     - `blueprint`: The app configuration
+     - `assets`: Metadata for all bundled assets
+
 3. Asset Data
-   - Raw bytes for each asset concatenated in order
+   - Raw binary data of all assets concatenated sequentially
 
 ## Header Format
 
-The header JSON has this shape:
+The header is a JSON object with the following structure:
 
 ```json
 {
@@ -27,17 +27,20 @@ The header JSON has this shape:
     "name": "string",
     "model": "string (optional)",
     "script": "string (optional)",
-    "image": "string|object (optional)",
+    "assetMap": {
+      "[relativePath: string]": "string"
+    },
     "props": {
-      "[key]": {
-        "type": "string (optional)",
+      [key: string]: {
+        "type": "string",
         "url": "string"
       }
-    }
+    },
+    "frozen": "boolean"
   },
   "assets": [
     {
-      "type": "model | avatar | script | texture | image | hdr | video | audio",
+      "type": "model | avatar | script",
       "url": "string",
       "size": "number",
       "mime": "string"
@@ -46,20 +49,62 @@ The header JSON has this shape:
 }
 ```
 
-## Binary Layout
+### Blueprint Properties
+
+- `name`: The name of the app (used for the output filename if not specified)
+- `model`: (Optional) URL of the main 3D model file
+- `script`: (Optional) URL of the app's script file
+- `assetMap`: (Optional) Map of app-relative paths (e.g. `assets/foo.png`) to canonical `asset://...` URLs.\n  - Used to make local app `.hyp` exports portable: runtime helpers like `app.asset('./assets/foo.png')` can return the bundled `asset://...` URL after import.\n  - When absent, `app.asset()` may resolve to `app://...` only for live local apps.
+- `props`: Object containing additional properties with associated assets
+- `frozen`: Boolean flag indicating if the app is locked/frozen
+
+### Asset Types
+
+Assets can be of different types:
+- `model`: 3D model files (e.g., .glb)
+- `avatar`: VRM avatar files
+- `script`: JavaScript files
+- `file`: Generic bundled files (e.g. images/data files) that may not be pre-parsed by the loader but are included for portability
+
+## File Operations
+
+### Exporting
+
+When creating a .hyp file:
+1. The blueprint is cloned
+2. All assets are collected from:
+   - Main model file
+   - Script file
+   - Props with URLs
+3. Header is created with blueprint and asset metadata
+4. Header size is written as first 4 bytes
+5. Header JSON is converted to bytes and written
+6. All asset files are appended sequentially
+
+### Importing
+
+When reading a .hyp file:
+1. First 4 bytes are read to determine header size
+2. Header JSON is parsed from the next bytes
+3. Remaining bytes are split into individual asset files based on size metadata
+4. Returns an object containing:
+   - The blueprint configuration
+   - Array of asset files with their metadata
+
+## Usage Example
+
+```javascript
+// Export a .hyp file
+const hypFile = await exportApp(blueprint, resolveFile)
+
+// Import a .hyp file
+const { blueprint, assets } = await importApp(hypFile)
+```
+
+## Binary Format Specification
 
 ```
 [Header Size (4 bytes)][Header JSON (variable size)][Asset1 Data][Asset2 Data]...
 ```
 
-## Usage
-
-```js
-// Export
-const hypFile = await exportApp(blueprint, resolveFile)
-
-// Import
-const { blueprint, assets } = await importApp(hypFile)
-```
-
-The header size is encoded in little-endian format.
+The format uses little-endian encoding for the header size value.
