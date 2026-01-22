@@ -104,23 +104,23 @@ function resolveSdkVersion() {
 function buildEnvExample() {
   return `# Hyperfy project environment (example)
 # Run "gamedev dev" to generate a local .env automatically.
-WORLD_URL=http://localhost:5000
+WORLD_URL=http://localhost:3000
 WORLD_ID=local-your-world-id
 ADMIN_CODE=your-admin-code
 DEPLOY_CODE=your-deploy-code
 
 # World server
-PORT=5000
+PORT=3000
 JWT_SECRET=your-jwt-secret
 SAVE_INTERVAL=60
 PUBLIC_PLAYER_COLLISION=false
 PUBLIC_MAX_UPLOAD_SIZE=12
-PUBLIC_WS_URL=ws://localhost:5000/ws
-PUBLIC_API_URL=http://localhost:5000/api
+PUBLIC_WS_URL=ws://localhost:3000/ws
+PUBLIC_API_URL=http://localhost:3000/api
 
 # Assets
 ASSETS=local
-ASSETS_BASE_URL=http://localhost:5000/assets
+ASSETS_BASE_URL=http://localhost:3000/assets
 ASSETS_S3_URI=
 
 # Database
@@ -144,7 +144,7 @@ function buildTargetsExample() {
   return JSON.stringify(
     {
       dev: {
-        worldUrl: 'http://localhost:5000',
+        worldUrl: 'http://localhost:3000',
         worldId: 'local-your-world-id',
         adminCode: 'your-admin-code',
         deployCode: 'your-deploy-code',

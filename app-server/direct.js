@@ -119,6 +119,14 @@ function normalizeAssetPath(value) {
   return value.replace(/\\/g, '/')
 }
 
+function getExistingAssetUrl(value) {
+  if (typeof value === 'string') return value
+  if (value && typeof value === 'object' && typeof value.url === 'string') {
+    return value.url
+  }
+  return null
+}
+
 function pickBlueprintFields(source) {
   const out = {}
   for (const key of BLUEPRINT_FIELDS) {
@@ -661,7 +669,12 @@ export class DirectAppServer {
     const blueprints = Array.isArray(nextSnapshot.blueprints) ? nextSnapshot.blueprints : []
     for (const blueprint of blueprints) {
       if (!blueprint?.id) continue
-      await this._writeBlueprintToDisk({ blueprint, force: true, includeBuiltScripts })
+      await this._writeBlueprintToDisk({
+        blueprint,
+        force: true,
+        includeBuiltScripts,
+        allowScriptOverwrite: includeBuiltScripts,
+      })
     }
   }
 
@@ -1442,7 +1455,7 @@ export class DirectAppServer {
 
   async _onRemoteBlueprint(blueprint) {
     this.snapshot.blueprints.set(blueprint.id, blueprint)
-    await this._writeBlueprintToDisk({ blueprint, force: true })
+    await this._writeBlueprintToDisk({ blueprint, force: true, includeBuiltScripts: true })
     const parsed = parseBlueprintId(blueprint.id)
     this._watchAppDir(parsed.appName)
   }
@@ -1460,25 +1473,32 @@ export class DirectAppServer {
     }
   }
 
-  async _writeBlueprintToDisk({ blueprint, force, includeBuiltScripts = false }) {
+  async _writeBlueprintToDisk({
+    blueprint,
+    force,
+    includeBuiltScripts = false,
+    allowScriptOverwrite = false,
+  }) {
     const { appName, fileBase } = parseBlueprintId(blueprint.id)
     const appPath = path.join(this.appsDir, appName)
     ensureDir(appPath)
 
     const blueprintPath = path.join(appPath, `${fileBase}.json`)
-    const localBlueprint = await this._blueprintToLocalConfig(appName, blueprint)
+    const existingConfig = readJson(blueprintPath)
+    const localBlueprint = await this._blueprintToLocalConfig(appName, blueprint, { existingConfig })
     if (force || !fs.existsSync(blueprintPath)) {
       this._writeFileAtomic(blueprintPath, JSON.stringify(localBlueprint, null, 2) + '\n')
     } else {
-      const existing = readJson(blueprintPath)
-      if (!isEqual(existing, localBlueprint)) {
+      if (!isEqual(existingConfig, localBlueprint)) {
         this._writeFileAtomic(blueprintPath, JSON.stringify(localBlueprint, null, 2) + '\n')
       }
     }
 
-    if (includeBuiltScripts) {
-      const scriptPath = path.join(appPath, 'index.ts')
-      const shouldWriteScript = force || !fs.existsSync(scriptPath)
+    const hasRemoteScript = typeof blueprint.script === 'string' && blueprint.script.length > 0
+    if (includeBuiltScripts && hasRemoteScript) {
+      const existingScriptPath = this._getScriptPath(appName)
+      const scriptPath = existingScriptPath || path.join(appPath, 'index.ts')
+      const shouldWriteScript = allowScriptOverwrite || !existingScriptPath
       if (shouldWriteScript) {
         const script = await this._downloadScript(blueprint.script)
         if (script != null) {
@@ -1515,8 +1535,12 @@ export class DirectAppServer {
     return null
   }
 
-  async _blueprintToLocalConfig(appName, blueprint) {
+  async _blueprintToLocalConfig(appName, blueprint, { existingConfig } = {}) {
     const output = {}
+    const existing =
+      existingConfig && typeof existingConfig === 'object' && !Array.isArray(existingConfig)
+        ? existingConfig
+        : null
     if (blueprint.author !== undefined) output.author = blueprint.author
     if (blueprint.url !== undefined) output.url = blueprint.url
     if (blueprint.desc !== undefined) output.desc = blueprint.desc
@@ -1529,10 +1553,12 @@ export class DirectAppServer {
     if (blueprint.scene !== undefined) output.scene = blueprint.scene
 
     if (typeof blueprint.model === 'string') {
+      const existingModel = typeof existing?.model === 'string' ? existing.model : null
       output.model = await this._maybeDownloadAsset(
         appName,
         blueprint.model,
-        `${appName}${path.extname(blueprint.model) || '.glb'}`
+        `${appName}${path.extname(blueprint.model) || '.glb'}`,
+        { existingUrl: existingModel }
       )
     } else if (blueprint.model !== undefined) {
       output.model = blueprint.model
@@ -1541,8 +1567,11 @@ export class DirectAppServer {
     if (blueprint.image && typeof blueprint.image === 'object') {
       const img = { ...blueprint.image }
       if (typeof img.url === 'string') {
+        const existingImageUrl = getExistingAssetUrl(existing?.image)
         const ext = path.extname(img.url) || '.png'
-        img.url = await this._maybeDownloadAsset(appName, img.url, `${appName}__image${ext}`)
+        img.url = await this._maybeDownloadAsset(appName, img.url, `${appName}__image${ext}`, {
+          existingUrl: existingImageUrl,
+        })
       }
       output.image = img
     } else if (blueprint.image == null) {
@@ -1553,12 +1582,18 @@ export class DirectAppServer {
 
     if (blueprint.props && typeof blueprint.props === 'object') {
       const props = {}
+      const existingProps =
+        existing?.props && typeof existing.props === 'object' && !Array.isArray(existing.props)
+          ? existing.props
+          : null
       for (const [key, value] of Object.entries(blueprint.props)) {
         if (value && typeof value === 'object' && typeof value.url === 'string') {
           const v = { ...value }
           const ext = path.extname(v.url) || ''
           const suggested = sanitizeFileBaseName(v.name || key) + ext
-          v.url = await this._maybeDownloadAsset(appName, v.url, suggested)
+          const existingUrl =
+            existingProps?.[key] && typeof existingProps[key] === 'object' ? existingProps[key].url : null
+          v.url = await this._maybeDownloadAsset(appName, v.url, suggested, { existingUrl })
           props[key] = v
         } else {
           props[key] = value
@@ -1572,7 +1607,7 @@ export class DirectAppServer {
     return output
   }
 
-  async _maybeDownloadAsset(appName, url, suggestedName) {
+  async _maybeDownloadAsset(appName, url, suggestedName, { existingUrl } = {}) {
     if (typeof url !== 'string') return url
     if (url.startsWith('assets/')) return url
     if (!url.startsWith('asset://')) return url
@@ -1582,6 +1617,21 @@ export class DirectAppServer {
 
     const ext = path.extname(filename).toLowerCase()
     const expectedHash = isHashedAssetFilename(filename) ? filename.slice(0, -ext.length).toLowerCase() : null
+    const normalizedExisting = typeof existingUrl === 'string' ? normalizeAssetPath(existingUrl) : null
+    if (normalizedExisting && normalizedExisting.startsWith('assets/')) {
+      const existingBase = path.basename(normalizedExisting)
+      const existingExt = path.extname(existingBase).toLowerCase()
+      if (!existingExt || existingExt === ext) {
+        suggestedName = existingBase
+      }
+      if (expectedHash) {
+        const absExisting = path.join(this.rootDir, normalizedExisting)
+        if (fs.existsSync(absExisting)) {
+          const existingHash = sha256(fs.readFileSync(absExisting))
+          if (existingHash === expectedHash) return normalizedExisting
+        }
+      }
+    }
 
     let buffer = null
     const maxAttempts = 4
