@@ -1516,8 +1516,7 @@ export class DirectAppServer {
       if (shouldWriteScript) {
         const script = await this._downloadScript(blueprint.script)
         if (script != null) {
-          const header = script.startsWith('// @ts-nocheck') ? '' : '// @ts-nocheck\n'
-          this._writeFileAtomic(scriptPath, `${header}${script}`)
+          this._writeFileAtomic(scriptPath, script)
         }
       }
     }

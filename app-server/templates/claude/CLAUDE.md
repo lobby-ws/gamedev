@@ -51,7 +51,7 @@ Rotations are in radians but you can use degrees by multiplying by the global co
 
 ## Globals
 
-Scripts execute in isolated compartments with a curated runtime API. See `hyperfy.app-runtime.d.ts` and `docs/scripting/README.md` for the current globals and methods. Common ones include:
+Scripts execute in isolated compartments with a curated runtime API. See `node_modules/gamedev/index.d.ts` (loaded via `compilerOptions.types: ["gamedev"]`) and `docs/scripting/README.md` for the current globals and methods. Common ones include:
 
 - app, world, props
 - Math, prng, uuid

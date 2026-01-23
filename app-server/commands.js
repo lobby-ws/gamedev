@@ -323,8 +323,7 @@ export class HyperfyCLI {
 
     const scriptPath = path.join(appDir, 'index.ts')
     if (!fs.existsSync(scriptPath)) {
-      const script = `// @ts-nocheck
-app.on('update', () => {})
+      const script = `app.on('update', () => {})
 `
       fs.writeFileSync(scriptPath, script, 'utf8')
     }

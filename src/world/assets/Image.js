@@ -80,7 +80,9 @@ const lit = props.lit
 const shadows = props.shadows
 
 const surface = app.get('Surface')
-app.remove(surface)
+if (surface) {
+  app.remove(surface)
+}
 
 const image = app.create('image')
 image.pivot = 'bottom-center'
@@ -89,7 +91,6 @@ image.width = width
 image.height = height
 image.fit = fit
 image.color = transparent ? 'transparent' : 'black'
-image.transparent = true
 image.doubleside = true
 image.lit = lit
 image.castShadow = shadows

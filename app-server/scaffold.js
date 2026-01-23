@@ -18,8 +18,6 @@ const CLAUDE_SKILL_TEMPLATE = path.join(
   'SKILL.md'
 )
 
-export const APP_RUNTIME_TYPES_REFERENCE = '/// <reference types="gamedev/app-runtime" />\n'
-
 const DEFAULT_GITIGNORE = `# Dependencies
 node_modules/
 
@@ -51,9 +49,9 @@ const DEFAULT_TSCONFIG = {
     strict: false,
     noEmit: true,
     skipLibCheck: true,
-    types: ['gamedev/app-runtime'],
+    types: ['gamedev'],
   },
-  include: ['apps/**/*', 'hyperfy.app-runtime.d.ts'],
+  include: ['apps/**/*'],
 }
 
 function normalizePackageName(name, fallback) {
@@ -326,12 +324,6 @@ export function scaffoldBaseProject({
     report,
   })
 
-  writeFileWithPolicy(path.join(rootDir, 'hyperfy.app-runtime.d.ts'), APP_RUNTIME_TYPES_REFERENCE, {
-    force,
-    writeFile,
-    report,
-  })
-
   copyDirWithPolicy(DOCS_TEMPLATE_DIR, path.join(rootDir, 'docs'), {
     force,
     writeFile,
@@ -407,8 +399,7 @@ export function scaffoldBuiltins({ rootDir, force = false, writeFile } = {}) {
     const scriptPath = path.join(appDir, 'index.ts')
     if (!fs.existsSync(scriptPath) || force) {
       const script = readBuiltinScript(template)
-      const content = `// @ts-nocheck\n${script}`
-      writeFileWithPolicy(scriptPath, content, { force, writeFile, report })
+      writeFileWithPolicy(scriptPath, script, { force, writeFile, report })
     }
   }
 

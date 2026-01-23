@@ -11,7 +11,10 @@ var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
 // apps/youtube/index.js
-app.get("Block").visible = false;
+var block = app.get("Block");
+if (block) {
+  block.visible = false;
+}
 function toEmbedUrl(url) {
   try {
     const u = new URL(url);

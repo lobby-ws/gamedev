@@ -1,8 +1,7 @@
-// Re-export App Runtime ambient declarations as a type-only module consumers can reference
+// App Runtime ambient declarations (globals for app scripts).
 // Usage:
-//  - Per-file:   /// <reference types="gamedev/app-runtime" />
-//  - tsconfig:   { "compilerOptions": { "types": ["gamedev/app-runtime"] } }
-export * as AppRuntime from './types/app-runtime'
+//  - Per-file:   /// <reference types="gamedev" />
+//  - tsconfig:   { "compilerOptions": { "types": ["gamedev"] } }
 
 export declare function server(env?: Record<string, string | number | boolean | undefined>): Promise<void>
 export declare function nodeClient(): Promise<unknown>
@@ -25,6 +24,20 @@ interface Vector3 {
   y: number
   z: number
   set(x: number, y: number, z: number): this
+  copy(v: Vector3): this
+  clone(): Vector3
+  add(v: Vector3): this
+  addVectors(a: Vector3, b: Vector3): this
+  sub(v: Vector3): this
+  subVectors(a: Vector3, b: Vector3): this
+  multiplyScalar(s: number): this
+  distanceTo(v: Vector3): number
+  normalize(): this
+  applyQuaternion(q: Quaternion): this
+  fromArray(array: number[], offset?: number): this
+  toArray(array?: number[], offset?: number): number[]
+  setFromMatrixPosition(m: Matrix4): this
+  setFromMatrixColumn(m: Matrix4, index: number): this
 }
 
 interface Quaternion {
@@ -33,6 +46,12 @@ interface Quaternion {
   z: number
   w: number
   set(x: number, y: number, z: number, w: number): this
+  copy(q: Quaternion): this
+  clone(): Quaternion
+  multiply(q: Quaternion): this
+  setFromEuler(e: Euler): this
+  setFromRotationMatrix(m: Matrix4): this
+  normalize(): this
 }
 
 interface Euler {
@@ -41,10 +60,19 @@ interface Euler {
   z: number
   order?: 'XYZ' | 'YXZ' | 'ZXY' | 'ZYX' | 'YZX' | 'XZY'
   set(x: number, y: number, z: number, order?: Euler['order']): this
+  setFromQuaternion(q: Quaternion, order?: Euler['order'], update?: boolean): this
+  setFromRotationMatrix(m: Matrix4, order?: Euler['order'], update?: boolean): this
 }
 
 interface Matrix4 {
   elements: number[]
+  clone(): Matrix4
+  copy(m: Matrix4): this
+  multiply(m: Matrix4): this
+  premultiply(m: Matrix4): this
+  multiplyMatrices(a: Matrix4, b: Matrix4): this
+  invert(): this
+  decompose(position: Vector3, quaternion: Quaternion, scale: Vector3): void
 }
 
 type Vector3Like = Vector3 | [number, number, number]
@@ -56,6 +84,7 @@ type EulerLike = Euler | [number, number, number]
 interface BaseNode {
   // Identity
   id: string
+  name: string
 
   // Transform
   position: Vector3
@@ -63,6 +92,10 @@ interface BaseNode {
   rotation: Euler
   scale: Vector3
   matrixWorld: Matrix4
+  active: boolean
+  visible?: boolean
+  geometry?: unknown
+  material?: unknown
 
   // Hierarchy
   parent: BaseNode | null
@@ -72,6 +105,13 @@ interface BaseNode {
   add<T extends BaseNode>(child: T): this
   remove<T extends BaseNode>(child: T): this
   traverse(visitor: (node: BaseNode) => void): void
+  get(id: string): BaseNode | null
+
+  // Pointer events
+  onPointerEnter?: (event: { type: string; stopPropagation(): void }) => void
+  onPointerLeave?: (event: { type: string; stopPropagation(): void }) => void
+  onPointerDown?: (event: { type: string; stopPropagation(): void }) => void
+  onPointerUp?: (event: { type: string; stopPropagation(): void }) => void
 }
 
 // -----------------------------
@@ -88,7 +128,7 @@ interface AudioNode extends BaseNode {
   loop: boolean
   group: 'music' | 'sfx'
   spatial: boolean
-  distanceModel: 'linear' | 'inverse' | 'expontential'
+  distanceModel: 'linear' | 'inverse' | 'exponential'
   refDistance: number
   maxDistance: number
   rolloffFactor: number
@@ -119,15 +159,20 @@ interface VideoNode extends BaseNode {
   volume: number
   group: 'music' | 'sfx'
   spatial: boolean
-  distanceModel: 'linear' | 'inverse' | 'expontential'
+  distanceModel: 'linear' | 'inverse' | 'exponential'
   refDistance: number
   maxDistance: number
   rolloffFactor: number
   coneInnerAngle: number
   coneOuterAngle: number
   coneOuterGain: number
+  readonly loading: boolean
+  readonly duration: number
+  readonly playing: boolean
   readonly isPlaying: boolean
+  time: number
   currentTime: number
+  onLoad?: () => void
   play(): void
   pause(): void
   stop(): void
@@ -170,8 +215,17 @@ interface SkyNode extends BaseNode {
 
 // Mesh family
 interface MeshNode extends BaseNode {
+  type: 'box' | 'sphere' | 'geometry'
+  width: number
+  height: number
+  depth: number
+  radius: number
+  geometry: unknown
+  material: unknown
+  linked: boolean
   castShadow: boolean
   receiveShadow: boolean
+  visible: boolean
 }
 
 interface MaterialNode {
@@ -218,6 +272,7 @@ interface ColliderNode extends BaseNode {
   type: 'box' | 'sphere' | 'geometry'
   setSize(width: number, height: number, depth: number): void
   radius: number
+  geometry: unknown
   convex: boolean
   trigger: boolean
 }
@@ -1011,6 +1066,7 @@ interface AppAPI extends BaseNode {
   readonly version: string
   state: Record<string, any>
   props: Record<string, any>
+  readonly config: Record<string, any>
   keepActive: boolean
 
   // Events
@@ -1039,6 +1095,7 @@ interface FieldBase {
   key: string
   label?: string
   hint?: string
+  hidden?: boolean
 }
 
 interface TextFieldSpec extends FieldBase {

@@ -110,7 +110,9 @@ const doubleside = props.doubleside
 const volume = props.volume
 
 const surface = app.get('Surface')
-app.remove(surface)
+if (surface) {
+  app.remove(surface)
+}
 
 const video = app.create('video')
 video.src = src

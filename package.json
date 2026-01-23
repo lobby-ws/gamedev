@@ -14,7 +14,6 @@
     "index.node-client.js",
     "index.d.ts",
     "index.node-client.d.ts",
-    "types/**",
     "bin/**",
     "README.md",
     "LICENSE"
@@ -31,8 +30,7 @@
       "import": "./index.node-client.js",
       "require": "./index.node-client.js",
       "default": "./index.node-client.js"
-    },
-    "./app-runtime": "./types/app-runtime.d.ts"
+    }
   },
   "homepage": "https://github.com/lobby-ws/gamedev#readme",
   "bugs": {

@@ -10,6 +10,15 @@ async function readJson(filePath) {
   return JSON.parse(content)
 }
 
+async function fileExists(filePath) {
+  try {
+    await fs.access(filePath)
+    return true
+  } catch {
+    return false
+  }
+}
+
 test('scaffold writes builtins and world manifest', async () => {
   const rootDir = await createTempDir('hyperfy-bootstrap-')
   const server = new DirectAppServer({ worldUrl: 'http://example.com', rootDir })
@@ -24,9 +33,10 @@ test('scaffold writes builtins and world manifest', async () => {
   assert.equal(world.entities.length, 1)
   assert.equal(world.entities[0].blueprint, '$scene')
 
-  const typesPath = path.join(rootDir, 'hyperfy.app-runtime.d.ts')
-  const typesContent = await fs.readFile(typesPath, 'utf8')
-  assert.equal(typesContent.trim(), '/// <reference types="gamedev/app-runtime" />')
+  const tsconfigPath = path.join(rootDir, 'tsconfig.json')
+  const tsconfig = await readJson(tsconfigPath)
+  assert.ok(tsconfig.compilerOptions.types.includes('gamedev'))
+  assert.equal(await fileExists(path.join(rootDir, 'hyperfy.app-runtime.d.ts')), false)
 
   const modelConfig = await readJson(path.join(rootDir, 'apps', 'Model', 'Model.json'))
   assert.equal(modelConfig.model, 'asset://Model.glb')
@@ -37,6 +47,6 @@ test('scaffold writes builtins and world manifest', async () => {
   assert.equal(sceneConfig.model, 'asset://The_Meadow.glb')
 
   const modelScript = await fs.readFile(path.join(rootDir, 'apps', 'Model', 'index.ts'), 'utf8')
-  assert.ok(modelScript.startsWith('// @ts-nocheck'))
+  assert.ok(!modelScript.startsWith('// @ts-nocheck'))
   assert.match(modelScript, /app\.configure/)
 })

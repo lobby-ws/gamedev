@@ -40,6 +40,6 @@ test('world export skips scripts by default and includes when requested', async 
   await server.exportWorldToDisk(snapshot, { includeBuiltScripts: true })
   assert.equal(await fileExists(scriptPath), true)
   const content = await fs.readFile(scriptPath, 'utf8')
-  assert.ok(content.startsWith('// @ts-nocheck'))
+  assert.ok(!content.startsWith('// @ts-nocheck'))
   assert.match(content, /console\.log\("hi"\)/)
 })

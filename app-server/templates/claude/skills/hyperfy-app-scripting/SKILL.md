@@ -32,7 +32,7 @@ description: Hyperfy world-project app scripting workflow and constraints. Use w
 
 ## Types
 
-- `hyperfy.app-runtime.d.ts` references `gamedev/app-runtime`.
+- `tsconfig.json` should set `compilerOptions.types` to `["gamedev"]` (loads `node_modules/gamedev/index.d.ts`).
 - Prefer `index.ts`; avoid Node globals/types in app scripts.
 
 ## Guardrails

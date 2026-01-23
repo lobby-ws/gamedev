@@ -87,7 +87,9 @@ const lit = props.lit
 const doubleside = props.doubleside
 
 const surface = app.get('Surface')
-app.remove(surface)
+if (surface) {
+  app.remove(surface)
+}
 
 const $ui = app.create('ui', {
   pivot: 'bottom-center',
@@ -108,5 +110,4 @@ const $text = app.create('uitext', {
 })
 $ui.add($text)
 app.add($ui)
-
 
