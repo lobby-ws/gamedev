@@ -982,15 +982,73 @@ export class DirectAppServer {
     if (this.pendingManifestWrite) clearTimeout(this.pendingManifestWrite)
     this.pendingManifestWrite = setTimeout(() => {
       this.pendingManifestWrite = null
-      if (!this.snapshot) return
-      const data = {
-        settings: this.snapshot.settings,
-        spawn: this.snapshot.spawn,
-        entities: Array.from(this.snapshot.entities.values()),
-      }
-      const manifest = this.manifest.fromSnapshot(data)
-      this._writeWorldFile(manifest)
+      void this._writeManifestFromSnapshot().catch(err => {
+        console.warn('⚠️  Failed to refresh world.json assets:', err?.message || err)
+      })
     }, 250)
+  }
+
+  async _writeManifestFromSnapshot() {
+    if (!this.snapshot) return
+    const data = {
+      settings: this.snapshot.settings,
+      spawn: this.snapshot.spawn,
+      entities: Array.from(this.snapshot.entities.values()),
+    }
+    const manifest = this.manifest.fromSnapshot(data)
+    if (this.assetsUrl) {
+      manifest.entities = await this._localizeEntityProps(manifest.entities, {
+        existingManifest: this.manifest.data,
+      })
+    }
+    this._writeWorldFile(manifest)
+  }
+
+  async _localizeEntityProps(entities, { existingManifest } = {}) {
+    if (!Array.isArray(entities) || entities.length === 0) return entities
+    const existingById = new Map()
+    if (Array.isArray(existingManifest?.entities)) {
+      for (const entity of existingManifest.entities) {
+        if (entity?.id) existingById.set(entity.id, entity)
+      }
+    }
+    const localized = []
+    for (const entity of entities) {
+      if (!entity || typeof entity !== 'object') {
+        localized.push(entity)
+        continue
+      }
+      const props =
+        entity.props && typeof entity.props === 'object' && !Array.isArray(entity.props)
+          ? entity.props
+          : null
+      if (!props) {
+        localized.push(entity)
+        continue
+      }
+      const existingEntity = existingById.get(entity.id)
+      const existingProps =
+        existingEntity?.props && typeof existingEntity.props === 'object' && !Array.isArray(existingEntity.props)
+          ? existingEntity.props
+          : null
+      const parsed = parseBlueprintId(entity.blueprint || '')
+      const appName = parsed?.appName || 'app'
+      const nextProps = {}
+      for (const [key, value] of Object.entries(props)) {
+        if (value && typeof value === 'object' && typeof value.url === 'string') {
+          const ext = path.extname(value.url) || ''
+          const suggested = sanitizeFileBaseName(value.name || key) + ext
+          const existingUrl =
+            existingProps?.[key] && typeof existingProps[key] === 'object' ? existingProps[key].url : null
+          const url = await this._maybeDownloadAsset(appName, value.url, suggested, { existingUrl })
+          nextProps[key] = { ...value, url }
+        } else {
+          nextProps[key] = value
+        }
+      }
+      localized.push({ ...entity, props: nextProps })
+    }
+    return localized
   }
 
   async _onWorldFileChanged() {
@@ -1327,6 +1385,22 @@ export class DirectAppServer {
     return out
   }
 
+  async _resolveLocalEntityPropsToAssetUrls(props, { upload = true } = {}) {
+    if (!props || typeof props !== 'object' || Array.isArray(props)) return {}
+    const nextProps = {}
+    for (const [key, value] of Object.entries(props)) {
+      if (value && typeof value === 'object' && typeof value.url === 'string') {
+        nextProps[key] = {
+          ...value,
+          url: await this._resolveLocalAssetToWorldUrl(value.url, { upload }),
+        }
+      } else {
+        nextProps[key] = value
+      }
+    }
+    return nextProps
+  }
+
   async _resolveLocalAssetToWorldUrl(url, { upload = true } = {}) {
     if (typeof url !== 'string') return url
     const normalized = normalizeAssetPath(url)
@@ -1384,6 +1458,7 @@ export class DirectAppServer {
       const existing = current.get(id)
       const desiredProps =
         entity.props && typeof entity.props === 'object' && !Array.isArray(entity.props) ? entity.props : {}
+      const resolvedProps = await this._resolveLocalEntityPropsToAssetUrls(desiredProps)
       if (!existing) {
         const data = {
           id: entity.id,
@@ -1395,7 +1470,7 @@ export class DirectAppServer {
           mover: null,
           uploader: null,
           pinned: entity.pinned,
-          props: desiredProps,
+          props: resolvedProps,
           state: entity.state,
         }
         await this.client.request('entity_add', { entity: data })
@@ -1411,7 +1486,7 @@ export class DirectAppServer {
       if (!isEqual(existing.pinned, entity.pinned)) change.pinned = entity.pinned
       const existingProps =
         existing.props && typeof existing.props === 'object' && !Array.isArray(existing.props) ? existing.props : {}
-      if (!isEqual(existingProps, desiredProps)) change.props = desiredProps
+      if (!isEqual(existingProps, resolvedProps)) change.props = resolvedProps
       if (!isEqual(existing.state, entity.state)) change.state = entity.state
 
       if (Object.keys(change).length > 1) {

@@ -78,6 +78,7 @@
     "@fastify/websocket": "^11.0.1",
     "@firebolt-dev/css": "^0.4.3",
     "@firebolt-dev/jsx": "^0.4.3",
+    "@nktkas/hyperliquid": "0.30.2",
     "@pixiv/three-vrm": "^3.3.3",
     "better-sqlite3": "^11.7.2",
     "d3": "^7.9.0",
