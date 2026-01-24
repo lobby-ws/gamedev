@@ -27,6 +27,12 @@ The header is a JSON object with the following structure:
     "name": "string",
     "model": "string (optional)",
     "script": "string (optional)",
+    "scriptEntry": "string (optional)",
+    "scriptFiles": {
+      "[relativePath: string]": "string"
+    },
+    "scriptFormat": "string (optional)",
+    "scriptRef": "string (optional)",
     "assetMap": {
       "[relativePath: string]": "string"
     },
@@ -54,7 +60,14 @@ The header is a JSON object with the following structure:
 - `name`: The name of the app (used for the output filename if not specified)
 - `model`: (Optional) URL of the main 3D model file
 - `script`: (Optional) URL of the app's script file
-- `assetMap`: (Optional) Map of app-relative paths (e.g. `assets/foo.png`) to canonical `asset://...` URLs.\n  - Used to make local app `.hyp` exports portable: runtime helpers like `app.asset('./assets/foo.png')` can return the bundled `asset://...` URL after import.\n  - When absent, `app.asset()` may resolve to `app://...` only for live local apps.
+- `scriptEntry`: (Optional) App-relative module entry path within `apps/<AppName>/` (e.g. `index.js`).
+- `scriptFiles`: (Optional) Map of app-relative module paths to canonical `asset://...` URLs.
+- `scriptFormat`: (Optional) `module` or `legacy-body` to describe how the entry is interpreted.
+- `scriptRef`: (Optional) Blueprint id that owns the shared `scriptFiles/scriptEntry/scriptFormat` for this app.
+  - Variants (`App__Variant`) should set `scriptRef` to the shared script-root blueprint to avoid duplicating `scriptFiles`.
+- `assetMap`: (Optional) Map of app-relative paths (e.g. `assets/foo.png`) to canonical `asset://...` URLs.
+  - Used to make local app `.hyp` exports portable: runtime helpers like `app.asset('./assets/foo.png')` can return the bundled `asset://...` URL after import.
+  - When absent, `app.asset()` may resolve to `app://...` only for live local apps.
 - `props`: Object containing additional properties with associated assets
 - `frozen`: Boolean flag indicating if the app is locked/frozen
 
@@ -75,6 +88,7 @@ When creating a .hyp file:
 2. All assets are collected from:
    - Main model file
    - Script file
+   - `scriptFiles` module sources (if present)
    - Props with URLs
 3. Header is created with blueprint and asset metadata
 4. Header size is written as first 4 bytes

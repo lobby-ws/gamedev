@@ -179,6 +179,18 @@ test('workflow vnext integrations (server/app-server)', { timeout: 120000 }, asy
         err => err?.code === 'deploy_required'
       )
 
+      await assert.rejects(
+        () =>
+          adminBuilder.request('blueprint_modify', {
+            change: {
+              id: blueprintId,
+              version: nextVersion,
+              scriptFiles: { 'index.js': 'asset://entry.js' },
+            },
+          }),
+        err => err?.code === 'deploy_required'
+      )
+
       await adminBuilder.request('blueprint_modify', {
         change: { id: blueprintId, version: nextVersion, name: 'B1AppUpdated' },
       })
@@ -312,6 +324,14 @@ test('workflow vnext integrations (server/app-server)', { timeout: 120000 }, asy
         () =>
           admin.request('blueprint_modify', {
             change: { id: blueprintId, version, script: 'console.log("v2")' },
+          }),
+        err => err?.code === 'deploy_lock_required'
+      )
+
+      await assert.rejects(
+        () =>
+          admin.request('blueprint_modify', {
+            change: { id: blueprintId, version, scriptFiles: { 'index.js': 'asset://entry.js' } },
           }),
         err => err?.code === 'deploy_lock_required'
       )

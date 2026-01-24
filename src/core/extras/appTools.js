@@ -68,6 +68,19 @@ function rewriteBlueprintUrls(blueprint, urlMap) {
       blueprint.image = { ...blueprint.image, url: rewrite(imageUrl) }
     }
   }
+  const scriptFiles = blueprint.scriptFiles
+  if (scriptFiles && typeof scriptFiles === 'object' && !Array.isArray(scriptFiles)) {
+    let changed = false
+    const nextFiles = {}
+    for (const [relPath, url] of Object.entries(scriptFiles)) {
+      const nextUrl = rewrite(url)
+      if (nextUrl !== url) changed = true
+      nextFiles[relPath] = nextUrl
+    }
+    if (changed) {
+      blueprint.scriptFiles = nextFiles
+    }
+  }
   const props = blueprint.props
   if (props && typeof props === 'object' && !Array.isArray(props)) {
     for (const [key, value] of Object.entries(props)) {
@@ -83,47 +96,69 @@ function rewriteBlueprintUrls(blueprint, urlMap) {
   return blueprint
 }
 
-export async function exportApp(blueprint, resolveFile) {
+export async function exportApp(blueprint, resolveFile, resolveBlueprint) {
   const safeBlueprint = cloneDeep(blueprint || {})
   safeBlueprint.props = normalizeProps(safeBlueprint.props)
 
+  const scriptRefId =
+    typeof safeBlueprint.scriptRef === 'string' && safeBlueprint.scriptRef.trim()
+      ? safeBlueprint.scriptRef.trim()
+      : null
+  if (scriptRefId) {
+    if (typeof resolveBlueprint !== 'function') {
+      throw new Error('script_ref_resolver_required')
+    }
+    const scriptRoot = await resolveBlueprint(scriptRefId)
+    if (!scriptRoot) {
+      throw new Error(`script_ref_not_found:${scriptRefId}`)
+    }
+    const resolvedRoot = cloneDeep(scriptRoot)
+    safeBlueprint.scriptFiles = resolvedRoot.scriptFiles
+    safeBlueprint.scriptEntry = resolvedRoot.scriptEntry
+    safeBlueprint.scriptFormat = resolvedRoot.scriptFormat
+    delete safeBlueprint.scriptRef
+  }
+
   const assets = []
+  const addedUrls = new Set()
+  const addAsset = async ({ type, url }) => {
+    if (!url || typeof url !== 'string') return
+    if (addedUrls.has(url)) return
+    addedUrls.add(url)
+    assets.push({
+      type,
+      url,
+      file: await resolveFile(url),
+    })
+  }
+
   if (typeof safeBlueprint.model === 'string' && safeBlueprint.model) {
     const inferred = inferAssetType(safeBlueprint.model)
     const type = inferred === 'avatar' ? 'avatar' : 'model'
-    assets.push({
-      type,
-      url: safeBlueprint.model,
-      file: await resolveFile(safeBlueprint.model),
-    })
+    await addAsset({ type, url: safeBlueprint.model })
   }
   if (typeof safeBlueprint.script === 'string' && safeBlueprint.script) {
-    assets.push({
-      type: 'script',
-      url: safeBlueprint.script,
-      file: await resolveFile(safeBlueprint.script),
-    })
+    await addAsset({ type: 'script', url: safeBlueprint.script })
   }
   const imageUrl =
     typeof safeBlueprint.image === 'string' ? safeBlueprint.image : safeBlueprint.image?.url
   if (imageUrl) {
     const explicitType = typeof safeBlueprint.image === 'object' ? safeBlueprint.image?.type : null
     const type = explicitType || inferAssetType(imageUrl) || 'texture'
-    assets.push({
-      type,
-      url: imageUrl,
-      file: await resolveFile(imageUrl),
-    })
+    await addAsset({ type, url: imageUrl })
   }
   for (const key in safeBlueprint.props) {
     const value = safeBlueprint.props[key]
     if (!value || typeof value !== 'object' || Array.isArray(value) || !value.url) continue
     const type = typeof value.type === 'string' ? value.type : inferAssetType(value.url)
-    assets.push({
-      type,
-      url: value.url,
-      file: await resolveFile(value.url),
-    })
+    await addAsset({ type, url: value.url })
+  }
+  const scriptFiles = safeBlueprint.scriptFiles
+  if (scriptFiles && typeof scriptFiles === 'object' && !Array.isArray(scriptFiles)) {
+    for (const url of Object.values(scriptFiles)) {
+      if (!url || typeof url !== 'string') continue
+      await addAsset({ type: 'script', url })
+    }
   }
 
   if (safeBlueprint.locked) {
@@ -168,6 +203,17 @@ export async function importApp(file) {
   let position = 4 + headerSize
   const assets = []
   const headerAssets = Array.isArray(header.assets) ? header.assets : []
+  const scriptFileUrls = new Set()
+  const headerBlueprint = header?.blueprint
+  if (
+    headerBlueprint?.scriptFiles &&
+    typeof headerBlueprint.scriptFiles === 'object' &&
+    !Array.isArray(headerBlueprint.scriptFiles)
+  ) {
+    for (const url of Object.values(headerBlueprint.scriptFiles)) {
+      if (typeof url === 'string') scriptFileUrls.add(url)
+    }
+  }
 
   for (const assetInfo of headerAssets) {
     const size = assetInfo?.size || 0
@@ -176,7 +222,12 @@ export async function importApp(file) {
     const file = new File([data], filename, {
       type: assetInfo?.mime || 'application/octet-stream',
     })
-    const type = typeof assetInfo?.type === 'string' ? assetInfo.type : inferAssetType(assetInfo?.url)
+    const isScriptFile = scriptFileUrls.has(assetInfo?.url)
+    const type = isScriptFile
+      ? null
+      : typeof assetInfo?.type === 'string'
+        ? assetInfo.type
+        : inferAssetType(assetInfo?.url)
     assets.push({
       type,
       url: assetInfo?.url,
@@ -214,6 +265,9 @@ export async function importApp(file) {
   const safeBlueprint = cloneDeep(header.blueprint || {})
   safeBlueprint.props = normalizeProps(safeBlueprint.props)
   rewriteBlueprintUrls(safeBlueprint, urlMap)
+  if (safeBlueprint.scriptRef !== undefined) {
+    delete safeBlueprint.scriptRef
+  }
 
   return {
     blueprint: safeBlueprint,

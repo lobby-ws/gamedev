@@ -56,6 +56,7 @@ import { hashFile } from '../../core/utils-client'
 import { cloneDeep, isArray, isBoolean, isEqual, merge, sortBy } from 'lodash-es'
 import { storage } from '../../core/storage'
 import { ScriptEditor } from './ScriptEditor'
+import { ScriptFilesEditor } from './ScriptFilesEditor'
 import { NodeHierarchy } from './NodeHierarchy'
 import { AppsList } from './AppsList'
 import { DEG2RAD, RAD2DEG } from '../../core/extras/general'
@@ -105,7 +106,7 @@ export function Sidebar({ world, ui }) {
     const app = ui.app
     if (!app?.blueprint) return
     try {
-      const file = await exportApp(app.blueprint, world.loader.loadFile)
+      const file = await exportApp(app.blueprint, world.loader.loadFile, id => world.blueprints.get(id))
       downloadFile(file)
     } catch (err) {
       console.error(err)
@@ -1690,6 +1691,32 @@ function Script({ world, hidden }) {
   const containerRef = useRef()
   const resizeRef = useRef()
   const [handle, setHandle] = useState(null)
+  const [scriptRoot, setScriptRoot] = useState(() =>
+    resolveScriptRootBlueprint(world.blueprints.get(app.data.blueprint) || app.blueprint, world)
+  )
+  const moduleRoot = hasScriptFiles(scriptRoot) ? scriptRoot : null
+  useEffect(() => {
+    const refresh = () => {
+      const blueprint = world.blueprints.get(app.data.blueprint) || app.blueprint
+      setScriptRoot(resolveScriptRootBlueprint(blueprint, world))
+    }
+    refresh()
+    const onModify = bp => {
+      if (!bp?.id) return
+      const baseId = getBlueprintAppName(app.data.blueprint)
+      if (bp.id === app.data.blueprint || bp.id === baseId || bp.id === scriptRoot?.id) {
+        refresh()
+      }
+    }
+    world.blueprints.on('modify', onModify)
+    world.blueprints.on('add', onModify)
+    world.blueprints.on('remove', onModify)
+    return () => {
+      world.blueprints.off('modify', onModify)
+      world.blueprints.off('add', onModify)
+      world.blueprints.off('remove', onModify)
+    }
+  }, [app.data.blueprint, world, scriptRoot?.id])
   useEffect(() => {
     const elem = resizeRef.current
     const container = containerRef.current
@@ -1751,7 +1778,12 @@ function Script({ world, hidden }) {
           color: rgba(255, 255, 255, 0.45);
           white-space: nowrap;
         }
-        .script-copy {
+        .script-actions {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+        }
+        .script-action {
           height: 2rem;
           padding: 0 0.75rem;
           display: flex;
@@ -1767,6 +1799,21 @@ function Script({ world, hidden }) {
             border-color: rgba(255, 255, 255, 0.3);
             color: white;
           }
+          &:disabled {
+            opacity: 0.5;
+            cursor: default;
+          }
+        }
+        .script-status {
+          font-size: 0.75rem;
+          padding: 0.5rem 1rem;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        .script-status.error {
+          color: #ff6b6b;
+        }
+        .script-status.conflict {
+          color: #ffb74d;
         }
         .script-resizer {
           position: absolute;
@@ -1784,15 +1831,90 @@ function Script({ world, hidden }) {
     >
       <div className='script-head'>
         <div className='script-title'>Script: {app.blueprint?.name}</div>
-        <div className='script-note'>Code is managed by dev server</div>
-        <button className='script-copy' type='button' onClick={() => handle?.copy?.()}>
-          Copy
-        </button>
+        <div className='script-note'>
+          {moduleRoot
+            ? handle?.dirtyCount
+              ? `${handle.dirtyCount} unsaved file${handle.dirtyCount === 1 ? '' : 's'}`
+              : 'Module sources'
+            : 'Code is managed by dev server'}
+        </div>
+        <div className='script-actions'>
+          {moduleRoot && (
+            <>
+              <button
+                className='script-action'
+                type='button'
+                disabled={!handle?.dirty || handle?.saving}
+                onClick={() => handle?.save?.()}
+              >
+                {handle?.saving ? 'Saving...' : 'Save'}
+              </button>
+              <button
+                className='script-action'
+                type='button'
+                disabled={handle?.saving || !handle?.refresh}
+                onClick={() => handle?.refresh?.()}
+              >
+                Refresh
+              </button>
+              {handle?.conflict && (
+                <button
+                  className='script-action'
+                  type='button'
+                  disabled={handle?.saving}
+                  onClick={() => handle?.retry?.()}
+                >
+                  Retry
+                </button>
+              )}
+            </>
+          )}
+          <button className='script-action' type='button' onClick={() => handle?.copy?.()}>
+            Copy
+          </button>
+        </div>
       </div>
-      <ScriptEditor key={app.data.id} app={app} onHandle={setHandle} />
+      {moduleRoot && (handle?.error || handle?.conflict) && (
+        <div className={cls('script-status', { error: handle?.error, conflict: handle?.conflict })}>
+          {handle?.error || handle?.conflict}
+        </div>
+      )}
+      {moduleRoot ? (
+        <ScriptFilesEditor scriptRoot={moduleRoot} world={world} onHandle={setHandle} />
+      ) : (
+        <ScriptEditor key={app.data.id} app={app} onHandle={setHandle} />
+      )}
       <div className='script-resizer' ref={resizeRef} />
     </div>
   )
+}
+
+function hasScriptFiles(blueprint) {
+  return blueprint?.scriptFiles && typeof blueprint.scriptFiles === 'object' && !isArray(blueprint.scriptFiles)
+}
+
+function getBlueprintAppName(id) {
+  if (typeof id !== 'string' || !id) return ''
+  if (id === '$scene') return '$scene'
+  const idx = id.indexOf('__')
+  return idx === -1 ? id : id.slice(0, idx)
+}
+
+function resolveScriptRootBlueprint(blueprint, world) {
+  if (!blueprint) return null
+  const scriptRef = typeof blueprint.scriptRef === 'string' ? blueprint.scriptRef.trim() : ''
+  if (scriptRef) {
+    const scriptRoot = world.blueprints.get(scriptRef)
+    if (!scriptRoot) return null
+    return scriptRoot
+  }
+  if (hasScriptFiles(blueprint)) return blueprint
+  const appName = getBlueprintAppName(blueprint.id)
+  if (appName && appName !== blueprint.id) {
+    const baseBlueprint = world.blueprints.get(appName)
+    if (hasScriptFiles(baseBlueprint)) return baseBlueprint
+  }
+  return null
 }
 
 function Nodes({ world, hidden }) {

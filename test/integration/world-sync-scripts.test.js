@@ -4,7 +4,7 @@ import http from 'node:http'
 import path from 'path'
 import { test } from 'node:test'
 import { DirectAppServer } from '../../app-server/direct.js'
-import { createTempDir } from './helpers.js'
+import { createTempDir, stopAppServer } from './helpers.js'
 
 async function fileExists(filePath) {
   try {
@@ -44,54 +44,25 @@ async function startAssetServer(assets) {
   })
 }
 
-test('world export skips scripts by default and includes when requested', async () => {
-  const rootDir = await createTempDir('hyperfy-export-')
-  const server = new DirectAppServer({ worldUrl: 'http://example.com', rootDir })
-
-  const snapshot = {
-    assetsUrl: 'http://example.com/assets',
-    settings: {},
-    spawn: { position: [0, 0, 0], quaternion: [0, 0, 0, 1] },
-    entities: [],
-    blueprints: [
-      {
-        id: 'TestApp__Main',
-        name: 'TestApp',
-        script: 'console.log("hi")',
-        props: {},
-      },
-    ],
-  }
-
-  await server.exportWorldToDisk(snapshot)
-  const scriptPath = path.join(rootDir, 'apps', 'TestApp', 'index.ts')
-  assert.equal(await fileExists(scriptPath), false)
-
-  await server.exportWorldToDisk(snapshot, { includeBuiltScripts: true })
-  assert.equal(await fileExists(scriptPath), true)
-  const content = await fs.readFile(scriptPath, 'utf8')
-  assert.ok(!content.startsWith('// @ts-nocheck'))
-  assert.match(content, /console\.log\("hi"\)/)
-})
-
-test('world export includes module sources by default', async () => {
-  const rootDir = await createTempDir('hyperfy-export-modules-')
+test('remote blueprint sync writes module sources to disk', async () => {
+  const rootDir = await createTempDir('hyperfy-sync-')
   const assets = {
-    'entry.js': 'export default () => {\n  return 42\n}\n',
-    'helper.js': 'export const value = 3\n',
+    'entry.js': 'export default () => {\n  return true\n}\n',
+    'helper.js': 'export const value = 7\n',
   }
   const assetServer = await startAssetServer(assets)
   const server = new DirectAppServer({ worldUrl: 'http://example.com', rootDir })
-
-  const snapshot = {
+  server.assetsUrl = assetServer.url
+  server._initSnapshot({
+    worldId: 'test',
     assetsUrl: assetServer.url,
     settings: {},
     spawn: { position: [0, 0, 0], quaternion: [0, 0, 0, 1] },
     entities: [],
     blueprints: [
       {
-        id: 'ModuleApp',
-        name: 'ModuleApp',
+        id: 'SyncApp',
+        name: 'SyncApp',
         script: 'asset://entry.js',
         scriptFormat: 'module',
         scriptEntry: 'index.js',
@@ -102,18 +73,30 @@ test('world export includes module sources by default', async () => {
         props: {},
       },
     ],
-  }
+  })
+
+  const appDir = path.join(rootDir, 'apps', 'SyncApp')
+  await fs.mkdir(appDir, { recursive: true })
+  await fs.writeFile(path.join(appDir, 'extra.js'), 'console.log("old")\n', 'utf8')
 
   try {
-    await server.exportWorldToDisk(snapshot)
-    const appDir = path.join(rootDir, 'apps', 'ModuleApp')
+    await server._onRemoteBlueprint({
+      id: 'SyncApp__Variant',
+      name: 'SyncApp',
+      script: 'asset://entry.js',
+      scriptRef: 'SyncApp',
+      props: {},
+    })
+
     const entryPath = path.join(appDir, 'index.js')
     const helperPath = path.join(appDir, 'helpers', 'util.js')
     assert.equal(await fileExists(entryPath), true)
     assert.equal(await fileExists(helperPath), true)
+    assert.equal(await fileExists(path.join(appDir, 'extra.js')), false)
     const entry = await fs.readFile(entryPath, 'utf8')
     assert.match(entry, /export default/)
   } finally {
+    await stopAppServer(server)
     await assetServer.close()
   }
 })

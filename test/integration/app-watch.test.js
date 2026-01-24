@@ -106,3 +106,36 @@ test('app watch restarts when entry file extension changes', async () => {
     await stopAppServer(server)
   }
 })
+
+test('module-mode watch schedules deploy on script changes', async () => {
+  const rootDir = await createTempDir('hyperfy-app-watch-module-')
+  const appDir = path.join(rootDir, 'apps', 'ModuleWatch')
+
+  await writeFile(
+    path.join(appDir, 'index.js'),
+    "import value from './lib/value.js';\nconsole.log(value);\n"
+  )
+  await writeFile(path.join(appDir, 'lib', 'value.js'), "export default 'one';\n")
+  await writeFile(
+    path.join(appDir, 'ModuleWatch.json'),
+    JSON.stringify({ scriptFormat: 'legacy-body' }, null, 2)
+  )
+
+  const server = new DirectAppServer({ worldUrl: 'http://example.com', rootDir })
+  const scheduled = []
+  server._scheduleDeployApp = appName => {
+    scheduled.push(appName)
+  }
+
+  try {
+    server._watchAppDir('ModuleWatch', { skipInitialBuild: true })
+
+    await waitFor(() => server.appWatchers.has('ModuleWatch') === false, { timeoutMs: 5000 })
+
+    await writeFile(path.join(appDir, 'lib', 'value.js'), "export default 'two';\n")
+    await waitFor(() => scheduled.length > 0, { timeoutMs: 10000 })
+    assert.equal(scheduled[0], 'ModuleWatch')
+  } finally {
+    await stopAppServer(server)
+  }
+})

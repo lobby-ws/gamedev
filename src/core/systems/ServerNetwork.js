@@ -7,6 +7,7 @@ import { createJWT, readJWT } from '../utils-server'
 import { cloneDeep, isNumber } from 'lodash-es'
 import * as THREE from '../extras/three'
 import { Ranks } from '../extras/ranks'
+import { validateBlueprintScriptFields } from '../blueprintValidation'
 
 const SAVE_INTERVAL = parseInt(process.env.SAVE_INTERVAL || '60') // seconds
 const PING_RATE = 10 // seconds
@@ -479,6 +480,8 @@ export class ServerNetwork extends System {
   }
 
   applyBlueprintAdded(blueprint, { ignoreNetworkId } = {}) {
+    const validation = validateBlueprintScriptFields(blueprint)
+    if (!validation.ok) return validation
     this.world.blueprints.add(blueprint)
     this.send('blueprintAdded', blueprint, ignoreNetworkId)
     this.dirtyBlueprints.add(blueprint.id)
@@ -487,6 +490,8 @@ export class ServerNetwork extends System {
   }
 
   applyBlueprintModified(change, { ignoreNetworkId } = {}) {
+    const validation = validateBlueprintScriptFields(change)
+    if (!validation.ok) return validation
     const blueprint = this.world.blueprints.get(change.id)
     if (!blueprint) {
       return { ok: false, error: 'not_found' }

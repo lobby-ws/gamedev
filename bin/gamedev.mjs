@@ -731,7 +731,7 @@ Commands:
   dev                       Start the world (local or remote) + app-server sync
   app-server                Start app-server sync only (no world server)
   apps <command>            Manage apps (create, list, build, clean, deploy, update, validate, status)
-  world export              Export world.json + apps/assets from the world (use --include-built-scripts for scripts)
+  world export              Export world.json + apps/assets from the world (module sources included; use --include-built-scripts for legacy apps)
   world import              Import local apps + world.json into the world
   help                      Show this help
 

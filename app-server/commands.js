@@ -258,7 +258,7 @@ export class HyperfyCLI {
     if (blueprints.length === 0) {
       console.log(`📝 No local blueprints found in ${this.appsDir}`)
       console.log(`💡 Run "gamedev world export" to pull blueprints from the world.`)
-      console.log(`   Use --include-built-scripts if you need script code locally.`)
+      console.log(`   Use --include-built-scripts for legacy single-file scripts.`)
       return
     }
 
@@ -466,7 +466,7 @@ app.on("update", (delta) => {
       console.log(`   • Blueprint: ${blueprintId}`)
       console.log(`   • Entity:    ${entityId}`)
       console.log(`💡 Run "gamedev world export" to sync into ${this.appsDir}.`)
-      console.log(`   Use --include-built-scripts if you need script code locally.`)
+      console.log(`   Use --include-built-scripts for legacy single-file scripts.`)
     } catch (error) {
       console.error(`❌ Error creating app:`, error?.message || error)
       if (!this.worldUrl) {

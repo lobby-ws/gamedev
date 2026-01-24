@@ -10,6 +10,7 @@ import { buildApp, createAppWatch, formatBuildErrors } from './appBundler.js'
 import { scaffoldBaseProject, scaffoldBuiltins } from './scaffold.js'
 import { BUILTIN_BLUEPRINT_IDS, SCENE_TEMPLATE } from './templates/builtins.js'
 import { readPacket, writePacket } from '../src/core/packets.js'
+import { isValidScriptPath } from '../src/core/blueprintValidation.js'
 
 const BLUEPRINT_FIELDS = [
   'model',
@@ -26,6 +27,9 @@ const BLUEPRINT_FIELDS = [
   'url',
   'desc',
 ]
+
+const SCRIPT_EXTENSIONS = new Set(['.js', '.ts'])
+const SCRIPT_DIR_SKIP = new Set(['.git', 'node_modules'])
 
 function sha256(buffer) {
   return crypto.createHash('sha256').update(buffer).digest('hex')
@@ -119,6 +123,54 @@ function normalizeAssetPath(value) {
   return value.replace(/\\/g, '/')
 }
 
+function normalizeScriptRelPath(value) {
+  if (typeof value !== 'string') return value
+  return value.replace(/\\/g, '/')
+}
+
+function isScriptFilename(name) {
+  const ext = path.extname(name || '').toLowerCase()
+  return SCRIPT_EXTENSIONS.has(ext)
+}
+
+function normalizeScriptFormat(value) {
+  if (value === 'module' || value === 'legacy-body') return value
+  return null
+}
+
+function hasScriptFiles(blueprint) {
+  return blueprint?.scriptFiles && typeof blueprint.scriptFiles === 'object' && !Array.isArray(blueprint.scriptFiles)
+}
+
+function listScriptFiles(rootDir) {
+  if (!fs.existsSync(rootDir)) return []
+  const files = []
+  const pending = [rootDir]
+  while (pending.length) {
+    const dir = pending.pop()
+    let entries = []
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (SCRIPT_DIR_SKIP.has(entry.name)) continue
+        pending.push(path.join(dir, entry.name))
+        continue
+      }
+      if (!entry.isFile()) continue
+      if (!isScriptFilename(entry.name)) continue
+      const absPath = path.join(dir, entry.name)
+      const relPath = normalizeScriptRelPath(path.relative(rootDir, absPath))
+      files.push({ absPath, relPath })
+    }
+  }
+  files.sort((a, b) => a.relPath.localeCompare(b.relPath))
+  return files
+}
+
 function getExistingAssetUrl(value) {
   if (typeof value === 'string') return value
   if (value && typeof value === 'object' && typeof value.url === 'string') {
@@ -141,6 +193,10 @@ function normalizeBlueprintForCompare(source) {
     id: source.id,
     name: source.name,
     script: source.script,
+    scriptEntry: source.scriptEntry,
+    scriptFiles: source.scriptFiles,
+    scriptFormat: source.scriptFormat,
+    scriptRef: source.scriptRef,
     ...pickBlueprintFields(source),
   }
 }
@@ -149,7 +205,22 @@ function normalizeBlueprintForCompareWithoutScript(source) {
   const normalized = normalizeBlueprintForCompare(source)
   if (!normalized) return normalized
   delete normalized.script
+  delete normalized.scriptEntry
+  delete normalized.scriptFiles
+  delete normalized.scriptFormat
+  delete normalized.scriptRef
   return normalized
+}
+
+function normalizeBlueprintScriptFields(source) {
+  if (!source || typeof source !== 'object') return null
+  return {
+    script: source.script,
+    scriptEntry: source.scriptEntry,
+    scriptFiles: source.scriptFiles,
+    scriptFormat: source.scriptFormat,
+    scriptRef: source.scriptRef,
+  }
 }
 
 function formatNameList(items, limit = 6) {
@@ -513,6 +584,7 @@ export class DirectAppServer {
     this.snapshot = null
     this.loggedTarget = false
     this.appWatchers = new Map()
+    this.appScriptModes = new Map()
   }
 
   async connect() {
@@ -605,7 +677,7 @@ export class DirectAppServer {
       const err = new Error(
         'Local project is empty and this world already has content. ' +
           'Script code is not downloaded by default. ' +
-          'Run "gamedev world export --include-built-scripts" to scaffold from the world.'
+          'Run "gamedev world export" to scaffold from the world (use --include-built-scripts for legacy apps).'
       )
       err.code = 'empty_project_requires_export'
       throw err
@@ -658,7 +730,10 @@ export class DirectAppServer {
     } catch {}
   }
 
-  async exportWorldToDisk(snapshot = this.snapshot, { includeBuiltScripts = false } = {}) {
+  async exportWorldToDisk(
+    snapshot = this.snapshot,
+    { includeBuiltScripts = false, includeScriptSources = true } = {}
+  ) {
     const nextSnapshot = snapshot || (await this.client.getSnapshot())
     this.assetsUrl = nextSnapshot.assetsUrl
     if (!this.snapshot) this._initSnapshot(nextSnapshot)
@@ -667,13 +742,23 @@ export class DirectAppServer {
     this._writeWorldFile(manifest)
 
     const blueprints = Array.isArray(nextSnapshot.blueprints) ? nextSnapshot.blueprints : []
+    const syncedScriptRoots = new Set()
     for (const blueprint of blueprints) {
       if (!blueprint?.id) continue
+      const scriptRoot = this._resolveRemoteScriptRootBlueprint(blueprint)
+      let shouldSyncScriptSources = false
+      if (includeScriptSources && scriptRoot?.id && !syncedScriptRoots.has(scriptRoot.id)) {
+        shouldSyncScriptSources = true
+        syncedScriptRoots.add(scriptRoot.id)
+      }
       await this._writeBlueprintToDisk({
         blueprint,
         force: true,
         includeBuiltScripts,
+        includeScriptSources: shouldSyncScriptSources,
+        pruneScriptSources: shouldSyncScriptSources,
         allowScriptOverwrite: includeBuiltScripts,
+        scriptRoot,
       })
     }
   }
@@ -786,6 +871,36 @@ export class DirectAppServer {
     return null
   }
 
+  _getScriptFormat(appName) {
+    const appPath = path.join(this.appsDir, appName)
+    const primaryPath = path.join(appPath, `${appName}.json`)
+    const primaryFormat = normalizeScriptFormat(readJson(primaryPath)?.scriptFormat)
+    if (primaryFormat) return primaryFormat
+    if (!fs.existsSync(appPath)) return null
+    const entries = fs.readdirSync(appPath, { withFileTypes: true })
+    for (const entry of entries) {
+      if (!entry.isFile()) continue
+      if (!entry.name.endsWith('.json') || isBlueprintDenylist(entry.name)) continue
+      const cfg = readJson(path.join(appPath, entry.name))
+      const format = normalizeScriptFormat(cfg?.scriptFormat)
+      if (format) return format
+    }
+    return null
+  }
+
+  _resolveAppScriptMode(appName) {
+    const appPath = path.join(this.appsDir, appName)
+    const entryPath = this._getScriptPath(appName)
+    const scriptFormat = this._getScriptFormat(appName)
+    return {
+      appPath,
+      entryPath,
+      files: scriptFormat ? listScriptFiles(appPath) : [],
+      scriptFormat,
+      moduleMode: !!scriptFormat,
+    }
+  }
+
   _writeWorldFile(manifest) {
     if (isEqual(this.manifest.data, manifest)) return
     this._writeFileAtomic(this.worldFile, JSON.stringify(manifest, null, 2) + '\n')
@@ -802,15 +917,23 @@ export class DirectAppServer {
   }
 
   _refreshAppWatch(appName, { skipInitialBuild = false } = {}) {
-    const entryPath = this._getScriptPath(appName)
+    const modeInfo = this._resolveAppScriptMode(appName)
+    const moduleMode = modeInfo.moduleMode
     const state = this.appWatchers.get(appName)
+    this.appScriptModes.set(appName, moduleMode ? 'module' : 'legacy')
+    if (moduleMode) {
+      if (state) void this._stopAppWatch(appName)
+      return moduleMode
+    }
+    const entryPath = modeInfo.entryPath
     if (!entryPath) {
       if (state) void this._stopAppWatch(appName)
-      return
+      return moduleMode
     }
-    if (state?.entryPath === entryPath) return
+    if (state?.entryPath === entryPath) return moduleMode
     if (state) void this._stopAppWatch(appName)
     this._startAppWatch(appName, { skipInitialBuild, entryPath })
+    return moduleMode
   }
 
   _startAppWatch(appName, { skipInitialBuild = false, entryPath = null } = {}) {
@@ -906,7 +1029,7 @@ export class DirectAppServer {
       const abs = path.join(this.appsDir, filename)
       if (!fs.existsSync(abs)) {
         this._stopAppWatch(filename)
-        this._closeWatcher(abs)
+        this._closeWatchersUnderDir(abs)
         return
       }
       if (!fs.statSync(abs).isDirectory()) return
@@ -919,26 +1042,70 @@ export class DirectAppServer {
     const appPath = path.join(this.appsDir, appName)
     if (!fs.existsSync(appPath)) return
     this._refreshAppWatch(appName, { skipInitialBuild })
-    if (this.watchers.has(appPath)) return
-    const watcher = fs.watch(appPath, { recursive: false }, (eventType, filename) => {
+    this._watchAppDirRecursive(appName, appPath, appPath)
+  }
+
+  _watchAppDirRecursive(appName, dirPath, rootPath) {
+    if (dirPath !== rootPath && SCRIPT_DIR_SKIP.has(path.basename(dirPath))) return
+    this._watchAppPath(appName, dirPath, rootPath)
+    let entries = []
+    try {
+      entries = fs.readdirSync(dirPath, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      if (SCRIPT_DIR_SKIP.has(entry.name)) continue
+      this._watchAppDirRecursive(appName, path.join(dirPath, entry.name), rootPath)
+    }
+  }
+
+  _watchAppPath(appName, dirPath, rootPath) {
+    if (this.watchers.has(dirPath)) return
+    const watcher = fs.watch(dirPath, { recursive: false }, (eventType, filename) => {
       if (!filename) return
-      const abs = path.join(appPath, filename)
+      const abs = path.join(dirPath, filename)
       if (this.pendingWrites.has(abs)) return
       if (!fs.existsSync(abs) && eventType === 'change') return
 
-      if (filename === 'index.js' || filename === 'index.ts') {
-        this._refreshAppWatch(appName)
+      if (eventType === 'rename') {
+        if (fs.existsSync(abs)) {
+          let stats = null
+          try {
+            stats = fs.statSync(abs)
+          } catch {}
+          if (stats?.isDirectory()) {
+            if (SCRIPT_DIR_SKIP.has(path.basename(abs))) return
+            this._watchAppDirRecursive(appName, abs, rootPath)
+            return
+          }
+        } else {
+          this._closeWatchersUnderDir(abs)
+        }
+      }
+
+      if (dirPath === rootPath && (filename === 'index.js' || filename === 'index.ts')) {
+        const moduleMode = this._refreshAppWatch(appName)
+        if (moduleMode) this._scheduleDeployApp(appName, { build: false })
         return
       }
 
-      if (filename.endsWith('.json') && !isBlueprintDenylist(filename)) {
+      if (dirPath === rootPath && filename.endsWith('.json') && !isBlueprintDenylist(filename)) {
         if (!fs.existsSync(abs)) return
+        this._refreshAppWatch(appName)
         const fileBase = path.basename(filename, '.json')
         const id = deriveBlueprintId(appName, fileBase)
         this._scheduleDeployBlueprint(id)
+        return
+      }
+
+      if (isScriptFilename(filename)) {
+        const moduleMode = this._refreshAppWatch(appName)
+        if (moduleMode) this._scheduleDeployApp(appName, { build: false })
       }
     })
-    this.watchers.set(appPath, watcher)
+    this.watchers.set(dirPath, watcher)
   }
 
   _closeWatcher(key) {
@@ -948,6 +1115,15 @@ export class DirectAppServer {
       watcher.close()
     } catch {}
     this.watchers.delete(key)
+  }
+
+  _closeWatchersUnderDir(dirPath) {
+    const prefix = dirPath.endsWith(path.sep) ? dirPath : `${dirPath}${path.sep}`
+    for (const key of Array.from(this.watchers.keys())) {
+      if (key === dirPath || key.startsWith(prefix)) {
+        this._closeWatcher(key)
+      }
+    }
   }
 
   _watchWorldFile() {
@@ -1121,6 +1297,35 @@ export class DirectAppServer {
     return process.env.HYPERFY_TARGET || null
   }
 
+  _resolveScriptRootId(appName, infos, index = null) {
+    const candidates = index
+      ? Array.from(index.values()).filter(item => item.appName === appName)
+      : infos
+    const root = candidates.find(info => info.id === appName || info.fileBase === appName)
+    if (root?.id) return root.id
+    return infos[0]?.id || candidates[0]?.id || null
+  }
+
+  _buildScriptPayload(info, scriptInfo) {
+    const payload = {
+      scriptEntry: null,
+      scriptFiles: null,
+      scriptFormat: null,
+      scriptRef: null,
+    }
+    if (!scriptInfo || scriptInfo.mode !== 'module') return payload
+    const rootId = scriptInfo.scriptRootId || info.appName || info.id
+    if (info.id === rootId) {
+      payload.scriptEntry = scriptInfo.scriptEntry
+      payload.scriptFiles = scriptInfo.scriptFiles
+      payload.scriptFormat = scriptInfo.scriptFormat
+      payload.scriptRef = null
+      return payload
+    }
+    payload.scriptRef = rootId
+    return payload
+  }
+
   async _prepareBlueprintPayload(info, scriptInfo, { uploadAssets = true } = {}) {
     const cfg = readJson(info.configPath)
     if (!cfg || typeof cfg !== 'object') {
@@ -1130,6 +1335,7 @@ export class DirectAppServer {
       id: info.id,
       name: info.fileBase,
       script: scriptInfo.scriptUrl,
+      ...this._buildScriptPayload(info, scriptInfo),
       ...pickBlueprintFields(cfg),
     }
     return this._resolveLocalBlueprintToAssetUrls(payload, { upload: uploadAssets })
@@ -1138,12 +1344,15 @@ export class DirectAppServer {
   async _buildDeployPlan(
     appName,
     infos,
-    { uploadAssets = false, uploadScripts = false, build = true } = {}
+    { uploadAssets = false, uploadScripts = false, build = true, index = null } = {}
   ) {
     const scriptInfo = await this._uploadScriptForApp(appName, infos[0].scriptPath, {
       upload: uploadScripts,
       build,
     })
+    if (scriptInfo?.mode === 'module') {
+      scriptInfo.scriptRootId = this._resolveScriptRootId(appName, infos, index)
+    }
     const changes = []
     for (const info of infos) {
       const desired = await this._prepareBlueprintPayload(info, scriptInfo, { uploadAssets })
@@ -1158,7 +1367,9 @@ export class DirectAppServer {
         changes.push({ info, desired, current, type: 'unchanged', scriptChanged: false, otherChanged: false })
         continue
       }
-      const scriptChanged = desired.script !== current.script
+      const desiredScript = normalizeBlueprintScriptFields(desired)
+      const currentScript = normalizeBlueprintScriptFields(current)
+      const scriptChanged = !isEqual(desiredScript, currentScript)
       const desiredNoScript = normalizeBlueprintForCompareWithoutScript(desired)
       const currentNoScript = normalizeBlueprintForCompareWithoutScript(current)
       const otherChanged = !isEqual(desiredNoScript, currentNoScript)
@@ -1263,7 +1474,7 @@ export class DirectAppServer {
     const build = options.build !== false
     const preview = !!options.preview || !!options.dryRun
     const note = typeof options.note === 'string' && options.note.trim() ? options.note.trim() : null
-    const plan = await this._buildDeployPlan(appName, list, { build })
+    const plan = await this._buildDeployPlan(appName, list, { build, index: blueprintIndex })
     const summary = this._summarizeDeployPlan(plan)
     if (preview) {
       this._printDeployPlan(appName, summary)
@@ -1279,6 +1490,9 @@ export class DirectAppServer {
     await this._withDeployLock(async lock => {
       await this._createDeploySnapshot(snapshotIds, { note: snapshotNote, lockToken: lock.token, scope: lock.scope })
       const scriptInfo = await this._uploadScriptForApp(appName, list[0].scriptPath, { build })
+      if (scriptInfo?.mode === 'module') {
+        scriptInfo.scriptRootId = this._resolveScriptRootId(appName, list, blueprintIndex)
+      }
       for (const info of list) {
         await this._deployBlueprint(info, scriptInfo, { lockToken: lock.token })
       }
@@ -1286,6 +1500,73 @@ export class DirectAppServer {
   }
 
   async _uploadScriptForApp(appName, scriptPath = null, { upload = true, build = true } = {}) {
+    const modeInfo = this._resolveAppScriptMode(appName)
+    if (modeInfo.moduleMode) {
+      return this._uploadScriptFilesForApp(appName, modeInfo, { upload })
+    }
+    return this._uploadBundledScriptForApp(appName, scriptPath, { upload, build })
+  }
+
+  async _uploadScriptFilesForApp(appName, modeInfo, { upload = true } = {}) {
+    const appPath = modeInfo?.appPath || path.join(this.appsDir, appName)
+    const entryPath = modeInfo?.entryPath || this._getScriptPath(appName)
+    if (!entryPath || !fs.existsSync(entryPath)) {
+      throw new Error(`missing_script_entry:${appName}`)
+    }
+
+    const files = Array.isArray(modeInfo?.files) && modeInfo.files.length
+      ? modeInfo.files
+      : listScriptFiles(appPath)
+    if (!files.length) {
+      throw new Error(`missing_script_files:${appName}`)
+    }
+
+    const scriptEntry = normalizeScriptRelPath(path.relative(appPath, entryPath))
+    const scriptFiles = {}
+    let entryText = null
+    let entryHash = null
+    let entryUrl = null
+
+    for (const file of files) {
+      const relPath = normalizeScriptRelPath(file.relPath)
+      const buffer = fs.readFileSync(file.absPath)
+      const hash = sha256(buffer)
+      const ext = path.extname(file.absPath) || '.js'
+      const filename = `${hash}${ext}`
+      if (upload) {
+        await this.client.uploadAsset({
+          filename,
+          buffer,
+          mimeType: 'text/javascript',
+        })
+      }
+      const assetUrl = `asset://${filename}`
+      scriptFiles[relPath] = assetUrl
+      if (relPath === scriptEntry) {
+        entryText = buffer.toString('utf8')
+        entryHash = hash
+        entryUrl = assetUrl
+      }
+    }
+
+    if (!entryUrl) {
+      throw new Error(`missing_script_entry:${appName}`)
+    }
+
+    const scriptFormat = normalizeScriptFormat(modeInfo?.scriptFormat) || 'legacy-body'
+    return {
+      mode: 'module',
+      scriptUrl: entryUrl,
+      scriptEntry,
+      scriptFiles,
+      scriptFormat,
+      scriptPath: entryPath,
+      scriptText: entryText,
+      scriptHash: entryHash,
+    }
+  }
+
+  async _uploadBundledScriptForApp(appName, scriptPath = null, { upload = true, build = true } = {}) {
     let buildResult = null
     if (build) {
       buildResult = await buildApp({ rootDir: this.rootDir, appName })
@@ -1313,7 +1594,7 @@ export class DirectAppServer {
         mimeType: 'text/javascript',
       })
     }
-    return { scriptUrl: `asset://${scriptFilename}`, scriptPath: resolvedPath, scriptText, scriptHash }
+    return { mode: 'legacy', scriptUrl: `asset://${scriptFilename}`, scriptPath: resolvedPath, scriptText, scriptHash }
   }
 
   async _deployBlueprint(info, scriptInfo, { lockToken } = {}) {
@@ -1327,6 +1608,7 @@ export class DirectAppServer {
       id: info.id,
       name: info.fileBase,
       script: scriptInfo.scriptUrl,
+      ...this._buildScriptPayload(info, scriptInfo),
       ...pickBlueprintFields(cfg),
     }
 
@@ -1544,7 +1826,13 @@ export class DirectAppServer {
 
   async _onRemoteBlueprint(blueprint) {
     this.snapshot.blueprints.set(blueprint.id, blueprint)
-    await this._writeBlueprintToDisk({ blueprint, force: true, includeBuiltScripts: true })
+    await this._writeBlueprintToDisk({
+      blueprint,
+      force: true,
+      includeBuiltScripts: true,
+      includeScriptSources: true,
+      pruneScriptSources: true,
+    })
     const parsed = parseBlueprintId(blueprint.id)
     this._watchAppDir(parsed.appName)
   }
@@ -1566,7 +1854,10 @@ export class DirectAppServer {
     blueprint,
     force,
     includeBuiltScripts = false,
+    includeScriptSources = true,
     allowScriptOverwrite = false,
+    pruneScriptSources = false,
+    scriptRoot = null,
   }) {
     const { appName, fileBase } = parseBlueprintId(blueprint.id)
     const appPath = path.join(this.appsDir, appName)
@@ -1583,7 +1874,15 @@ export class DirectAppServer {
       }
     }
 
-    const hasRemoteScript = typeof blueprint.script === 'string' && blueprint.script.length > 0
+    const resolvedScriptRoot = scriptRoot || this._resolveRemoteScriptRootBlueprint(blueprint)
+    if (resolvedScriptRoot) {
+      if (includeScriptSources) {
+        await this._syncScriptSourcesToDisk(appName, resolvedScriptRoot, { pruneMissing: pruneScriptSources })
+      }
+      return
+    }
+
+    const hasRemoteScript = typeof blueprint.script === 'string'
     if (includeBuiltScripts && hasRemoteScript) {
       const existingScriptPath = this._getScriptPath(appName)
       const scriptPath = existingScriptPath || path.join(appPath, 'index.ts')
@@ -1623,6 +1922,57 @@ export class DirectAppServer {
     return null
   }
 
+  _resolveRemoteScriptRootBlueprint(blueprint) {
+    if (!blueprint || typeof blueprint !== 'object') return null
+    if (hasScriptFiles(blueprint)) return blueprint
+    const scriptRef = typeof blueprint.scriptRef === 'string' ? blueprint.scriptRef.trim() : ''
+    if (scriptRef) {
+      const root = this.snapshot?.blueprints?.get(scriptRef)
+      if (root && hasScriptFiles(root)) return root
+    }
+    const parsed = parseBlueprintId(blueprint.id || '')
+    if (parsed.appName && parsed.appName !== blueprint.id) {
+      const base = this.snapshot?.blueprints?.get(parsed.appName)
+      if (base && hasScriptFiles(base)) return base
+    }
+    return null
+  }
+
+  async _syncScriptSourcesToDisk(appName, scriptRoot, { pruneMissing = false } = {}) {
+    if (!scriptRoot || !hasScriptFiles(scriptRoot)) return false
+    const appPath = path.join(this.appsDir, appName)
+    ensureDir(appPath)
+    const scriptFiles = scriptRoot.scriptFiles
+    const keep = new Set()
+    for (const [relPath, assetUrl] of Object.entries(scriptFiles)) {
+      if (!isValidScriptPath(relPath)) {
+        console.warn(`⚠️  Invalid script path in ${scriptRoot.id || appName}: ${relPath}`)
+        continue
+      }
+      if (typeof assetUrl !== 'string' || !assetUrl.startsWith('asset://')) {
+        console.warn(`⚠️  Invalid script asset in ${scriptRoot.id || appName}: ${relPath}`)
+        continue
+      }
+      const normalized = normalizeScriptRelPath(relPath)
+      keep.add(normalized)
+      const script = await this._downloadScript(assetUrl)
+      if (script == null) continue
+      const absPath = path.join(appPath, normalized)
+      this._writeFileAtomic(absPath, script)
+    }
+
+    if (pruneMissing) {
+      const localFiles = listScriptFiles(appPath)
+      for (const file of localFiles) {
+        const normalized = normalizeScriptRelPath(file.relPath)
+        if (keep.has(normalized)) continue
+        this._deleteFileAtomic(file.absPath)
+        this._pruneEmptyDirs(appPath, path.dirname(file.absPath))
+      }
+    }
+    return true
+  }
+
   async _blueprintToLocalConfig(appName, blueprint, { existingConfig } = {}) {
     const output = {}
     const existing =
@@ -1639,6 +1989,8 @@ export class DirectAppServer {
     if (blueprint.unique !== undefined) output.unique = blueprint.unique
     if (blueprint.disabled !== undefined) output.disabled = blueprint.disabled
     if (blueprint.scene !== undefined) output.scene = blueprint.scene
+    const scriptFormat = normalizeScriptFormat(blueprint.scriptFormat)
+    if (scriptFormat) output.scriptFormat = scriptFormat
 
     if (typeof blueprint.model === 'string') {
       const existingModel = typeof existing?.model === 'string' ? existing.model : null
@@ -1772,6 +2124,33 @@ export class DirectAppServer {
     }
     fs.renameSync(tmpPath, filePath)
     setTimeout(() => this.pendingWrites.delete(filePath), 500)
+  }
+
+  _deleteFileAtomic(filePath) {
+    this.pendingWrites.add(filePath)
+    try {
+      fs.rmSync(filePath, { force: true })
+    } catch {}
+    setTimeout(() => this.pendingWrites.delete(filePath), 500)
+  }
+
+  _pruneEmptyDirs(rootDir, startDir) {
+    let current = startDir
+    while (current && current !== rootDir && current.startsWith(rootDir)) {
+      let entries = []
+      try {
+        entries = fs.readdirSync(current)
+      } catch {
+        break
+      }
+      if (entries.length) break
+      try {
+        fs.rmdirSync(current)
+      } catch {
+        break
+      }
+      current = path.dirname(current)
+    }
   }
 
   _onAssetChanged(assetRelPath) {
