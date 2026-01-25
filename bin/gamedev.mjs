@@ -21,6 +21,8 @@ const ALPHABET = '1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ
 const uuid = customAlphabet(ALPHABET, 10)
 
 const DEFAULT_WORLD_URL = 'http://localhost:3000'
+const UPDATE_CHECK_TIMEOUT_MS = 1500
+const UPDATE_CHECK_ENV = 'GAMEDEV_DISABLE_UPDATE_CHECK'
 
 function normalizeBaseUrl(url) {
   if (!url) return ''
@@ -79,6 +81,105 @@ async function fetchWithTimeout(url, timeoutMs) {
   } finally {
     clearTimeout(timer)
   }
+}
+
+function isUpdateCheckDisabled() {
+  const value = process.env[UPDATE_CHECK_ENV]
+  if (!value) return false
+  if (value === '1') return true
+  return value.toLowerCase() === 'true'
+}
+
+function getPackageInfo() {
+  try {
+    const packagePath = path.join(packageRoot, 'package.json')
+    const raw = fs.readFileSync(packagePath, 'utf8')
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return null
+    return { name: parsed.name, version: parsed.version }
+  } catch {
+    return null
+  }
+}
+
+function parseSemver(value) {
+  if (!value) return null
+  const cleaned = value.trim().replace(/^v/, '')
+  const match = cleaned.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/)
+  if (!match) return null
+  const prerelease = match[4]
+    ? match[4].split('.').map(part => (/^\d+$/.test(part) ? Number(part) : part))
+    : null
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease,
+  }
+}
+
+function compareSemver(left, right) {
+  const a = parseSemver(left)
+  const b = parseSemver(right)
+  if (!a || !b) return 0
+  if (a.major !== b.major) return a.major < b.major ? -1 : 1
+  if (a.minor !== b.minor) return a.minor < b.minor ? -1 : 1
+  if (a.patch !== b.patch) return a.patch < b.patch ? -1 : 1
+
+  if (!a.prerelease && !b.prerelease) return 0
+  if (!a.prerelease && b.prerelease) return 1
+  if (a.prerelease && !b.prerelease) return -1
+
+  const length = Math.max(a.prerelease.length, b.prerelease.length)
+  for (let i = 0; i < length; i += 1) {
+    const aId = a.prerelease[i]
+    const bId = b.prerelease[i]
+    if (aId === undefined) return -1
+    if (bId === undefined) return 1
+    const aIsNum = typeof aId === 'number'
+    const bIsNum = typeof bId === 'number'
+    if (aIsNum && bIsNum) {
+      if (aId !== bId) return aId < bId ? -1 : 1
+      continue
+    }
+    if (aIsNum !== bIsNum) return aIsNum ? -1 : 1
+    if (aId !== bId) return aId < bId ? -1 : 1
+  }
+
+  return 0
+}
+
+async function checkForUpdates() {
+  if (isUpdateCheckDisabled()) return
+  const pkg = getPackageInfo()
+  if (!pkg?.name || !pkg?.version) return
+
+  const registryUrl = `https://registry.npmjs.org/${encodeURIComponent(pkg.name)}/latest`
+  let res
+  try {
+    res = await fetchWithTimeout(registryUrl, UPDATE_CHECK_TIMEOUT_MS)
+  } catch {
+    return
+  }
+  if (!res?.ok) return
+
+  let data
+  try {
+    data = await res.json()
+  } catch {
+    return
+  }
+
+  const latest = data?.version
+  if (!latest) return
+  if (compareSemver(pkg.version, latest) >= 0) return
+
+  const updateCommand = `npm install -D ${pkg.name}@latest`
+  const npxCommand = `npx ${pkg.name}@latest`
+  console.warn(
+    `Update available for ${pkg.name}: ${pkg.version} -> ${latest}\n` +
+      `Run "${updateCommand}" to update your project, or "${npxCommand}" for a one-off.`
+  )
 }
 
 async function waitForWorldReady(worldUrl, { timeoutMs = 60000, intervalMs = 500 } = {}) {
@@ -741,30 +842,44 @@ Options:
 }
 
 async function main() {
+  const updatePromise = checkForUpdates().catch(() => {})
   const [command, ...args] = process.argv.slice(2)
+  let result
 
   switch (command) {
     case 'init':
-      return initCommand(args)
+      result = await initCommand(args)
+      break
     case 'dev':
-      return startCommand(args)
+      result = await startCommand(args)
+      break
     case 'app-server':
-      return appServerCommand(args)
+      result = await appServerCommand(args)
+      break
     case 'apps':
-      return appsCommand(args)
+      result = await appsCommand(args)
+      break
     case 'world':
-      return worldCommand(args)
+      result = await worldCommand(args)
+      break
     case 'help':
     case '--help':
     case '-h':
     case undefined:
       printHelp()
-      return 0
+      result = 0
+      break
     default:
       console.error(`Error: Unknown command: ${command}`)
       printHelp()
-      return 1
+      result = 1
+      break
   }
+
+  if (typeof result === 'number') {
+    await updatePromise
+  }
+  return result
 }
 
 main()
