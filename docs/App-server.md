@@ -7,7 +7,7 @@ App-server is the dev server that syncs local files to a world via `/admin`. It 
 ### Prerequisites
 
 - Run a world server with `/admin` enabled.
-- Set these env vars for the app-server process:
+- Set these env vars for the app-server process (via `.env` or `.lobby/targets.json`):
   - `WORLD_URL` (e.g. `http://localhost:3000`)
   - `WORLD_ID` (must match the target worldId)
   - `ADMIN_CODE` (must match the world server, if set)
@@ -18,8 +18,9 @@ App-server is the dev server that syncs local files to a world via `/admin`. It 
 ### Start the app-server
 
 ```bash
-# In an empty folder, this scaffolds built-ins locally and deploys them.
-WORLD_URL=http://localhost:3000 WORLD_ID=dev-world ADMIN_CODE=secret DEPLOY_CODE=deploy-secret node app-server/server.js
+# In a project folder, this scaffolds built-ins locally and deploys them.
+# Configure .env or .lobby/targets.json first.
+gamedev app-server
 ```
 
 Notes

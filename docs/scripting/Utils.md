@@ -6,7 +6,7 @@ This document covers miscellaneous utility globals available in the scripting en
 
 ## `num`
 
-A global method for generating random numbers. This is provided as a substitute for `Math.random()`, which is not available in the app script runtime.
+A quick random helper built on `Math.random()`. Use `prng` when you need deterministic results across clients.
 
 ```javascript
 /**
@@ -18,6 +18,37 @@ const randomInt = num(0, 10);
 
 // get a random float between 100 and 1000 with 2 decimal places
 const randomFloat = num(100, 1000, 2);
+```
+
+---
+
+## `prng`
+
+Create a seeded random number generator so every client can see the same output.
+
+```javascript
+const rng = prng(42); // seed
+const value = rng(0, 100, 2); // min, max, decimalPlaces
+```
+
+---
+
+## `clamp`
+
+Clamp a number between a minimum and maximum value.
+
+```javascript
+const clamped = clamp(value, 0, 1);
+```
+
+---
+
+## `uuid`
+
+Generate a short unique id (10 characters).
+
+```javascript
+const id = uuid();
 ```
 
 ---
@@ -43,6 +74,13 @@ The standard `URL` class is available for parsing and constructing URLs.
 
 ## Fetch
 
-The standard `fetch` API is available for making network requests.
+Fetch is available as the `fetch` argument passed into your script entry (it is the same as `app.fetch`). It returns a restricted response object with `ok`, `status`, `json()`, `text()`, and similar helpers.
 
-- [`fetch()`](https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API)
+```javascript
+export default async (world, app, fetch) => {
+  const resp = await fetch('https://example.com/data.json');
+  if (resp?.ok) {
+    const data = await resp.json();
+  }
+}
+```

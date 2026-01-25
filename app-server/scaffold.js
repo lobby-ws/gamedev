@@ -40,6 +40,8 @@ dist/
 .DS_Store
 `
 
+const DEFAULT_NVMRC = '22.11.0\n'
+
 const DEFAULT_TSCONFIG = {
   compilerOptions: {
     target: 'ES2022',
@@ -290,6 +292,12 @@ export function scaffoldBaseProject({
   const normalizedName = normalizePackageName(packageName, fallbackName)
 
   writeFileWithPolicy(path.join(rootDir, '.gitignore'), DEFAULT_GITIGNORE, {
+    force,
+    writeFile,
+    report,
+  })
+
+  writeFileWithPolicy(path.join(rootDir, '.nvmrc'), DEFAULT_NVMRC, {
     force,
     writeFile,
     report,
