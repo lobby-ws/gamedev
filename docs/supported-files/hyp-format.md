@@ -105,6 +105,12 @@ When reading a .hyp file:
    - The blueprint configuration
    - Array of asset files with their metadata
 
+Import normalization:
+- Legacy single-file scripts (no `scriptFiles`, or `scriptFormat: "legacy-body"`) are converted to module format on import.
+- The entry becomes a module file with a default export, `scriptEntry`/`scriptFiles` are populated, and `scriptFormat` is set to `module`.
+- The blueprint `script` field is updated to point at the new entry asset.
+- The legacy script asset is replaced in the upload list when conversion happens.
+
 ## Usage Example
 
 ```javascript

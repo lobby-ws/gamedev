@@ -8,7 +8,7 @@ Engine source and reference docs are also available in `node_modules/gamedev/src
 Apps live in `apps/` and each app folder shares a single script. There are two ways to create them:
 
 Local-first (project files):
-- Create `apps/<AppName>/index.ts` (or `index.js`)
+- Create `apps/<AppName>/index.js` (or `index.js`)
 - Add one or more blueprints in `apps/<AppName>/*.json` (defaults, model, props, flags)
 - Put assets in top-level `assets/` and reference them from blueprint JSON or file props
 - Run `npm run dev` for hot reload
@@ -23,7 +23,7 @@ Example local layout:
 apps/
   MyApp/
     MyApp.json
-    index.ts
+    index.js
 assets/
 ```
 

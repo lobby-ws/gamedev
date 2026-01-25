@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url'
 import { spawn } from 'child_process'
 import { customAlphabet } from 'nanoid'
 
-import { runAppCommand } from '../app-server/commands.js'
+import { runAppCommand, runScriptCommand } from '../app-server/commands.js'
 import { DirectAppServer } from '../app-server/direct.js'
 import { scaffoldBaseProject, scaffoldBuiltins, writeManifest } from '../app-server/scaffold.js'
 import { applyTargetEnv, parseTargetArgs, resolveTarget } from '../app-server/targets.js'
@@ -752,6 +752,17 @@ async function appsCommand(args) {
   return runAppCommand({ command, args: commandArgs, rootDir: projectDir, helpPrefix: 'gamedev apps' })
 }
 
+async function scriptsCommand(args) {
+  if (!args.length || ['help', '--help', '-h'].includes(args[0])) {
+    await runScriptCommand({ command: 'help', args: [], rootDir: projectDir, helpPrefix: 'gamedev scripts' })
+    return 0
+  }
+
+  const command = args[0]
+  const commandArgs = args.slice(1)
+  return runScriptCommand({ command, args: commandArgs, rootDir: projectDir, helpPrefix: 'gamedev scripts' })
+}
+
 async function connectAdminServer({ worldUrl, adminCode, rootDir }) {
   let code = adminCode || process.env.ADMIN_CODE || null
   let server = new DirectAppServer({ worldUrl, adminCode: code, rootDir })
@@ -831,7 +842,8 @@ Commands:
   init                      Scaffold a new world project in the current folder
   dev                       Start the world (local or remote) + app-server sync
   app-server                Start app-server sync only (no world server)
-  apps <command>            Manage apps (create, list, build, clean, deploy, update, validate, status)
+  apps <command>            Manage apps (create, list, deploy, update, rollback, status)
+  scripts <command>         Script migration helpers (migrate)
   world export              Export world.json + apps/assets from the world (module sources included; use --include-built-scripts for legacy apps)
   world import              Import local apps + world.json into the world
   help                      Show this help
@@ -858,6 +870,9 @@ async function main() {
       break
     case 'apps':
       result = await appsCommand(args)
+      break
+    case 'scripts':
+      result = await scriptsCommand(args)
       break
     case 'world':
       result = await worldCommand(args)

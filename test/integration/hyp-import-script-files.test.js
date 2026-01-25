@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { File } from 'node:buffer'
 import { test } from 'node:test'
-import { exportApp } from '../../src/core/extras/appTools.js'
+import { exportApp, importApp } from '../../src/core/extras/appTools.js'
 import { ClientBuilder } from '../../src/core/systems/ClientBuilder.js'
 
 if (!globalThis.File) {
@@ -97,4 +97,52 @@ test('drag-drop .hyp import preserves scriptFiles on blueprint', async () => {
   assert.ok(imported.scriptFiles)
   assert.equal(imported.scriptFiles[imported.scriptEntry], imported.script)
   assert.ok(imported.scriptFiles['lib/helper.js'])
+})
+
+test('drag-drop .hyp import converts legacy script into module files', async () => {
+  const files = new Map()
+  const addFile = (url, contents, name, type) => {
+    const file = new File([contents], name, { type })
+    files.set(url, file)
+    return file
+  }
+
+  const modelUrl = 'asset://model.glb'
+  const scriptUrl = 'asset://legacy.js'
+  addFile(modelUrl, new Uint8Array([1, 2, 3, 4]), 'model.glb', 'model/gltf-binary')
+  addFile(scriptUrl, 'app.on("update", () => {})', 'legacy.js', 'text/javascript')
+
+  const blueprint = {
+    id: 'bp-legacy',
+    name: 'LegacyApp',
+    model: modelUrl,
+    script: scriptUrl,
+    props: {},
+    preload: false,
+    public: false,
+    locked: false,
+    frozen: false,
+    unique: false,
+    scene: false,
+    disabled: false,
+  }
+
+  const resolveFile = url => {
+    const file = files.get(url)
+    if (!file) throw new Error(`missing file: ${url}`)
+    return file
+  }
+
+  const hypFile = await exportApp(blueprint, resolveFile)
+  const imported = await importApp(hypFile)
+
+  assert.equal(imported.blueprint.scriptFormat, 'module')
+  assert.ok(imported.blueprint.scriptEntry)
+  assert.ok(imported.blueprint.scriptFiles)
+  assert.equal(imported.blueprint.scriptFiles[imported.blueprint.scriptEntry], imported.blueprint.script)
+
+  const scriptAsset = imported.assets.find(asset => asset.url === imported.blueprint.script)
+  assert.ok(scriptAsset?.file)
+  const scriptText = await scriptAsset.file.text()
+  assert.match(scriptText, /export default/)
 })

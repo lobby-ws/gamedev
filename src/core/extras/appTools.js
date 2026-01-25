@@ -1,5 +1,6 @@
 import { cloneDeep } from 'lodash-es'
 import { hashFile } from '../utils-client'
+import { buildLegacyBodyModuleSource } from '../legacyBody'
 
 const imageExts = new Set(['png', 'jpg', 'jpeg', 'webp'])
 const typeByExt = {
@@ -94,6 +95,114 @@ function rewriteBlueprintUrls(blueprint, urlMap) {
     }
   }
   return blueprint
+}
+
+function getScriptFiles(blueprint) {
+  if (!blueprint) return null
+  if (!blueprint.scriptFiles || typeof blueprint.scriptFiles !== 'object' || Array.isArray(blueprint.scriptFiles)) {
+    return null
+  }
+  return blueprint.scriptFiles
+}
+
+function deriveLegacyEntryPath(scriptUrl) {
+  let entryPath = getUrlFilename(scriptUrl) || 'index.js'
+  if (!getExtension(entryPath)) {
+    entryPath = `${entryPath}.js`
+  }
+  return entryPath
+}
+
+async function buildModuleAssetFromLegacySource({
+  sourceText,
+  entryPath,
+  lastModified,
+  type,
+}) {
+  const moduleSource = buildLegacyBodyModuleSource(sourceText, entryPath)
+  const mime = type || 'text/javascript'
+  const draft = new File([moduleSource], entryPath, { type: mime, lastModified })
+  const hash = await hashFile(draft)
+  const ext = getExtension(entryPath) || 'js'
+  const filename = `${hash}.${ext}`
+  const file =
+    draft.name === filename
+      ? draft
+      : new File([draft], filename, { type: draft.type, lastModified: draft.lastModified })
+  return { url: `asset://${filename}`, file }
+}
+
+async function convertLegacyScriptBlueprint({
+  blueprint,
+  headerBlueprint,
+  assets,
+  rewrittenAssets,
+  urlMap,
+}) {
+  const scriptFiles = getScriptFiles(blueprint)
+  const headerScriptFiles = getScriptFiles(headerBlueprint)
+
+  if (!scriptFiles) {
+    const originalScriptUrl = typeof headerBlueprint?.script === 'string' ? headerBlueprint.script : null
+    if (!originalScriptUrl) return { blueprint, assets: rewrittenAssets }
+    const legacyAsset = assets.find(asset => asset?.url === originalScriptUrl)
+    if (!legacyAsset?.file) {
+      throw new Error(`missing_script_asset:${originalScriptUrl}`)
+    }
+    const entryPath = deriveLegacyEntryPath(originalScriptUrl)
+    const sourceText = await legacyAsset.file.text()
+    const moduleAsset = await buildModuleAssetFromLegacySource({
+      sourceText,
+      entryPath,
+      lastModified: legacyAsset.file.lastModified,
+      type: legacyAsset.file.type,
+    })
+    const legacyUrl = urlMap.get(originalScriptUrl)
+    const nextAssets = rewrittenAssets.filter(asset => asset.url !== legacyUrl)
+    nextAssets.push({ type: null, url: moduleAsset.url, file: moduleAsset.file })
+    blueprint.scriptEntry = entryPath
+    blueprint.scriptFiles = { [entryPath]: moduleAsset.url }
+    blueprint.scriptFormat = 'module'
+    blueprint.script = moduleAsset.url
+    return { blueprint, assets: nextAssets }
+  }
+
+  const currentFormat = blueprint.scriptFormat
+  if (currentFormat && currentFormat !== 'legacy-body') {
+    return { blueprint, assets: rewrittenAssets }
+  }
+
+  const entryPath =
+    typeof blueprint.scriptEntry === 'string' && scriptFiles[blueprint.scriptEntry]
+      ? blueprint.scriptEntry
+      : Object.keys(scriptFiles).sort()[0]
+  if (!entryPath) return { blueprint, assets: rewrittenAssets }
+
+  const originalEntryUrl = headerScriptFiles?.[entryPath]
+  const entryAsset =
+    (originalEntryUrl ? assets.find(asset => asset?.url === originalEntryUrl) : null) ||
+    rewrittenAssets.find(asset => asset?.url === scriptFiles[entryPath])
+  if (!entryAsset?.file) {
+    throw new Error(`missing_script_asset:${entryPath}`)
+  }
+
+  const sourceText = await entryAsset.file.text()
+  const moduleAsset = await buildModuleAssetFromLegacySource({
+    sourceText,
+    entryPath,
+    lastModified: entryAsset.file.lastModified,
+    type: entryAsset.file.type,
+  })
+
+  const oldEntryUrl = scriptFiles[entryPath]
+  const nextAssets = rewrittenAssets.filter(asset => asset.url !== oldEntryUrl)
+  nextAssets.push({ type: null, url: moduleAsset.url, file: moduleAsset.file })
+
+  blueprint.scriptEntry = entryPath
+  blueprint.scriptFiles = { ...scriptFiles, [entryPath]: moduleAsset.url }
+  blueprint.scriptFormat = 'module'
+  blueprint.script = moduleAsset.url
+  return { blueprint, assets: nextAssets }
 }
 
 export async function exportApp(blueprint, resolveFile, resolveBlueprint) {
@@ -269,8 +378,16 @@ export async function importApp(file) {
     delete safeBlueprint.scriptRef
   }
 
-  return {
+  const converted = await convertLegacyScriptBlueprint({
     blueprint: safeBlueprint,
-    assets: rewrittenAssets,
+    headerBlueprint,
+    assets,
+    rewrittenAssets,
+    urlMap,
+  })
+
+  return {
+    blueprint: converted.blueprint,
+    assets: converted.assets,
   }
 }

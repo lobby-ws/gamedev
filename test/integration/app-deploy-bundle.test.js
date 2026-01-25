@@ -10,38 +10,37 @@ async function writeFile(filePath, contents) {
   await fs.writeFile(filePath, contents)
 }
 
-test('deploy pipeline uses built app bundle output', async () => {
-  const rootDir = await createTempDir('hyperfy-bundle-deploy-')
+test('deploy pipeline uploads script files and defaults to legacy-body for entry bodies', async () => {
+  const rootDir = await createTempDir('hyperfy-script-deploy-')
 
   await writeFile(
-    path.join(rootDir, 'apps', 'BundleApp', 'index.js'),
-    "import value from './value.js';\nconsole.log(value);\n"
+    path.join(rootDir, 'apps', 'LegacyApp', 'index.js'),
+    "app.on('update', () => {});\n"
   )
   await writeFile(
-    path.join(rootDir, 'apps', 'BundleApp', 'value.js'),
-    "export default 'bundle-value';\n"
+    path.join(rootDir, 'apps', 'LegacyApp', 'lib', 'value.js'),
+    "export default 'legacy-value';\n"
   )
 
   const server = new DirectAppServer({ worldUrl: 'http://example.com', rootDir })
-  const info = await server._uploadScriptForApp('BundleApp', null, { upload: false })
+  const info = await server._uploadScriptForApp('LegacyApp', null, { upload: false })
 
-  assert.ok(info.scriptPath.endsWith(path.join('dist', 'apps', 'BundleApp.js')))
-  assert.match(info.scriptText, /bundle-value/)
+  assert.equal(info.mode, 'module')
+  assert.equal(info.scriptEntry, 'index.js')
+  assert.equal(info.scriptFiles[info.scriptEntry], info.scriptUrl)
+  assert.ok(info.scriptFiles['lib/value.js'])
+  assert.equal(info.scriptFormat, 'legacy-body')
 })
 
-test('deploy pipeline uploads module scripts when scriptFormat is set', async () => {
+test('deploy pipeline infers module format when entry exports default', async () => {
   const rootDir = await createTempDir('hyperfy-module-deploy-')
   const appDir = path.join(rootDir, 'apps', 'ModuleApp')
 
   await writeFile(
     path.join(appDir, 'index.js'),
-    "import value from './lib/value.js';\nconsole.log(value);\n"
+    "export default (world, app) => { app.state.ready = true }\n"
   )
   await writeFile(path.join(appDir, 'lib', 'value.js'), "export default 'module-value';\n")
-  await writeFile(
-    path.join(appDir, 'ModuleApp.json'),
-    JSON.stringify({ scriptFormat: 'legacy-body' }, null, 2)
-  )
 
   const server = new DirectAppServer({ worldUrl: 'http://example.com', rootDir })
   const info = await server._uploadScriptForApp('ModuleApp', null, { upload: false })
@@ -50,4 +49,5 @@ test('deploy pipeline uploads module scripts when scriptFormat is set', async ()
   assert.equal(info.scriptEntry, 'index.js')
   assert.equal(info.scriptFiles[info.scriptEntry], info.scriptUrl)
   assert.ok(info.scriptFiles['lib/value.js'])
+  assert.equal(info.scriptFormat, 'module')
 })

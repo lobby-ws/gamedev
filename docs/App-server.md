@@ -76,27 +76,29 @@ Use blueprint JSON for defaults, and use `world.json` for per-instance tweaks.
 
 ---
 
-### Module-mode scripts (multi-file)
+### Script formats (module-first)
 
-Set `scriptFormat` in your app's blueprint JSON to opt in:
-- `legacy-body` keeps the classic body-style entry but allows multiple files.
-- `module` uses standard ES modules with a default export.
+App-server always uploads every `.js/.ts` under `apps/<AppName>/` as `scriptFiles`. `scriptFormat` controls how the entry is interpreted:
+- `module` (default for new apps): the entry must `export default (world, app, fetch, props, setTimeout) => { ... }`.
+- `legacy-body`: the entry is a classic script body with imports at the top; the runtime wraps it into `export default (...) => { ... }`.
 
-When enabled, app-server uploads every `.js/.ts` under `apps/<AppName>/` as `scriptFiles` and skips bundling.
-The entry remains `apps/<AppName>/index.ts` (or `index.js`).
+If `scriptFormat` is missing, app-server infers it during deploy:
+- `module` when the entry exports default.
+- `legacy-body` otherwise (with a warning). The blueprint JSON is not modified.
+
+Use `gamedev scripts migrate --module` or `--legacy-body` to tag existing blueprints.
 
 ---
 
 ### Common workflow
 
-1) Edit `apps/<appName>/index.ts` (or `index.js`) and/or `apps/<appName>/*.json`.
-2) App-server deploys via `/admin` (bundled in legacy mode; file-by-file in module mode).
+1) Edit `apps/<appName>/index.js` (or `index.js`) and/or `apps/<appName>/*.json`.
+2) App-server deploys via `/admin` (script files uploaded as-is).
 
 Result: Changes appear in-world in ~1–2 seconds without page refresh.
 
 What’s watched by the server
-- `apps/<appName>/**/*.js` and `apps/<appName>/**/*.ts` — script changes deploy via `/admin` in module mode
-- `apps/<appName>/index.(js|ts)` and imports — script changes deploy via `/admin` in legacy mode
+- `apps/<appName>/**/*.js` and `apps/<appName>/**/*.ts` — script changes deploy via `/admin`
 - `apps/<appName>/*.json` — model/props/meta changes deploy via `/admin`
 - `assets/**` — if referenced by any blueprint, changes trigger deploy
 
@@ -128,4 +130,4 @@ For prod targets, the CLI asks for confirmation unless you pass `--yes`.
 - Unauthorized: ensure `ADMIN_CODE` matches the world server `ADMIN_CODE`.
 - Script updates rejected: ensure `DEPLOY_CODE` matches and the deploy lock is free.
 - WORLD_ID mismatch: set `WORLD_ID` to match the target world id.
-- Changes not appearing: confirm `apps/<appName>/index.ts` (or blueprint JSON) is being edited and app-server is connected.
+- Changes not appearing: confirm `apps/<appName>/index.js` (or blueprint JSON) is being edited and app-server is connected.

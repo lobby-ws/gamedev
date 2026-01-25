@@ -2,13 +2,15 @@ import { System } from './System'
 import { uuid } from '../utils'
 import { hashFile } from '../utils-client'
 
-const PLACEHOLDER_SCRIPT = `// AI placeholder while generation runs
-const box = app.create('prim', {
-  type: 'box',
-  size: [1, 1, 1],
-  color: '#4b5563',
-})
-app.add(box)
+const PLACEHOLDER_SCRIPT = `export default (world, app, fetch, props, setTimeout) => {
+  // AI placeholder while generation runs
+  const box = app.create('prim', {
+    type: 'box',
+    size: [1, 1, 1],
+    color: '#4b5563',
+  })
+  app.add(box)
+}
 `
 const DEFAULT_ENTRY = 'index.js'
 
@@ -130,7 +132,7 @@ export class ClientAI extends System {
         script: scriptUrl,
         scriptEntry: entryPath,
         scriptFiles,
-        scriptFormat: 'legacy-body',
+        scriptFormat: 'module',
         props: {
           prompt: trimmed.length > 100 ? `${trimmed.slice(0, 100)}...` : trimmed,
           createdAt,

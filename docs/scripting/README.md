@@ -47,32 +47,35 @@ Hyperfy [Networking](./Networking.md) happens inside of Apps, using methods from
 
 ## Script Formats and Imports
 
-App scripts can run in two formats:
+App scripts are always uploaded as a folder of files (no bundling). The entry is `apps/<AppName>/index.js` or `index.js`, and `scriptFormat` tells the runtime how to interpret the entry file.
 
-- Legacy bundled (default): if `scriptFormat` is not set in your blueprint JSON, app-server bundles `apps/<AppName>/index.ts` into a single file before deploy.
-- Module mode (multi-file): set `"scriptFormat": "legacy-body"` or `"scriptFormat": "module"` in your app's blueprint JSON. App-server uploads every `.js/.ts` file under `apps/<AppName>/` and preserves the folder layout.
+Entry formats:
+- `module`: the entry file must `export default (world, app, fetch, props, setTimeout) => { ... }`.
+- `legacy-body`: keep the classic body-style entry (no `export`). Imports must be at the top of the entry file. The runtime wraps it into `export default (...) => { ... }`.
 
-Entry behavior:
-- `legacy-body`: keep the classic body-style entry (no `export`). Imports must be at the top of the entry file. The runtime wraps it into `export default (world, app, fetch, props, setTimeout) => { ... }`.
-- `module`: the entry file must `export default` a function with the same signature.
+If `scriptFormat` is missing, app-server infers it during deploy:
+- `module` when the entry exports default.
+- `legacy-body` otherwise (with a warning). The blueprint JSON is not modified.
 
-Import rules:
-- Module mode: relative imports only (`./` or `../`) inside the same app folder. No bare imports (`react`, `lodash`), no node builtins, no cross-app imports.
-- Legacy bundled: relative imports inside the app folder are allowed; bare imports must resolve to `node_modules`. Node builtins and cross-app imports are blocked.
+Import rules (all formats):
+- Relative imports only (`./` or `../`) inside the same app folder.
+- No bare imports (`react`, `lodash`), no node builtins, no cross-app imports.
 
 ## Migration
 
 Legacy single-file scripts remain supported without any changes. To opt into multi-file modules:
 
 Legacy-body (minimal change):
-1) Add `"scriptFormat": "legacy-body"` to your app's blueprint JSON.
-2) Keep your existing `index.ts`/`index.js` body-style entry and move helpers into new `.js/.ts` files with relative imports.
+1) Add `"scriptFormat": "legacy-body"` to your app's blueprint JSON (or run `gamedev scripts migrate --legacy-body`).
+2) Keep your existing `index.js`/`index.js` body-style entry and move helpers into new `.js/.ts` files with relative imports.
 3) Run app-server or `gamedev apps deploy <app>`.
 
 Module (full ESM):
-1) Add `"scriptFormat": "module"` to your app's blueprint JSON.
-2) Update `index.ts`/`index.js` to `export default` a function with the same signature.
+1) Add `"scriptFormat": "module"` to your app's blueprint JSON (or run `gamedev scripts migrate --module`).
+2) Update `index.js`/`index.js` to `export default` a function with the same signature.
 3) Move shared logic into modules and use relative imports.
+
+Bundling is removed. If you relied on bare imports or node builtins, refactor to local modules.
 
 ## Globals
 

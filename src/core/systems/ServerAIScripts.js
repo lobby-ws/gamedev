@@ -303,7 +303,7 @@ export class ServerAIScripts extends System {
     }
     try {
       const fileMap = await this.loadFileMap(scriptRoot.scriptFiles)
-      const scriptFormat = scriptRoot.scriptFormat || 'legacy-body'
+      const scriptFormat = scriptRoot.scriptFormat === 'legacy-body' ? 'legacy-body' : 'module'
       const attachments = normalizeAiAttachments(data?.attachments)
       const attachmentMap = await this.loadAttachmentMap(attachments, fileMap)
       const systemPrompt = buildSystemPrompt({ entryPath, scriptFormat })

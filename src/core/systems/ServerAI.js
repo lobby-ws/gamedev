@@ -247,7 +247,7 @@ export class ServerAI extends System {
     }
 
     const entryPath = isValidScriptPath(blueprint?.scriptEntry) ? blueprint.scriptEntry : DEFAULT_ENTRY
-    const scriptFormat = blueprint?.scriptFormat === 'module' ? 'module' : 'legacy-body'
+    const scriptFormat = blueprint?.scriptFormat === 'legacy-body' ? 'legacy-body' : 'module'
     const attachments = normalizeAiAttachments(data?.attachments)
     let contextFiles = null
     const scriptRootId = typeof data?.scriptRootId === 'string' ? data.scriptRootId.trim() : ''

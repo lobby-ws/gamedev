@@ -7,21 +7,21 @@ description: Hyperfy world-project app scripting workflow and constraints. Use w
 
 ## Scope
 
-- Work in `apps/<AppName>/index.ts` (or `index.js`) and `apps/<AppName>/*.json`.
+- Work in `apps/<AppName>/index.js` (or `index.js`) and `apps/<AppName>/*.json`.
 - Edit `world.json` only when changing layout or per-instance overrides.
 - Keep `assets/` for user files referenced by blueprints and props.
 
 ## Workflow
 
-1. Identify the target app(s) and update the entry script at `apps/<AppName>/index.ts`.
+1. Identify the target app(s) and update the entry script at `apps/<AppName>/index.js`.
 2. Update blueprint defaults in `apps/<AppName>/*.json` (model, props, flags).
 3. Keep per-instance overrides in `world.json`.
-4. Use `gamedev dev` for continuous sync; use `gamedev apps build --all` and `gamedev apps deploy <app>` for explicit deploys.
+4. Use `gamedev dev` for continuous sync; use `gamedev apps deploy <app>` for explicit deploys.
 
 ## Runtime Constraints
 
 - Scripts run in an SES sandbox: no Node builtins, no filesystem access.
-- Imports must be relative or from `node_modules`; cross-app imports are blocked.
+- Imports must be relative; no bare imports, no node builtins, no cross-app imports.
 - Use `world.isServer` / `world.isClient` and store shared state in `app.state`.
 
 ## Lifecycle
@@ -33,9 +33,9 @@ description: Hyperfy world-project app scripting workflow and constraints. Use w
 ## Types
 
 - `tsconfig.json` should set `compilerOptions.types` to `["gamedev"]` (loads `node_modules/gamedev/index.d.ts`).
-- Prefer `index.ts`; avoid Node globals/types in app scripts.
+- Prefer `index.js`; avoid Node globals/types in app scripts.
 
 ## Guardrails
 
-- Do not edit `dist/` (build output).
+- Do not edit `dist/` (generated output, if present).
 - Do not edit `.lobby/*` except `targets.json` (local only).

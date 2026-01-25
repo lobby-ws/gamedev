@@ -80,7 +80,6 @@ function buildPackageJson({ packageName, sdkName, sdkVersion }) {
     type: 'module',
     scripts: {
       dev: 'gamedev dev',
-      build: 'gamedev apps build --all',
       typecheck: 'tsc --noEmit',
     },
     devDependencies,
@@ -396,7 +395,7 @@ export function scaffoldBuiltins({ rootDir, force = false, writeFile } = {}) {
       })
     }
 
-    const scriptPath = path.join(appDir, 'index.ts')
+    const scriptPath = path.join(appDir, 'index.js')
     if (!fs.existsSync(scriptPath) || force) {
       const script = readBuiltinScript(template)
       writeFileWithPolicy(scriptPath, script, { force, writeFile, report })

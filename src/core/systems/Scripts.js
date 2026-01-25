@@ -11,6 +11,7 @@ import { prng } from '../extras/prng'
 import { BufferedLerpVector3 } from '../extras/BufferedLerpVector3'
 import { BufferedLerpQuaternion } from '../extras/BufferedLerpQuaternion'
 import { isValidScriptPath } from '../blueprintValidation'
+import { buildLegacyBodyModuleSource } from '../legacyBody'
 import {
   buildModuleSpecifier,
   parseModuleSpecifier,
@@ -204,67 +205,8 @@ function wrapRawCode(code) {
 }
 
 export function compileLegacyBodyModuleSource(code, moduleSpecifier) {
-  let ast
-  try {
-    ast = acornParse(code, {
-      ecmaVersion: 'latest',
-      sourceType: 'module',
-      allowHashBang: true,
-      allowReturnOutsideFunction: true,
-    })
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'unknown_error'
-    throw new Error(`legacy_body_parse_error:${moduleSpecifier}:${message}`)
-  }
-
-  const importNodes = []
-  const bodyNodes = []
-  let seenNonImport = false
-
-  for (const node of ast.body) {
-    if (node.type === 'ImportDeclaration') {
-      if (seenNonImport) {
-        throw new Error(`legacy_body_imports_must_be_at_top:${moduleSpecifier}`)
-      }
-      importNodes.push(node)
-      continue
-    }
-
-    if (
-      node.type === 'ExportDefaultDeclaration' ||
-      node.type === 'ExportNamedDeclaration' ||
-      node.type === 'ExportAllDeclaration'
-    ) {
-      throw new Error(`legacy_body_exports_not_allowed:${moduleSpecifier}`)
-    }
-
-    seenNonImport = true
-    bodyNodes.push(node)
-  }
-
-  const importSource = importNodes.map(node => code.slice(node.start, node.end)).join('\n')
-  const bodySource = bodyNodes.map(node => code.slice(node.start, node.end)).join('\n')
-  const indentedBody = bodySource ? indentScriptBody(bodySource) : ''
-
-  const moduleSource = [
-    importSource,
-    'const shared = {}',
-    'export default (world, app, fetch, props, setTimeout) => {',
-    '  const config = props // deprecated',
-    indentedBody,
-    '}',
-  ]
-    .filter(Boolean)
-    .join('\n')
-
+  const moduleSource = buildLegacyBodyModuleSource(code, moduleSpecifier)
   return compileModuleSource(moduleSource, moduleSpecifier)
-}
-
-function indentScriptBody(body, indent = '  ') {
-  return body
-    .split('\n')
-    .map(line => (line ? `${indent}${line}` : line))
-    .join('\n')
 }
 
 function compileModuleSource(code, moduleSpecifier) {

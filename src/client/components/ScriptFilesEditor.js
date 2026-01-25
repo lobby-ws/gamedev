@@ -115,6 +115,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
   const diffOriginalsRef = useRef(new Map())
   const placeholderModelRef = useRef(null)
   const saveAllRef = useRef(null)
+  const newFileInputRef = useRef(null)
 
   const [selectedPath, setSelectedPath] = useState(null)
   const [fontSize, setFontSize] = useState(() => 12 * world.prefs.ui)
@@ -128,6 +129,9 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
   const [aiPreviewOpen, setAiPreviewOpen] = useState(false)
   const [aiPreviewPath, setAiPreviewPath] = useState(null)
   const [extraPaths, setExtraPaths] = useState([])
+  const [newFileOpen, setNewFileOpen] = useState(false)
+  const [newFilePath, setNewFilePath] = useState('')
+  const [newFileError, setNewFileError] = useState(null)
 
   const scriptFiles = scriptRoot?.scriptFiles
   const entryPath = scriptRoot?.scriptEntry || ''
@@ -197,6 +201,9 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     clearAiProposal()
     setExtraPaths([])
     setSelectedPath(validPaths[0] || null)
+    setNewFileOpen(false)
+    setNewFilePath('')
+    setNewFileError(null)
   }, [rootId, validPaths, clearAiProposal])
 
   useEffect(() => {
@@ -348,6 +355,54 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     },
     [scriptRoot, scriptFiles, rootId, rootVersion, world]
   )
+
+  const openNewFile = useCallback(() => {
+    if (!scriptRoot || !scriptFiles) return
+    setNewFileOpen(true)
+    setNewFilePath('')
+    setNewFileError(null)
+    requestAnimationFrame(() => {
+      newFileInputRef.current?.focus()
+    })
+  }, [scriptRoot, scriptFiles])
+
+  const cancelNewFile = useCallback(() => {
+    setNewFileOpen(false)
+    setNewFilePath('')
+    setNewFileError(null)
+  }, [])
+
+  const createNewFile = useCallback(async () => {
+    if (!scriptRoot || !scriptFiles) return
+    const trimmed = newFilePath.trim()
+    if (!trimmed) {
+      setNewFileError('Enter a file path.')
+      return
+    }
+    if (!isValidScriptPath(trimmed)) {
+      setNewFileError('Invalid path. Use a relative path like helpers/util.js.')
+      return
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(scriptFiles, trimmed) ||
+      extraPaths.includes(trimmed) ||
+      fileStatesRef.current.has(trimmed)
+    ) {
+      setNewFileError('That file already exists.')
+      return
+    }
+    try {
+      const state = await ensureFileState(trimmed, { allowMissing: true })
+      if (!state) throw new Error('new_file_failed')
+      setSelectedPath(trimmed)
+      setNewFileOpen(false)
+      setNewFilePath('')
+      setNewFileError(null)
+    } catch (err) {
+      console.error(err)
+      setNewFileError('Failed to create file.')
+    }
+  }, [scriptRoot, scriptFiles, newFilePath, extraPaths, ensureFileState])
 
   const setEditorModel = useCallback(path => {
     const editor = editorRef.current
@@ -839,7 +894,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         script: nextScriptFiles[entryPath],
         scriptEntry: entryPath,
         scriptFiles: nextScriptFiles,
-        scriptFormat: scriptRoot.scriptFormat || 'legacy-body',
+        scriptFormat: scriptRoot.scriptFormat || 'module',
       }
       world.blueprints.modify(change)
       world.admin.blueprintModify(change, {
@@ -962,7 +1017,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
           script: nextScriptFiles[entryPath],
           scriptEntry: entryPath,
           scriptFiles: nextScriptFiles,
-          scriptFormat: scriptRoot.scriptFormat || 'legacy-body',
+          scriptFormat: scriptRoot.scriptFormat || 'module',
         }
         world.blueprints.modify(change)
         world.admin.blueprintModify(change, {
@@ -1220,7 +1275,88 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
           text-transform: uppercase;
           letter-spacing: 0.04em;
           color: rgba(255, 255, 255, 0.45);
+          margin: 0;
+        }
+        .script-files-heading-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 0.5rem;
           margin-bottom: 0.5rem;
+        }
+        .script-files-add {
+          height: 1.4rem;
+          padding: 0 0.6rem;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 999px;
+          border: 1px solid rgba(255, 255, 255, 0.15);
+          background: transparent;
+          color: rgba(255, 255, 255, 0.75);
+          font-size: 0.6rem;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+          &:hover {
+            cursor: pointer;
+            border-color: rgba(255, 255, 255, 0.3);
+            color: white;
+          }
+          &:disabled {
+            opacity: 0.4;
+            cursor: default;
+          }
+        }
+        .script-files-new {
+          display: flex;
+          flex-direction: column;
+          gap: 0.35rem;
+          margin-bottom: 0.75rem;
+        }
+        .script-files-new input {
+          width: 100%;
+          border-radius: 0.5rem;
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          background: rgba(8, 9, 14, 0.6);
+          color: rgba(255, 255, 255, 0.9);
+          font-size: 0.75rem;
+          padding: 0.35rem 0.5rem;
+        }
+        .script-files-new input::placeholder {
+          color: rgba(255, 255, 255, 0.45);
+        }
+        .script-files-new-actions {
+          display: flex;
+          gap: 0.35rem;
+        }
+        .script-files-new-btn {
+          flex: 1;
+          height: 1.6rem;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 0.5rem;
+          border: 1px solid rgba(255, 255, 255, 0.15);
+          background: transparent;
+          color: rgba(255, 255, 255, 0.8);
+          font-size: 0.7rem;
+          &:hover {
+            cursor: pointer;
+            border-color: rgba(255, 255, 255, 0.3);
+            color: white;
+          }
+          &:disabled {
+            opacity: 0.5;
+            cursor: default;
+          }
+        }
+        .script-files-new-btn.primary {
+          border-color: rgba(0, 167, 255, 0.5);
+          color: #00a7ff;
+        }
+        .script-files-new-error {
+          font-size: 0.7rem;
+          color: #ff6b6b;
         }
         .script-files-entry {
           font-size: 0.75rem;
@@ -1369,7 +1505,59 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       `}
     >
       <div className='script-files-tree noscrollbar'>
-        <div className='script-files-heading'>Files</div>
+        <div className='script-files-heading-row'>
+          <div className='script-files-heading'>Files</div>
+          <button
+            className='script-files-add'
+            type='button'
+            disabled={!editorReady}
+            onClick={() => {
+              if (!newFileOpen) {
+                openNewFile()
+              }
+            }}
+          >
+            New
+          </button>
+        </div>
+        {newFileOpen && (
+          <div className='script-files-new'>
+            <input
+              ref={newFileInputRef}
+              value={newFilePath}
+              placeholder='new-file.js'
+              onChange={event => {
+                setNewFilePath(event.target.value)
+                if (newFileError) {
+                  setNewFileError(null)
+                }
+              }}
+              onKeyDown={event => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  createNewFile()
+                } else if (event.key === 'Escape') {
+                  event.preventDefault()
+                  cancelNewFile()
+                }
+              }}
+            />
+            <div className='script-files-new-actions'>
+              <button
+                className='script-files-new-btn primary'
+                type='button'
+                disabled={!newFilePath.trim()}
+                onClick={createNewFile}
+              >
+                Add
+              </button>
+              <button className='script-files-new-btn' type='button' onClick={cancelNewFile}>
+                Cancel
+              </button>
+            </div>
+            {newFileError && <div className='script-files-new-error'>{newFileError}</div>}
+          </div>
+        )}
         {entryPath && <div className='script-files-entry'>Entry: {entryPath}</div>}
         {validPaths.length === 0 && <div className='script-files-entry'>No script files.</div>}
         {renderTree(tree, {

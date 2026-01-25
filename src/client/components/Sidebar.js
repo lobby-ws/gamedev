@@ -2270,7 +2270,7 @@ function Script({ world, hidden }) {
   const errorInfo = useMemo(() => formatScriptError(scriptError), [scriptError])
   const fileCount = moduleRoot?.scriptFiles ? Object.keys(moduleRoot.scriptFiles).length : 0
   const entryPath = moduleRoot?.scriptEntry || ''
-  const scriptFormat = moduleRoot?.scriptFormat || 'legacy-body'
+  const scriptFormat = moduleRoot?.scriptFormat || 'module'
   const aiHasProposal = !!handle?.ai?.active
   const aiPending = aiStatus?.type === 'pending'
   const canBuild = !!world.builder?.canBuild?.()

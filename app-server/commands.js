@@ -3,28 +3,18 @@ import path from 'path'
 import crypto from 'crypto'
 import readline from 'readline'
 import { fileURLToPath } from 'url'
+import { parse as acornParse } from 'acorn'
 
 import { DirectAppServer } from './direct.js'
-import { buildApp, formatBuildErrors } from './appBundler.js'
 import { uuid } from './utils.js'
 import { deriveBlueprintId, isBlueprintDenylist } from './blueprintUtils.js'
 import { applyTargetEnv, parseTargetArgs, resolveTarget } from './targets.js'
+import { buildLegacyBodyModuleSource } from '../src/core/legacyBody.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 function sha256Hex(text) {
   return crypto.createHash('sha256').update(text, 'utf8').digest('hex')
-}
-
-function normalizeBaseUrl(url) {
-  if (!url) return ''
-  return url.replace(/\/+$/, '')
-}
-
-function joinUrl(base, pathname) {
-  const a = normalizeBaseUrl(base)
-  const b = (pathname || '').replace(/^\/+/, '')
-  return `${a}/${b}`
 }
 
 function isValidAppName(name) {
@@ -74,20 +64,6 @@ function parseDeployArgs(args = []) {
   return { options, rest }
 }
 
-function parseBuildArgs(args = []) {
-  const options = { all: false }
-  const rest = []
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i]
-    if (arg === '--all' || arg === '-a') {
-      options.all = true
-      continue
-    }
-    rest.push(arg)
-  }
-  return { options, rest }
-}
-
 function formatLockSummary(lock) {
   if (!lock || typeof lock !== 'object') return ''
   const owner = lock.owner ? `owner: ${lock.owner}` : 'owner: unknown'
@@ -121,12 +97,65 @@ function listLocalBlueprints(appsDir) {
   return results
 }
 
-function listLocalApps(appsDir) {
-  if (!fs.existsSync(appsDir)) return []
-  return fs
-    .readdirSync(appsDir, { withFileTypes: true })
-    .filter(entry => entry.isDirectory())
-    .map(entry => entry.name)
+function getExportedName(node) {
+  if (!node) return null
+  if (node.type === 'Identifier') return node.name
+  if (node.type === 'Literal') return String(node.value)
+  return null
+}
+
+function entryHasDefaultExport(sourceText) {
+  if (typeof sourceText !== 'string' || !sourceText.trim()) return false
+  let ast
+  try {
+    ast = acornParse(sourceText, {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      allowHashBang: true,
+    })
+  } catch {
+    return false
+  }
+  for (const node of ast.body) {
+    if (node.type === 'ExportDefaultDeclaration') return true
+    if (node.type === 'ExportNamedDeclaration' && Array.isArray(node.specifiers)) {
+      for (const spec of node.specifiers) {
+        if (spec.type !== 'ExportSpecifier') continue
+        const exported = getExportedName(spec.exported)
+        if (exported === 'default') return true
+      }
+    }
+  }
+  return false
+}
+
+function resolveEntryPath(appDir) {
+  const tsPath = path.join(appDir, 'index.js')
+  if (fs.existsSync(tsPath)) return tsPath
+  const jsPath = path.join(appDir, 'index.js')
+  if (fs.existsSync(jsPath)) return jsPath
+  return null
+}
+
+function parseScriptMigrateArgs(args = []) {
+  let mode = null
+  const rest = []
+  for (const arg of args) {
+    if (arg === '--module') {
+      mode = 'module'
+      continue
+    }
+    if (arg === '--legacy-body') {
+      mode = 'legacy-body'
+      continue
+    }
+    if (arg.startsWith('-')) {
+      throw new Error(`Unknown option: ${arg}`)
+    }
+    rest.push(arg)
+  }
+  const appName = rest[0] || null
+  return { mode, appName }
 }
 
 export class HyperfyCLI {
@@ -231,26 +260,6 @@ export class HyperfyCLI {
     } catch {}
   }
 
-  async _buildAppBundle(appName) {
-    try {
-      const result = await buildApp({ rootDir: this.rootDir, appName })
-      if (result.errors?.length) {
-        console.error(`❌ App build failed for ${appName}`)
-        const details = formatBuildErrors(result.errors)
-        if (details.length) {
-          for (const line of details) {
-            console.error(`   ${line}`)
-          }
-        }
-        return null
-      }
-      return result.outfile
-    } catch (error) {
-      console.error(`❌ App build failed for ${appName}:`, error?.message || error)
-      return null
-    }
-  }
-
   async list() {
     console.log(`📋 Listing apps...`)
 
@@ -310,6 +319,7 @@ export class HyperfyCLI {
     const blueprintPath = path.join(appDir, `${appName}.json`)
     const blueprint = {
       model: 'assets/empty.glb',
+      scriptFormat: 'module',
       props: {},
       preload: false,
       public: false,
@@ -321,9 +331,11 @@ export class HyperfyCLI {
     }
     fs.writeFileSync(blueprintPath, JSON.stringify(blueprint, null, 2) + '\n', 'utf8')
 
-    const scriptPath = path.join(appDir, 'index.ts')
+    const scriptPath = path.join(appDir, 'index.js')
     if (!fs.existsSync(scriptPath)) {
-      const script = `app.on('update', () => {})
+      const script = `export default (world, app, fetch, props, setTimeout) => {
+  app.on('update', () => {})
+}
 `
       fs.writeFileSync(scriptPath, script, 'utf8')
     }
@@ -343,70 +355,72 @@ export class HyperfyCLI {
 
     console.log(`🚀 Creating new app: ${appName}`)
 
-    const bundlePath = await this._buildAppBundle(appName)
-    if (!bundlePath) return
-
     const server = await this._connectAdminClient()
     try {
       const scriptContent =
         options.script ||
-        `// scripts exist inside apps, which are isolated from eachother but can communicate
-// global variables: Vector3, Quaternion, Matrix4, Euler, fetch, num(min, max) (similar to Math.random)
+        `export default (world, app, fetch, props, setTimeout) => {
+  // scripts exist inside apps, which are isolated from eachother but can communicate
+  // global variables: Vector3, Quaternion, Matrix4, Euler, fetch, num(min, max) (similar to Math.random)
 
-// exposes variables to the UI (docs/scripting/app/Props.md)
-app.configure([
-  {
-    type: "text",
-    key: "color",
-    label: "Box Color",
-    placeholder: "Enter a hex color",
-    initial: "#ff0000",
-  },
-]);
+  // exposes variables to the UI (docs/scripting/app/Props.md)
+  app.configure([
+    {
+      type: "text",
+      key: "color",
+      label: "Box Color",
+      placeholder: "Enter a hex color",
+      initial: "#ff0000",
+    },
+  ]);
 
-// create nodes (docs/scripting/nodes/types/**.md)
-const group = app.create("group");
-const box = app.create("prim", {
-  type: "box",
-  scale: [2, 1, 3],
-  position: [0, 1, 0],
-  color: props.color,
-});
-group.add(box);
-app.add(group); // add to world space with world.add(group)
-
-// networking (docs/scripting/Networking.md)
-if (world.isServer) {
-  app.on("ping", () => {
-    console.log("ping heard on server of original app");
-    app.emit("cross-app-ping", {});
+  // create nodes (docs/scripting/nodes/types/**.md)
+  const group = app.create("group");
+  const box = app.create("prim", {
+    type: "box",
+    scale: [2, 1, 3],
+    position: [0, 1, 0],
+    color: props.color,
   });
-  world.on("cross-app-pong", () => {
-    app.send("end", {});
+  group.add(box);
+  app.add(group); // add to world space with world.add(group)
+
+  // networking (docs/scripting/Networking.md)
+  if (world.isServer) {
+    app.on("ping", () => {
+      console.log("ping heard on server of original app");
+      app.emit("cross-app-ping", {});
+    });
+    world.on("cross-app-pong", () => {
+      app.send("end", {});
+    });
+  }
+
+  if (world.isClient) {
+    // get player objects (docs/scripting/world/World.md)
+    const localPlayer = world.getPlayer();
+    world.on('enter', (player) => {
+      console.log('player entered', player.playerId)
+    })
+    // client-side code
+    app.on("end", () => {
+      console.log("full loop ended");
+    });
+    app.send("ping", {});
+  }
+
+  app.on("update", (delta) => {
+    // runs on both client and server
+    // 'fixedUpdate' is better for physics
   });
 }
-
-if (world.isClient) {
-  // get player objects (docs/scripting/world/World.md)
-  const localPlayer = world.getPlayer();
-  world.on('enter', (player) => {
-    console.log('player entered', player.playerId)
-  })
-  // client-side code
-  app.on("end", () => {
-    console.log("full loop ended");
-  });
-  app.send("ping", {});
-}
-
-app.on("update", (delta) => {
-  // runs on both client and server
-  // 'fixedUpdate' is better for physics
-});
 `
 
       const scriptHash = sha256Hex(scriptContent)
       const scriptFilename = `${scriptHash}.js`
+      const scriptUrl = `asset://${scriptFilename}`
+      const entryPath = 'index.js'
+      const scriptFiles = { [entryPath]: scriptUrl }
       await server.client.uploadAsset({
         filename: scriptFilename,
         buffer: Buffer.from(scriptContent, 'utf8'),
@@ -434,7 +448,10 @@ app.on("update", (delta) => {
         url: null,
         desc: null,
         model: options.model || 'asset://Model.glb',
-        script: `asset://${scriptFilename}`,
+        script: scriptUrl,
+        scriptEntry: entryPath,
+        scriptFiles,
+        scriptFormat: 'module',
         props: options.props || {},
         preload: false,
         public: false,
@@ -505,7 +522,6 @@ app.on("update", (delta) => {
       await server.deployApp(appName, {
         dryRun: options.dryRun,
         note: options.note,
-        build: false,
       })
       if (options.dryRun) {
         console.log(`✅ Dry run complete`)
@@ -563,122 +579,6 @@ app.on("update", (delta) => {
       console.error(`❌ Rollback failed:`, error?.message || error)
     } finally {
       this._closeAdminClient(server)
-    }
-  }
-
-  async validate(appName) {
-    if (!isValidAppName(appName)) {
-      console.error(`❌ Invalid app name: ${appName}`)
-      return
-    }
-
-    console.log(`🔍 Validating app: ${appName}`)
-
-    const blueprints = listLocalBlueprints(this.appsDir).filter(item => item.appName === appName)
-    if (!blueprints.length) {
-      console.error(`❌ No blueprints found for ${appName}`)
-      return
-    }
-
-    const bundlePath = await this._buildAppBundle(appName)
-    if (!bundlePath) return
-
-    const server = await this._connectAdminClient()
-    try {
-      const localText = fs.readFileSync(bundlePath, 'utf8')
-      const localHash = sha256Hex(localText)
-      const assetsUrl = server.assetsUrl
-
-      let allMatch = true
-      for (const blueprint of blueprints) {
-        const remoteBlueprint = await server.client.getBlueprint(blueprint.id)
-        const remoteScript = remoteBlueprint?.script
-        if (!remoteScript) {
-          console.error(`❌ World blueprint ${blueprint.id} has no script set`)
-          allMatch = false
-          continue
-        }
-
-        if (!remoteScript.startsWith('asset://')) {
-          const matches = localText === String(remoteScript)
-          if (!matches) {
-            console.error(`❌ Script mismatch for ${blueprint.id} (inline script differs)`)
-            allMatch = false
-          }
-          continue
-        }
-
-        const filename = remoteScript.slice('asset://'.length)
-        const res = await fetch(joinUrl(assetsUrl, encodeURIComponent(filename)))
-        if (!res.ok) {
-          console.error(`❌ Failed to fetch remote script for ${blueprint.id}: ${res.status}`)
-          allMatch = false
-          continue
-        }
-        const remoteText = await res.text()
-        const remoteHash = sha256Hex(remoteText)
-        if (localHash !== remoteHash) {
-          console.error(`❌ Script mismatch for ${blueprint.id}`)
-          console.log(`🔗 Local:  ${localHash}`)
-          console.log(`🔗 World:  ${remoteHash} (${filename})`)
-          allMatch = false
-        }
-      }
-
-      if (allMatch) {
-        console.log(`✅ Script validation passed for ${appName}`)
-        console.log(`🔗 Hash: ${localHash}`)
-      } else {
-        console.log(`💡 Run 'gamedev apps deploy ${appName}' (or save the file with app-server running)`) 
-      }
-    } catch (error) {
-      console.error(`❌ Error validating app:`, error?.message || error)
-    } finally {
-      this._closeAdminClient(server)
-    }
-  }
-
-  async build(appName, options = {}) {
-    const appNames = options.all ? listLocalApps(this.appsDir) : [appName]
-    if (!options.all && !isValidAppName(appName)) {
-      console.error(`❌ Invalid app name: ${appName}`)
-      return false
-    }
-    if (!appNames.length) {
-      console.error(`❌ No local apps found in ${this.appsDir}`)
-      return false
-    }
-
-    let ok = true
-    for (const name of appNames) {
-      if (!isValidAppName(name)) {
-        console.error(`❌ Invalid app name: ${name}`)
-        ok = false
-        continue
-      }
-      const outfile = await this._buildAppBundle(name)
-      if (!outfile) {
-        ok = false
-        continue
-      }
-      console.log(`✅ Built ${name}`)
-    }
-    return ok
-  }
-
-  async clean() {
-    const distAppsDir = path.join(this.rootDir, 'dist', 'apps')
-    if (!fs.existsSync(distAppsDir)) {
-      console.log(`✅ dist/apps already clean`)
-      return true
-    }
-    try {
-      fs.rmSync(distAppsDir, { recursive: true, force: true })
-      console.log(`✅ Cleaned dist/apps`)
-      return true
-    } catch (error) {
-      console.error(`❌ Failed to clean dist/apps:`, error?.message || error)
-      return false
     }
   }
 
@@ -743,6 +643,85 @@ app.on("update", (delta) => {
     }
   }
 
+  async migrateScripts({ mode, appName } = {}) {
+    if (mode !== 'module' && mode !== 'legacy-body') {
+      console.error('❌ Migration mode required: use --module or --legacy-body')
+      return false
+    }
+    if (appName && !isValidAppName(appName)) {
+      console.error(`❌ Invalid app name: ${appName}`)
+      return false
+    }
+
+    const blueprints = listLocalBlueprints(this.appsDir).filter(item =>
+      appName ? item.appName === appName : true
+    )
+    if (!blueprints.length) {
+      console.error(`❌ No blueprints found${appName ? ` for ${appName}` : ''}`)
+      return false
+    }
+
+    const byApp = new Map()
+    for (const item of blueprints) {
+      if (!byApp.has(item.appName)) byApp.set(item.appName, [])
+      byApp.get(item.appName).push(item)
+    }
+
+    let updated = 0
+    let ok = true
+    for (const [name, items] of byApp.entries()) {
+      const appDir = path.join(this.appsDir, name)
+      let canSetFormat = true
+
+      if (mode === 'module') {
+        const entryPath = resolveEntryPath(appDir)
+        if (!entryPath) {
+          console.error(`❌ Missing entry script for ${name} (index.js/js)`)
+          ok = false
+          canSetFormat = false
+        } else {
+          const entryText = fs.readFileSync(entryPath, 'utf8')
+          if (!entryHasDefaultExport(entryText)) {
+            try {
+              const moduleSource = buildLegacyBodyModuleSource(entryText, entryPath)
+              if (moduleSource !== entryText) {
+                fs.writeFileSync(entryPath, moduleSource, 'utf8')
+              }
+            } catch (err) {
+              console.error(`❌ Failed to convert ${name} entry:`, err?.message || err)
+              ok = false
+              canSetFormat = false
+            }
+          }
+        }
+      }
+
+      if (!canSetFormat) continue
+
+      for (const item of items) {
+        try {
+          const raw = fs.readFileSync(item.configPath, 'utf8')
+          const data = JSON.parse(raw)
+          if (data.scriptFormat === mode) continue
+          data.scriptFormat = mode
+          fs.writeFileSync(item.configPath, JSON.stringify(data, null, 2) + '\n', 'utf8')
+          updated += 1
+        } catch (err) {
+          console.error(`❌ Failed to update ${item.configPath}:`, err?.message || err)
+          ok = false
+        }
+      }
+    }
+
+    if (updated) {
+      console.log(`✅ Updated scriptFormat in ${updated} blueprint file(s).`)
+    } else if (ok) {
+      console.log('✅ No scriptFormat changes needed.')
+    }
+
+    return ok
+  }
+
   showHelp({ commandPrefix = 'gamedev apps' } = {}) {
     console.log(`
 🚀 Gamedev CLI (direct /admin mode)
@@ -754,13 +733,9 @@ Commands:
   new <appName>              Create a local app folder + blueprint
   create <appName>           Create a new app in the connected world
   list                       List local apps in ./apps
-  build <appName>            Build app bundle to ./dist/apps/<appName>.js
-  build --all                Build bundles for all local apps
   deploy <appName>           Deploy all local blueprints under ./apps/<appName>
   update <appName>           Alias for deploy
   rollback [snapshotId]      Roll back the latest deploy snapshot (or by id)
-  validate <appName>         Verify local script matches world blueprint script(s)
-  clean                      Remove ./dist/apps build artifacts
   reset [--force]            Delete local apps/assets/world.json
   status                     Show /admin snapshot summary
   help                       Show this help
@@ -769,7 +744,6 @@ Commands:
 Options:
   --dry-run, -n              Show deploy plan without applying changes
   --note <text>              Attach a note to the deploy snapshot
-  --all, -a                  Build all local apps (build only)
   --yes, -y                  Skip confirmation prompt (for prod targets)
 
 Environment:
@@ -779,7 +753,7 @@ Environment:
   DEPLOY_CODE                Deploy code (required for script updates when configured)
 
 Notes:
-  - Blueprints live at apps/<appName>/*.json with a shared index.ts/js script.
+  - Blueprints live at apps/<appName>/*.json with a shared index.js/js script.
   - Start the direct app-server for continuous sync:
       WORLD_URL=... WORLD_ID=... ADMIN_CODE=... DEPLOY_CODE=... node <path-to-repo>/app-server/server.js
 `)
@@ -868,39 +842,6 @@ export async function runAppCommand({ command, args = [], rootDir = process.cwd(
       await cli.list()
       break
 
-    case 'build': {
-      try {
-        const parsed = parseBuildArgs(args)
-        const appName = parsed.rest[0] || null
-        if (!parsed.options.all && !appName) {
-          console.error('❌ App name required')
-          console.log(`Usage: ${commandPrefix} build <appName>`)
-          return 1
-        }
-        const ok = await cli.build(appName, parsed.options)
-        if (!ok) exitCode = 1
-      } catch (err) {
-        console.error(`❌ ${err?.message || err}`)
-        return 1
-      }
-      break
-    }
-
-    case 'validate':
-      if (!args[0]) {
-        console.error('❌ App name required')
-        console.log(`Usage: ${commandPrefix} validate <appName>`)
-        return 1
-      }
-      await cli.validate(args[0])
-      break
-
-    case 'clean': {
-      const ok = await cli.clean()
-      if (!ok) exitCode = 1
-      break
-    }
-
     case 'reset': {
       const force = args.includes('--force') || args.includes('-f')
       await cli.reset({ force })
@@ -923,6 +864,67 @@ export async function runAppCommand({ command, args = [], rootDir = process.cwd(
         exitCode = 1
       }
       cli.showHelp({ commandPrefix })
+  }
+
+  return exitCode
+}
+
+function showScriptsHelp({ commandPrefix = 'gamedev scripts' } = {}) {
+  console.log(`
+🔧 Script migration helper
+
+Usage:
+  ${commandPrefix} <command> [options]
+
+Commands:
+  migrate                   Set scriptFormat across local blueprints
+  help                      Show this help
+
+Options (migrate):
+  --module                  Convert legacy entry bodies to modules and set scriptFormat: "module"
+  --legacy-body             Set scriptFormat: "legacy-body" without rewriting scripts
+
+Examples:
+  ${commandPrefix} migrate --module
+  ${commandPrefix} migrate --legacy-body MyApp
+`)
+}
+
+export async function runScriptCommand({ command, args = [], rootDir = process.cwd(), helpPrefix } = {}) {
+  const cli = new HyperfyCLI({ rootDir })
+  const commandPrefix = helpPrefix || 'gamedev scripts'
+  let exitCode = 0
+
+  switch (command) {
+    case 'migrate': {
+      try {
+        const parsed = parseScriptMigrateArgs(args)
+        if (!parsed.mode) {
+          console.error('❌ Migration mode required: use --module or --legacy-body')
+          showScriptsHelp({ commandPrefix })
+          return 1
+        }
+        const ok = await cli.migrateScripts({ mode: parsed.mode, appName: parsed.appName })
+        if (!ok) exitCode = 1
+      } catch (err) {
+        console.error(`❌ ${err?.message || err}`)
+        return 1
+      }
+      break
+    }
+
+    case 'help':
+    case '--help':
+    case '-h':
+      showScriptsHelp({ commandPrefix })
+      break
+
+    default:
+      if (command) {
+        console.error(`❌ Unknown command: ${command}`)
+        exitCode = 1
+      }
+      showScriptsHelp({ commandPrefix })
   }
 
   return exitCode

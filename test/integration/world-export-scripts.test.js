@@ -64,7 +64,7 @@ test('world export skips scripts by default and includes when requested', async 
   }
 
   await server.exportWorldToDisk(snapshot)
-  const scriptPath = path.join(rootDir, 'apps', 'TestApp', 'index.ts')
+  const scriptPath = path.join(rootDir, 'apps', 'TestApp', 'index.js')
   assert.equal(await fileExists(scriptPath), false)
 
   await server.exportWorldToDisk(snapshot, { includeBuiltScripts: true })

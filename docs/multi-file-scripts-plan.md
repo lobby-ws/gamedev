@@ -36,7 +36,7 @@ Add optional fields to blueprint JSON:
   - Module-mode apps keep `script` pointing at the entry file so existing tooling expectations remain valid.
 - `scriptEntry`: string
   - App-relative module path (POSIX separators) within `apps/<AppName>/`.
-  - Examples: `index.js`, `index.ts`, `src/index.js`.
+  - Examples: `index.js`, `index.js`, `src/index.js`.
 - `scriptFiles`: { [relPath: string]: string }
   - Map from app-relative module path to the canonical asset URL containing that module source.
   - Example: `"helpers/math.js": "asset://<hash>.js"`.

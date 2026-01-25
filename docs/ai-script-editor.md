@@ -36,7 +36,7 @@ world.emit('script-ai-proposal', {
   source: 'assistant',
   autoPreview: true,
   files: [
-    { path: 'index.ts', content: '...' },
+    { path: 'index.js', content: '...' },
     { path: 'ui/buttons.ts', content: '...' },
   ],
 })
