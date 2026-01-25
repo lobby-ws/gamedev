@@ -36,6 +36,9 @@ const names = [
   'playerJoined',
   'playerUpdated',
   'playerLeft',
+  // ai script editor
+  'scriptAiRequest',
+  'scriptAiProposal',
 ]
 
 const byName = {}

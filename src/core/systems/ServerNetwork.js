@@ -694,6 +694,14 @@ export class ServerNetwork extends System {
     entity?.onEvent(version, name, data, socket.id)
   }
 
+  onScriptAiRequest = (socket, data) => {
+    const handler = this.world.aiScripts?.handleRequest
+    if (!handler) return
+    handler(socket, data).catch(err => {
+      console.error('[ai-scripts] request failed', err)
+    })
+  }
+
   onEntityRemoved = (socket, id) => {
     console.warn('rejected entity remove over /ws', { playerId: socket.id })
   }

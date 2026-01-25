@@ -199,6 +199,14 @@ export class ClientNetwork extends System {
     entity?.onEvent(version, name, data)
   }
 
+  onScriptAiProposal = data => {
+    if (this.world.aiScripts?.onProposal) {
+      this.world.aiScripts.onProposal(data)
+      return
+    }
+    this.world.emit?.('script-ai-proposal', data)
+  }
+
   onEntityRemoved = id => {
     this.world.entities.remove(id)
   }
