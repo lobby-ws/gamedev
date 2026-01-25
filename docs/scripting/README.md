@@ -59,6 +59,7 @@ If `scriptFormat` is missing, app-server infers it during deploy:
 
 Import rules (all formats):
 - Relative imports only (`./` or `../`) inside the same app folder.
+- Shared imports via `@shared/...` or `shared/...` from the project-level `shared/` folder.
 - No bare imports (`react`, `lodash`), no node builtins, no cross-app imports.
 
 ## Migration

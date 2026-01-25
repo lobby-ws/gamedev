@@ -51,7 +51,7 @@ const DEFAULT_TSCONFIG = {
     skipLibCheck: true,
     types: ['gamedev'],
   },
-  include: ['apps/**/*'],
+  include: ['apps/**/*', 'shared/**/*'],
 }
 
 function normalizePackageName(name, fallback) {

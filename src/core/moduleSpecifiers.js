@@ -1,6 +1,8 @@
 import { isValidScriptPath } from './blueprintValidation'
 
 const MODULE_PREFIX = 'app://'
+const SHARED_PREFIX = '@shared/'
+const SHARED_ALIAS_PREFIX = 'shared/'
 
 export function buildModuleSpecifier({ blueprintId, version, relPath }) {
   return `${MODULE_PREFIX}${blueprintId}@${version}/${relPath}`
@@ -23,6 +25,33 @@ export function parseModuleSpecifier(specifier) {
 
 export function isRelativeImport(specifier) {
   return typeof specifier === 'string' && (specifier.startsWith('./') || specifier.startsWith('../'))
+}
+
+export function normalizeSharedRelPath(importSpecifier) {
+  if (typeof importSpecifier !== 'string') return null
+  if (importSpecifier.startsWith(SHARED_PREFIX)) {
+    return isValidScriptPath(importSpecifier) ? importSpecifier : null
+  }
+  if (importSpecifier.startsWith(SHARED_ALIAS_PREFIX)) {
+    const rest = importSpecifier.slice(SHARED_ALIAS_PREFIX.length)
+    if (!rest) return null
+    const relPath = `${SHARED_PREFIX}${rest}`
+    return isValidScriptPath(relPath) ? relPath : null
+  }
+  return null
+}
+
+export function getSharedRelPathAlternate(relPath) {
+  if (typeof relPath !== 'string') return null
+  if (relPath.startsWith(SHARED_PREFIX)) {
+    const rest = relPath.slice(SHARED_PREFIX.length)
+    return rest ? `${SHARED_ALIAS_PREFIX}${rest}` : null
+  }
+  if (relPath.startsWith(SHARED_ALIAS_PREFIX)) {
+    const rest = relPath.slice(SHARED_ALIAS_PREFIX.length)
+    return rest ? `${SHARED_PREFIX}${rest}` : null
+  }
+  return null
 }
 
 function normalizeRelativePath(referrerPath, importSpecifier) {

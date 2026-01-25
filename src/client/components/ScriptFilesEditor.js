@@ -14,8 +14,25 @@ const languageByExt = {
   tsx: 'typescript',
 }
 
+const SHARED_PREFIX = '@shared/'
+const SHARED_ALIAS = 'shared/'
+
 const aiDebugEnabled =
   (process?.env?.PUBLIC_DEBUG_AI_SCRIPT || globalThis?.env?.PUBLIC_DEBUG_AI_SCRIPT) === 'true'
+
+function isSharedPath(path) {
+  if (typeof path !== 'string') return false
+  return path.startsWith(SHARED_PREFIX) || path.startsWith(SHARED_ALIAS)
+}
+
+function toSharedPath(path) {
+  if (typeof path !== 'string') return null
+  if (path.startsWith(SHARED_PREFIX)) return path
+  if (path.startsWith(SHARED_ALIAS)) {
+    return `${SHARED_PREFIX}${path.slice(SHARED_ALIAS.length)}`
+  }
+  return `${SHARED_PREFIX}${path}`
+}
 
 function normalizeAiPatchSet(input) {
   if (!input) return null
@@ -137,6 +154,11 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
   const entryPath = scriptRoot?.scriptEntry || ''
   const rootId = scriptRoot?.id || ''
   const rootVersion = Number.isFinite(scriptRoot?.version) ? scriptRoot.version : 0
+  const canMoveToShared =
+    !!selectedPath &&
+    selectedPath !== entryPath &&
+    isValidScriptPath(selectedPath) &&
+    !isSharedPath(selectedPath)
 
   const { validPaths, invalidPaths } = useMemo(() => {
     const basePaths =
@@ -366,6 +388,22 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     })
   }, [scriptRoot, scriptFiles])
 
+  const openNewSharedFile = useCallback(() => {
+    if (!scriptRoot || !scriptFiles) return
+    setNewFileOpen(true)
+    setNewFilePath(SHARED_PREFIX)
+    setNewFileError(null)
+    requestAnimationFrame(() => {
+      const input = newFileInputRef.current
+      if (!input) return
+      input.focus()
+      if (typeof input.setSelectionRange === 'function') {
+        const end = input.value.length
+        input.setSelectionRange(end, end)
+      }
+    })
+  }, [scriptRoot, scriptFiles])
+
   const cancelNewFile = useCallback(() => {
     setNewFileOpen(false)
     setNewFilePath('')
@@ -380,7 +418,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       return
     }
     if (!isValidScriptPath(trimmed)) {
-      setNewFileError('Invalid path. Use a relative path like helpers/util.js.')
+      setNewFileError('Invalid path. Use helpers/util.js or @shared/helpers/util.js.')
       return
     }
     if (
@@ -403,6 +441,134 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       setNewFileError('Failed to create file.')
     }
   }, [scriptRoot, scriptFiles, newFilePath, extraPaths, ensureFileState])
+
+  const moveSelectedToShared = useCallback(async () => {
+    if (!scriptRoot || !scriptFiles) return
+    if (saving) return
+    const path = selectedPath
+    if (!path) return
+    if (!isValidScriptPath(path)) {
+      setError('Invalid script path.')
+      return
+    }
+    if (path === entryPath) {
+      setError('Entry script cannot be shared.')
+      return
+    }
+    if (isSharedPath(path)) {
+      setError('Script is already shared.')
+      return
+    }
+    const sharedPath = toSharedPath(path)
+    if (!sharedPath || !isValidScriptPath(sharedPath)) {
+      setError('Invalid shared path.')
+      return
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(scriptFiles, sharedPath) ||
+      extraPaths.includes(sharedPath) ||
+      fileStatesRef.current.has(sharedPath)
+    ) {
+      setError('Shared file already exists.')
+      return
+    }
+    setLoading(true)
+    setError(null)
+    let lockToken
+    try {
+      const state = await ensureFileState(path)
+      if (!state?.model) throw new Error('missing_state')
+      const text = state.model.getValue()
+      const nextState = await ensureFileState(sharedPath, { allowMissing: true })
+      if (!nextState?.model) throw new Error('missing_shared_state')
+      nextState.model.setValue(text)
+      nextState.originalText = state.originalText
+      nextState.dirty = text !== state.originalText
+      nextState.viewState = state.viewState || null
+      nextState.version = state.version
+      nextState.assetUrl = state.assetUrl
+      nextState.isNew = state.isNew
+      state.disposable?.dispose()
+      state.model?.dispose()
+      fileStatesRef.current.delete(path)
+      setExtraPaths(current => {
+        let next = current.filter(item => item !== path)
+        if (nextState.isNew) {
+          if (!next.includes(sharedPath)) next = [...next, sharedPath]
+        } else if (next.includes(sharedPath)) {
+          next = next.filter(item => item !== sharedPath)
+        }
+        return next
+      })
+      setSelectedPath(sharedPath)
+      setDirtyTick(tick => tick + 1)
+
+      if (Object.prototype.hasOwnProperty.call(scriptFiles, path)) {
+        if (!entryPath || !Object.prototype.hasOwnProperty.call(scriptFiles, entryPath)) {
+          setError('Script entry missing.')
+          return
+        }
+        if (!world.admin?.acquireDeployLock || !world.admin?.blueprintModify) {
+          setError('Admin connection required.')
+          return
+        }
+        const scope = deriveLockScopeFromBlueprintId(scriptRoot.id)
+        const result = await world.admin.acquireDeployLock({
+          owner: world.network.id,
+          scope,
+        })
+        lockToken = result?.token || world.admin.deployLockToken
+        const nextScriptFiles = { ...scriptFiles }
+        const assetUrl = nextScriptFiles[path]
+        if (!assetUrl) {
+          setError('Missing script file.')
+          return
+        }
+        delete nextScriptFiles[path]
+        nextScriptFiles[sharedPath] = assetUrl
+        nextState.assetUrl = assetUrl
+        nextState.isNew = false
+        const nextVersion = rootVersion + 1
+        const change = {
+          id: scriptRoot.id,
+          version: nextVersion,
+          script: nextScriptFiles[entryPath],
+          scriptEntry: entryPath,
+          scriptFiles: nextScriptFiles,
+          scriptFormat: scriptRoot.scriptFormat || 'module',
+        }
+        world.blueprints.modify(change)
+        await world.admin.blueprintModify(change, {
+          ignoreNetworkId: world.network.id,
+          lockToken,
+        })
+        nextState.version = nextVersion
+      }
+      world.emit('toast', 'Moved to shared')
+    } catch (err) {
+      console.error(err)
+      setError('Failed to move to shared.')
+    } finally {
+      setLoading(false)
+      if (lockToken && world.admin?.releaseDeployLock) {
+        try {
+          await world.admin.releaseDeployLock(lockToken)
+        } catch (releaseErr) {
+          console.error('failed to release deploy lock', releaseErr)
+        }
+      }
+    }
+  }, [
+    scriptRoot,
+    scriptFiles,
+    entryPath,
+    rootVersion,
+    world,
+    saving,
+    selectedPath,
+    extraPaths,
+    ensureFileState,
+  ])
 
   const setEditorModel = useCallback(path => {
     const editor = editorRef.current
@@ -1284,6 +1450,11 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
           gap: 0.5rem;
           margin-bottom: 0.5rem;
         }
+        .script-files-actions {
+          display: flex;
+          align-items: center;
+          gap: 0.35rem;
+        }
         .script-files-add {
           height: 1.4rem;
           padding: 0 0.6rem;
@@ -1357,6 +1528,28 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         .script-files-new-error {
           font-size: 0.7rem;
           color: #ff6b6b;
+        }
+        .script-files-move {
+          width: 100%;
+          height: 1.6rem;
+          margin-bottom: 0.5rem;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 0.5rem;
+          border: 1px solid rgba(255, 255, 255, 0.15);
+          background: transparent;
+          color: rgba(255, 255, 255, 0.8);
+          font-size: 0.7rem;
+          &:hover {
+            cursor: pointer;
+            border-color: rgba(255, 255, 255, 0.3);
+            color: white;
+          }
+          &:disabled {
+            opacity: 0.5;
+            cursor: default;
+          }
         }
         .script-files-entry {
           font-size: 0.75rem;
@@ -1507,18 +1700,28 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       <div className='script-files-tree noscrollbar'>
         <div className='script-files-heading-row'>
           <div className='script-files-heading'>Files</div>
-          <button
-            className='script-files-add'
-            type='button'
-            disabled={!editorReady}
-            onClick={() => {
-              if (!newFileOpen) {
-                openNewFile()
-              }
-            }}
-          >
-            New
-          </button>
+          <div className='script-files-actions'>
+            <button
+              className='script-files-add'
+              type='button'
+              disabled={!editorReady}
+              onClick={() => {
+                if (!newFileOpen) {
+                  openNewFile()
+                }
+              }}
+            >
+              New
+            </button>
+            <button
+              className='script-files-add'
+              type='button'
+              disabled={!editorReady}
+              onClick={openNewSharedFile}
+            >
+              Shared
+            </button>
+          </div>
         </div>
         {newFileOpen && (
           <div className='script-files-new'>
@@ -1559,6 +1762,16 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
           </div>
         )}
         {entryPath && <div className='script-files-entry'>Entry: {entryPath}</div>}
+        {canMoveToShared && (
+          <button
+            className='script-files-move'
+            type='button'
+            disabled={!editorReady}
+            onClick={moveSelectedToShared}
+          >
+            Move to shared
+          </button>
+        )}
         {validPaths.length === 0 && <div className='script-files-entry'>No script files.</div>}
         {renderTree(tree, {
           selectedPath,

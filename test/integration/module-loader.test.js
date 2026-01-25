@@ -93,3 +93,44 @@ test('legacy-body entry preserves imports and wraps body', async () => {
   assert.equal(runtimeWorld.total, 2)
   assert.equal(runtimeWorld.sharedCount, 2)
 })
+
+test('shared import aliases resolve to shared script files', async () => {
+  const rootDir = await createTempDir('hyperfy-shared-modules-')
+  const assetsDir = path.join(rootDir, 'assets')
+  await fs.mkdir(assetsDir, { recursive: true })
+  await fs.writeFile(
+    path.join(assetsDir, 'entry.js'),
+    [
+      "import { add } from 'shared/math.js'",
+      'export default (world, app, fetch, props) => {',
+      '  world.total = add(props.a, props.b)',
+      '}',
+    ].join('\n'),
+    'utf8'
+  )
+  await fs.writeFile(
+    path.join(assetsDir, 'shared-math.js'),
+    'export const add = (a, b) => a + b',
+    'utf8'
+  )
+
+  const world = new World()
+  world.register('loader', ServerLoader)
+  world.assetsDir = assetsDir
+
+  const blueprint = {
+    id: 'sharedapp',
+    version: 1,
+    scriptFormat: 'module',
+    scriptEntry: 'index.js',
+    scriptFiles: {
+      'index.js': 'asset://entry.js',
+      '@shared/math.js': 'asset://shared-math.js',
+    },
+  }
+
+  const { exec } = await world.scripts.loadModuleScript({ blueprint })
+  const runtimeWorld = { total: 0 }
+  exec(runtimeWorld, {}, null, { a: 7, b: 4 }, () => {})
+  assert.equal(runtimeWorld.total, 11)
+})

@@ -30,6 +30,9 @@ const BLUEPRINT_FIELDS = [
 
 const SCRIPT_EXTENSIONS = new Set(['.js', '.ts'])
 const SCRIPT_DIR_SKIP = new Set(['.git', 'node_modules'])
+const SHARED_DIR_NAME = 'shared'
+const SHARED_IMPORT_PREFIX = '@shared/'
+const SHARED_IMPORT_ALIAS = 'shared/'
 
 function sha256(buffer) {
   return crypto.createHash('sha256').update(buffer).digest('hex')
@@ -128,6 +131,105 @@ function normalizeScriptRelPath(value) {
   return value.replace(/\\/g, '/')
 }
 
+function isRelativeImport(specifier) {
+  return typeof specifier === 'string' && (specifier.startsWith('./') || specifier.startsWith('../'))
+}
+
+function normalizeRelativePath(referrerPath, importSpecifier) {
+  if (typeof referrerPath !== 'string' || typeof importSpecifier !== 'string') return null
+  if (importSpecifier.includes('\\')) return null
+  const refSegments = normalizeScriptRelPath(referrerPath).split('/').filter(Boolean)
+  refSegments.pop()
+  const specSegments = importSpecifier.split('/')
+  const nextSegments = [...refSegments]
+  for (const segment of specSegments) {
+    if (!segment || segment === '.') continue
+    if (segment === '..') {
+      if (nextSegments.length === 0) return null
+      nextSegments.pop()
+      continue
+    }
+    nextSegments.push(segment)
+  }
+  const normalized = nextSegments.join('/')
+  return normalized || null
+}
+
+function normalizeSharedSpecifier(specifier) {
+  if (typeof specifier !== 'string') return null
+  const normalized = normalizeScriptRelPath(specifier)
+  if (normalized.startsWith(SHARED_IMPORT_PREFIX)) {
+    return isValidScriptPath(normalized) ? normalized : null
+  }
+  if (normalized.startsWith(SHARED_IMPORT_ALIAS)) {
+    const rest = normalized.slice(SHARED_IMPORT_ALIAS.length)
+    if (!rest) return null
+    const relPath = `${SHARED_IMPORT_PREFIX}${rest}`
+    return isValidScriptPath(relPath) ? relPath : null
+  }
+  return null
+}
+
+function getSharedDiskRelativePath(relPath) {
+  if (typeof relPath !== 'string') return null
+  const normalized = normalizeScriptRelPath(relPath)
+  if (normalized.startsWith(SHARED_IMPORT_PREFIX)) {
+    const rest = normalized.slice(SHARED_IMPORT_PREFIX.length)
+    return rest || null
+  }
+  if (normalized.startsWith(SHARED_IMPORT_ALIAS)) {
+    const rest = normalized.slice(SHARED_IMPORT_ALIAS.length)
+    return rest || null
+  }
+  return null
+}
+
+const IMPORT_EXPORT_SPECIFIER_REGEX =
+  /\b(?:import|export)\s+(?:type\s+)?(?:[^'"]*from\s*)?['"]([^'"]+)['"]/g
+const DYNAMIC_IMPORT_SPECIFIER_REGEX = /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g
+
+function extractImportSpecifiersFallback(sourceText) {
+  const specifiers = new Set()
+  IMPORT_EXPORT_SPECIFIER_REGEX.lastIndex = 0
+  DYNAMIC_IMPORT_SPECIFIER_REGEX.lastIndex = 0
+  let match = null
+  while ((match = IMPORT_EXPORT_SPECIFIER_REGEX.exec(sourceText)) !== null) {
+    if (match[1]) specifiers.add(match[1])
+  }
+  while ((match = DYNAMIC_IMPORT_SPECIFIER_REGEX.exec(sourceText)) !== null) {
+    if (match[1]) specifiers.add(match[1])
+  }
+  return Array.from(specifiers)
+}
+
+function extractImportSpecifiers(sourceText) {
+  if (typeof sourceText !== 'string' || !sourceText.trim()) return []
+  let ast = null
+  try {
+    ast = acornParse(sourceText, {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      allowHashBang: true,
+    })
+  } catch {
+    return extractImportSpecifiersFallback(sourceText)
+  }
+
+  const specifiers = []
+  for (const node of ast.body) {
+    if (node.type === 'ImportDeclaration') {
+      const specifier = node.source?.value
+      if (typeof specifier === 'string') specifiers.push(specifier)
+      continue
+    }
+    if (node.type === 'ExportNamedDeclaration' || node.type === 'ExportAllDeclaration') {
+      const specifier = node.source?.value
+      if (typeof specifier === 'string') specifiers.push(specifier)
+    }
+  }
+  return specifiers
+}
+
 function isScriptFilename(name) {
   const ext = path.extname(name || '').toLowerCase()
   return SCRIPT_EXTENSIONS.has(ext)
@@ -198,6 +300,80 @@ function listScriptFiles(rootDir) {
       const relPath = normalizeScriptRelPath(path.relative(rootDir, absPath))
       files.push({ absPath, relPath })
     }
+  }
+  files.sort((a, b) => a.relPath.localeCompare(b.relPath))
+  return files
+}
+
+function collectSharedDependencies(appFiles, sharedDir) {
+  const sharedRelPaths = new Set()
+  const queue = []
+
+  const enqueue = relPath => {
+    if (!relPath) return
+    if (!relPath.startsWith(SHARED_IMPORT_PREFIX)) return
+    if (!isValidScriptPath(relPath)) return
+    if (sharedRelPaths.has(relPath)) return
+    sharedRelPaths.add(relPath)
+    queue.push(relPath)
+  }
+
+  for (const file of appFiles) {
+    let sourceText = ''
+    try {
+      sourceText = fs.readFileSync(file.absPath, 'utf8')
+    } catch {
+      continue
+    }
+    const specifiers = extractImportSpecifiers(sourceText)
+    for (const specifier of specifiers) {
+      const relPath = normalizeSharedSpecifier(specifier)
+      if (relPath) enqueue(relPath)
+    }
+  }
+
+  while (queue.length) {
+    const relPath = queue.pop()
+    const sharedRel = getSharedDiskRelativePath(relPath)
+    if (!sharedRel) continue
+    const absPath = path.join(sharedDir, sharedRel)
+    if (!fs.existsSync(absPath)) continue
+    if (!isScriptFilename(absPath)) continue
+    let sourceText = ''
+    try {
+      sourceText = fs.readFileSync(absPath, 'utf8')
+    } catch {
+      continue
+    }
+    const specifiers = extractImportSpecifiers(sourceText)
+    for (const specifier of specifiers) {
+      const aliasRelPath = normalizeSharedSpecifier(specifier)
+      if (aliasRelPath) {
+        enqueue(aliasRelPath)
+        continue
+      }
+      if (!isRelativeImport(specifier)) continue
+      const resolved = normalizeRelativePath(relPath, specifier)
+      if (!resolved) continue
+      if (!resolved.startsWith(SHARED_IMPORT_PREFIX)) continue
+      if (!isValidScriptPath(resolved)) continue
+      enqueue(resolved)
+    }
+  }
+
+  return sharedRelPaths
+}
+
+function buildSharedFileEntries(sharedRelPaths, sharedDir) {
+  if (!sharedRelPaths || !sharedDir) return []
+  const files = []
+  for (const relPath of sharedRelPaths) {
+    const sharedRel = getSharedDiskRelativePath(relPath)
+    if (!sharedRel) continue
+    const absPath = path.join(sharedDir, sharedRel)
+    if (!fs.existsSync(absPath)) continue
+    if (!isScriptFilename(absPath)) continue
+    files.push({ absPath, relPath })
   }
   files.sort((a, b) => a.relPath.localeCompare(b.relPath))
   return files
@@ -597,6 +773,7 @@ export class DirectAppServer {
     this.deployCode = deployCode || null
     this.appsDir = path.join(this.rootDir, 'apps')
     this.assetsDir = path.join(this.rootDir, 'assets')
+    this.sharedDir = path.join(this.rootDir, SHARED_DIR_NAME)
     this.worldFile = path.join(this.rootDir, 'world.json')
     this.manifest = new WorldManifest(this.worldFile)
 
@@ -922,11 +1099,28 @@ export class DirectAppServer {
     const appPath = path.join(this.appsDir, appName)
     const entryPath = this._getScriptPath(appName)
     const scriptFormat = this._getScriptFormat(appName)
+    const appFiles = listScriptFiles(appPath)
+    const sharedRelPaths = collectSharedDependencies(appFiles, this.sharedDir)
+    const sharedFiles = buildSharedFileEntries(sharedRelPaths, this.sharedDir)
+    const filesByRelPath = new Map()
+    for (const file of appFiles) {
+      const relPath = normalizeScriptRelPath(file.relPath)
+      filesByRelPath.set(relPath, { ...file, relPath })
+    }
+    for (const file of sharedFiles) {
+      const relPath = normalizeScriptRelPath(file.relPath)
+      if (filesByRelPath.has(relPath)) {
+        console.warn(`⚠️  Shared script path conflicts with app file: ${appName}/${relPath}`)
+        continue
+      }
+      filesByRelPath.set(relPath, { ...file, relPath })
+    }
     return {
       appPath,
       entryPath,
-      files: listScriptFiles(appPath),
+      files: Array.from(filesByRelPath.values()).sort((a, b) => a.relPath.localeCompare(b.relPath)),
       scriptFormat,
+      sharedRelPaths,
     }
   }
 
@@ -939,6 +1133,7 @@ export class DirectAppServer {
   _startWatchers() {
     this._watchAppsDir()
     this._watchAssetsDir()
+    this._watchSharedDir()
     this._watchWorldFile()
     for (const appName of listSubdirs(this.appsDir)) {
       this._watchAppDir(appName)
@@ -1020,6 +1215,95 @@ export class DirectAppServer {
       }
     })
     this.watchers.set(dirPath, watcher)
+  }
+
+  _watchSharedDir() {
+    if (this.watchers.has(this.sharedDir)) return
+    if (!fs.existsSync(this.sharedDir)) {
+      if (this.watchers.has('sharedRoot')) return
+      if (!fs.existsSync(this.rootDir)) return
+      const watcher = fs.watch(this.rootDir, { recursive: false }, (eventType, filename) => {
+        if (eventType !== 'rename' || filename !== SHARED_DIR_NAME) return
+        const abs = path.join(this.rootDir, filename)
+        if (!fs.existsSync(abs)) return
+        if (!fs.statSync(abs).isDirectory()) return
+        this._closeWatcher('sharedRoot')
+        this._watchSharedDir()
+      })
+      this.watchers.set('sharedRoot', watcher)
+      return
+    }
+    this._watchSharedDirRecursive(this.sharedDir, this.sharedDir)
+  }
+
+  _watchSharedDirRecursive(dirPath, rootPath) {
+    if (dirPath !== rootPath && SCRIPT_DIR_SKIP.has(path.basename(dirPath))) return
+    this._watchSharedPath(dirPath, rootPath)
+    let entries = []
+    try {
+      entries = fs.readdirSync(dirPath, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      if (SCRIPT_DIR_SKIP.has(entry.name)) continue
+      this._watchSharedDirRecursive(path.join(dirPath, entry.name), rootPath)
+    }
+  }
+
+  _watchSharedPath(dirPath, rootPath) {
+    if (this.watchers.has(dirPath)) return
+    const watcher = fs.watch(dirPath, { recursive: false }, (eventType, filename) => {
+      if (!filename) return
+      const abs = path.join(dirPath, filename)
+      if (this.pendingWrites.has(abs)) return
+      if (!fs.existsSync(abs) && eventType === 'change') return
+
+      if (eventType === 'rename') {
+        if (fs.existsSync(abs)) {
+          let stats = null
+          try {
+            stats = fs.statSync(abs)
+          } catch {}
+          if (stats?.isDirectory()) {
+            if (SCRIPT_DIR_SKIP.has(path.basename(abs))) return
+            this._watchSharedDirRecursive(abs, rootPath)
+            return
+          }
+        } else {
+          this._closeWatchersUnderDir(abs)
+        }
+      }
+
+      if (!isScriptFilename(filename)) return
+      const rel = normalizeScriptRelPath(path.relative(rootPath, abs))
+      if (!rel) return
+      const sharedRelPath = `${SHARED_IMPORT_PREFIX}${rel}`
+      this._scheduleDeployAppsForSharedPath(sharedRelPath)
+    })
+    this.watchers.set(dirPath, watcher)
+  }
+
+  _scheduleDeployAppsForSharedPath(sharedRelPath) {
+    const canonical = normalizeSharedSpecifier(sharedRelPath)
+    if (!canonical) return
+    const targets = this._getAppsUsingSharedPath(canonical)
+    if (!targets.length) return
+    for (const appName of targets) {
+      this._scheduleDeployApp(appName)
+    }
+  }
+
+  _getAppsUsingSharedPath(sharedRelPath) {
+    if (!sharedRelPath) return []
+    const apps = []
+    for (const appName of listSubdirs(this.appsDir)) {
+      const modeInfo = this._resolveAppScriptMode(appName)
+      if (!modeInfo?.sharedRelPaths?.has(sharedRelPath)) continue
+      apps.push(appName)
+    }
+    return apps
   }
 
   _closeWatcher(key) {
@@ -1429,6 +1713,19 @@ export class DirectAppServer {
     if (!files.length) {
       throw new Error(`missing_script_files:${appName}`)
     }
+    const sharedRelPaths = modeInfo?.sharedRelPaths
+    if (sharedRelPaths && sharedRelPaths.size) {
+      const fileRelPaths = new Set(files.map(file => normalizeScriptRelPath(file.relPath)))
+      const missing = []
+      for (const relPath of sharedRelPaths) {
+        if (!fileRelPaths.has(relPath)) {
+          missing.push(relPath)
+        }
+      }
+      if (missing.length) {
+        throw new Error(`missing_shared_scripts:${formatNameList(missing)}`)
+      }
+    }
 
     const scriptEntry = normalizeScriptRelPath(path.relative(appPath, entryPath))
     const scriptFiles = {}
@@ -1836,7 +2133,7 @@ export class DirectAppServer {
     const appPath = path.join(this.appsDir, appName)
     ensureDir(appPath)
     const scriptFiles = scriptRoot.scriptFiles
-    const keep = new Set()
+    const keepApp = new Set()
     for (const [relPath, assetUrl] of Object.entries(scriptFiles)) {
       if (!isValidScriptPath(relPath)) {
         console.warn(`⚠️  Invalid script path in ${scriptRoot.id || appName}: ${relPath}`)
@@ -1847,10 +2144,13 @@ export class DirectAppServer {
         continue
       }
       const normalized = normalizeScriptRelPath(relPath)
-      keep.add(normalized)
+      const sharedRel = getSharedDiskRelativePath(normalized)
+      if (!sharedRel) {
+        keepApp.add(normalized)
+      }
       const script = await this._downloadScript(assetUrl)
       if (script == null) continue
-      const absPath = path.join(appPath, normalized)
+      const absPath = sharedRel ? path.join(this.sharedDir, sharedRel) : path.join(appPath, normalized)
       this._writeFileAtomic(absPath, script)
     }
 
@@ -1858,7 +2158,7 @@ export class DirectAppServer {
       const localFiles = listScriptFiles(appPath)
       for (const file of localFiles) {
         const normalized = normalizeScriptRelPath(file.relPath)
-        if (keep.has(normalized)) continue
+        if (keepApp.has(normalized)) continue
         this._deleteFileAtomic(file.absPath)
         this._pruneEmptyDirs(appPath, path.dirname(file.absPath))
       }

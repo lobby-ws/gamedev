@@ -17,6 +17,8 @@ import {
   parseModuleSpecifier,
   resolveRelativeModuleSpecifier,
   isRelativeImport,
+  normalizeSharedRelPath,
+  getSharedRelPathAlternate,
 } from '../moduleSpecifiers'
 
 /**
@@ -116,6 +118,21 @@ export class Scripts extends System {
           throw new Error(`cross_app_import_not_allowed:${importSpecifier}`)
         }
         return importSpecifier
+      }
+      const sharedRelPath = normalizeSharedRelPath(importSpecifier)
+      if (sharedRelPath) {
+        let relPath = sharedRelPath
+        if (!Object.prototype.hasOwnProperty.call(scriptFiles, relPath)) {
+          const altRelPath = getSharedRelPathAlternate(relPath)
+          if (altRelPath && Object.prototype.hasOwnProperty.call(scriptFiles, altRelPath)) {
+            relPath = altRelPath
+          }
+        }
+        return buildModuleSpecifier({
+          blueprintId,
+          version,
+          relPath,
+        })
       }
       if (isRelativeImport(importSpecifier)) {
         const resolved = resolveRelativeModuleSpecifier(importSpecifier, referrerSpecifier)

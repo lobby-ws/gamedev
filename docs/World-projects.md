@@ -23,6 +23,7 @@ Built-in apps and a default `$scene` entry are included in `apps/` and `world.js
 ```
 apps/                       App scripts + blueprint JSON (defaults)
 assets/                     Local assets referenced by blueprints
+shared/                     Shared script modules (import via @shared/ or shared/)
 world.json                  World layout + per-instance overrides
 tsconfig.json               TypeScript config (points at `gamedev` types)
 .lobby/targets.json         Local-only deploy targets (gitignored)
@@ -34,6 +35,7 @@ tsconfig.json               TypeScript config (points at `gamedev` types)
 
 - `apps/<AppName>/index.js` (or `index.js`) for entry scripts.
 - `apps/<AppName>/**/*.ts` or `.js` for module helpers.
+- `shared/**/*.ts` or `.js` for shared modules used by multiple apps.
 - `apps/<AppName>/*.json` for blueprint defaults (props, model, flags, `scriptFormat`).
 - `world.json` for layout and per-instance overrides.
 - `assets/` for local files referenced by props/blueprints.

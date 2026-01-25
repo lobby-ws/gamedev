@@ -100,6 +100,7 @@ Result: Changes appear in-world in ~1–2 seconds without page refresh.
 What’s watched by the server
 - `apps/<appName>/**/*.js` and `apps/<appName>/**/*.ts` — script changes deploy via `/admin`
 - `apps/<appName>/*.json` — model/props/meta changes deploy via `/admin`
+- `shared/**/*.js` and `shared/**/*.ts` — shared module changes deploy only the apps that import them
 - `assets/**` — if referenced by any blueprint, changes trigger deploy
 
 Tips
