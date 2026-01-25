@@ -25,7 +25,7 @@ apps/                       App scripts + blueprint JSON (defaults)
 assets/                     Local assets referenced by blueprints
 dist/apps/                  Legacy bundled app scripts (generated, gitignored)
 world.json                  World layout + per-instance overrides
-tsconfig.json               TypeScript config (points at `gamedev` types)
+hyperfy.app-runtime.d.ts    Type reference shim for app scripts
 .lobby/targets.json         Local-only deploy targets (gitignored)
 .lobby/targets.example.json  Shareable template for targets
 .claude/skills/             Claude Code skill docs for app scripting

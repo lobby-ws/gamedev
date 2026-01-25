@@ -841,6 +841,7 @@ function Apps({ world, hidden }) {
           display: flex;
           flex-direction: column;
           min-height: 17rem;
+          position: relative;
           .apps-head {
             height: 3.125rem;
             padding: 0 0.6rem 0 1rem;
@@ -919,6 +920,15 @@ function Add({ world, hidden }) {
   const span = 4
   const gap = '0.5rem'
   const [trashMode, setTrashMode] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [createPrompt, setCreatePrompt] = useState('')
+  const [createError, setCreateError] = useState(null)
+  const [creating, setCreating] = useState(false)
+  const [createAttachments, setCreateAttachments] = useState([])
+  const [createDocsIndex, setCreateDocsIndex] = useState([])
+  const [createMention, setCreateMention] = useState(null)
+  const [createScriptRoot, setCreateScriptRoot] = useState(null)
+  const createPromptRef = useRef(null)
   const buildTemplates = () => {
     const items = Array.from(world.blueprints.items.values()).filter(bp => !bp.scene)
     return sortBy(items, bp => (bp.name || bp.id || '').toLowerCase())
@@ -936,6 +946,272 @@ function Add({ world, hidden }) {
       world.blueprints.off('remove', refresh)
     }
   }, [])
+
+  useEffect(() => {
+    if (hidden) {
+      setCreateOpen(false)
+      setCreating(false)
+      setCreateError(null)
+      setCreatePrompt('')
+      setCreateAttachments([])
+      setCreateMention(null)
+      setCreateScriptRoot(null)
+    }
+  }, [hidden])
+
+  useEffect(() => {
+    if (!createOpen) return
+    const handle = setTimeout(() => {
+      createPromptRef.current?.focus()
+    }, 0)
+    return () => clearTimeout(handle)
+  }, [createOpen])
+
+  useEffect(() => {
+    if (createOpen) return
+    setCreateError(null)
+    setCreatePrompt('')
+    setCreateAttachments([])
+    setCreateMention(null)
+    setCreateScriptRoot(null)
+  }, [createOpen])
+
+  useEffect(() => {
+    if (!createOpen) return
+    const refresh = () => {
+      const app = world.ui?.state?.app
+      const blueprint = app?.blueprint || world.blueprints.get(app?.data?.blueprint)
+      setCreateScriptRoot(resolveScriptRootBlueprint(blueprint, world))
+    }
+    refresh()
+    world.on('ui', refresh)
+    world.blueprints.on('modify', refresh)
+    world.blueprints.on('add', refresh)
+    world.blueprints.on('remove', refresh)
+    return () => {
+      world.off('ui', refresh)
+      world.blueprints.off('modify', refresh)
+      world.blueprints.off('add', refresh)
+      world.blueprints.off('remove', refresh)
+    }
+  }, [createOpen, world])
+
+  useEffect(() => {
+    if (!createOpen) return
+    let active = true
+    const apiUrl = world.network?.apiUrl
+    if (!apiUrl) {
+      setCreateDocsIndex([])
+      return () => {}
+    }
+    const loadDocs = async () => {
+      try {
+        const response = await fetch(`${apiUrl}/ai-docs-index`)
+        if (!response.ok) throw new Error('docs_index_failed')
+        const data = await response.json()
+        if (!active) return
+        const files = Array.isArray(data?.files) ? data.files.filter(Boolean) : []
+        setCreateDocsIndex(files)
+      } catch {
+        if (!active) return
+        setCreateDocsIndex([])
+      }
+    }
+    loadDocs()
+    return () => {
+      active = false
+    }
+  }, [createOpen, world.network?.apiUrl])
+
+  const createAttachmentSet = useMemo(() => {
+    const set = new Set()
+    for (const item of createAttachments) {
+      if (!item?.type || !item?.path) continue
+      set.add(`${item.type}:${item.path}`)
+    }
+    return set
+  }, [createAttachments])
+  const createFileIndex = useMemo(() => {
+    const entries = []
+    const scripts = createScriptRoot?.scriptFiles ? Object.keys(createScriptRoot.scriptFiles) : []
+    for (const scriptPath of scripts) {
+      entries.push({ type: 'script', path: scriptPath, id: `script:${scriptPath}` })
+    }
+    for (const docPath of createDocsIndex) {
+      entries.push({ type: 'doc', path: docPath, id: `doc:${docPath}` })
+    }
+    entries.sort((a, b) => a.path.localeCompare(b.path))
+    return entries
+  }, [createDocsIndex, createScriptRoot?.scriptFiles])
+  const createAttachmentPayload = useMemo(
+    () => createAttachments.map(item => ({ type: item.type, path: item.path })),
+    [createAttachments]
+  )
+  const sendCreate = useCallback(async () => {
+    const trimmed = createPrompt.trim()
+    if (!trimmed) {
+      setCreateError('Enter a prompt to create an app.')
+      return
+    }
+    if (!world.ai?.createFromPrompt) {
+      setCreateError('AI create is not available in this session.')
+      return
+    }
+    setCreating(true)
+    setCreateError(null)
+    try {
+      await world.ai.createFromPrompt({
+        prompt: trimmed,
+        attachments: createAttachmentPayload,
+        scriptRootId: createScriptRoot?.id || null,
+      })
+      world.emit('toast', 'Creating app...')
+      setCreateOpen(false)
+      setCreatePrompt('')
+      setCreateAttachments([])
+      setCreateMention(null)
+    } catch (err) {
+      const code = err?.code || err?.message
+      if (code === 'ai_disabled') {
+        setCreateError('AI is not configured on this server.')
+      } else if (code === 'builder_required') {
+        setCreateError('Builder access required.')
+      } else if (code === 'deploy_required') {
+        setCreateError('Deploy code required.')
+      } else if (code === 'locked' || code === 'deploy_locked' || code === 'deploy_lock_required') {
+        const owner = err?.lock?.owner
+        setCreateError(owner ? `Deploy locked by ${owner}.` : 'Deploy locked by another session.')
+      } else if (code === 'admin_required' || code === 'admin_code_missing') {
+        setCreateError('Admin code required.')
+      } else if (code === 'upload_failed') {
+        setCreateError('Upload failed.')
+      } else {
+        console.error(err)
+        setCreateError('Create failed.')
+      }
+    } finally {
+      setCreating(false)
+    }
+  }, [createAttachmentPayload, createPrompt, createScriptRoot?.id, world])
+  const updateCreateMention = useCallback(
+    (value, caret) => {
+      if (!createFileIndex.length) {
+        if (createMention) setCreateMention(null)
+        return
+      }
+      const mention = getMentionState(value, caret)
+      if (!mention) {
+        if (createMention) setCreateMention(null)
+        return
+      }
+      const items = fuzzyMatchList(mention.query, createFileIndex).slice(0, 8)
+      setCreateMention(prev => {
+        const nextIndex = prev && prev.query === mention.query ? prev.activeIndex : 0
+        const bounded = items.length > 0 ? Math.min(nextIndex, items.length - 1) : 0
+        return {
+          open: true,
+          query: mention.query,
+          start: mention.start,
+          end: caret,
+          items,
+          activeIndex: bounded,
+        }
+      })
+    },
+    [createFileIndex, createMention]
+  )
+  const addCreateAttachment = useCallback(
+    item => {
+      if (!item?.type || !item?.path) return
+      const key = `${item.type}:${item.path}`
+      if (createAttachmentSet.has(key)) {
+        setCreateMention(null)
+        return
+      }
+      setCreateAttachments(current => [...current, { type: item.type, path: item.path }])
+      setCreateMention(null)
+      setCreatePrompt(current => {
+        if (!createMention?.open) return current
+        const before = current.slice(0, createMention.start)
+        const after = current.slice(createMention.end)
+        return `${before}${after}`
+      })
+      if (createMention?.open && Number.isFinite(createMention.start)) {
+        const position = createMention.start
+        requestAnimationFrame(() => {
+          const input = createPromptRef.current
+          if (!input) return
+          input.focus()
+          input.selectionStart = position
+          input.selectionEnd = position
+        })
+      }
+    },
+    [createAttachmentSet, createMention]
+  )
+  const removeCreateAttachment = useCallback(item => {
+    if (!item?.type || !item?.path) return
+    setCreateAttachments(current =>
+      current.filter(entry => entry.type !== item.type || entry.path !== item.path)
+    )
+  }, [])
+  const handleCreatePromptChange = useCallback(
+    e => {
+      const value = e.target.value
+      if (createError) setCreateError(null)
+      setCreatePrompt(value)
+      updateCreateMention(value, e.target.selectionStart)
+    },
+    [createError, updateCreateMention]
+  )
+  const handleCreatePromptKeyDown = useCallback(
+    e => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'Enter' || e.code === 'Enter')) {
+        e.preventDefault()
+        sendCreate()
+        return
+      }
+      if (!createMention?.open) return
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setCreateMention(current => {
+          if (!current) return current
+          const next = current.activeIndex + 1 >= current.items.length ? 0 : current.activeIndex + 1
+          return { ...current, activeIndex: next }
+        })
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setCreateMention(current => {
+          if (!current) return current
+          const next =
+            current.activeIndex - 1 < 0 ? Math.max(current.items.length - 1, 0) : current.activeIndex - 1
+          return { ...current, activeIndex: next }
+        })
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        const selected = createMention.items[createMention.activeIndex]
+        if (selected) {
+          addCreateAttachment(selected)
+        }
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setCreateMention(null)
+      }
+    },
+    [createMention, addCreateAttachment, sendCreate]
+  )
+  const handleCreatePromptKeyUp = useCallback(
+    e => {
+      updateCreateMention(e.currentTarget.value, e.currentTarget.selectionStart)
+    },
+    [updateCreateMention]
+  )
 
   const add = blueprint => {
     const transform = world.builder.getSpawnTransform(true)
@@ -992,6 +1268,19 @@ function Add({ world, hidden }) {
       add(blueprint)
     }
   }
+
+  const openCreate = () => {
+    if (createOpen) {
+      setCreateOpen(false)
+      return
+    }
+    setCreateError(null)
+    setCreatePrompt('')
+    setCreateAttachments([])
+    setCreateMention(null)
+    setCreateOpen(true)
+  }
+
   return (
     <Pane hidden={hidden}>
       <div
@@ -1003,6 +1292,7 @@ function Add({ world, hidden }) {
           display: flex;
           flex-direction: column;
           min-height: 17rem;
+          position: relative;
           .add-head {
             height: 3.125rem;
             padding: 0 1rem;
@@ -1016,6 +1306,7 @@ function Add({ world, hidden }) {
             font-size: 1rem;
             line-height: 1;
           }
+          .add-action,
           .add-toggle {
             width: 2rem;
             height: 2rem;
@@ -1027,6 +1318,11 @@ function Add({ world, hidden }) {
               cursor: pointer;
               color: white;
             }
+          }
+          .add-action.active {
+            color: #4ce0a1;
+          }
+          .add-toggle {
             &.active {
               color: #ff6b6b;
             }
@@ -1062,10 +1358,182 @@ function Add({ world, hidden }) {
             text-align: center;
             font-size: 0.875rem;
           }
+          .add-create-overlay {
+            position: absolute;
+            inset: 0;
+            padding: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(11, 10, 21, 0.85);
+            backdrop-filter: blur(6px);
+          }
+          .add-create-panel {
+            width: 100%;
+            border-radius: 0.9rem;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(18, 19, 30, 0.95);
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+          }
+          .add-create-title {
+            font-weight: 600;
+            font-size: 1rem;
+          }
+          .add-create-input {
+            position: relative;
+          }
+          .add-create-input textarea {
+            width: 100%;
+            min-height: 7rem;
+            resize: vertical;
+            border-radius: 0.6rem;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(10, 11, 18, 0.9);
+            color: white;
+            padding: 0.6rem 0.7rem;
+            font-size: 0.9rem;
+            font-family: inherit;
+          }
+          .add-create-mentions {
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: calc(100% + 0.35rem);
+            background: rgba(8, 9, 14, 0.98);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 0.65rem;
+            max-height: 12rem;
+            overflow-y: auto;
+            z-index: 5;
+            padding: 0.35rem;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.35);
+          }
+          .add-create-mention-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.35rem 0.5rem;
+            border-radius: 0.5rem;
+            font-size: 0.75rem;
+            color: rgba(255, 255, 255, 0.8);
+            cursor: pointer;
+          }
+          .add-create-mention-item.active {
+            background: rgba(76, 224, 161, 0.15);
+            color: #4ce0a1;
+          }
+          .add-create-mention-item.disabled {
+            opacity: 0.45;
+            cursor: default;
+          }
+          .add-create-mention-icon {
+            display: flex;
+            align-items: center;
+            color: rgba(255, 255, 255, 0.65);
+          }
+          .add-create-mention-path {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          .add-create-mention-tag {
+            font-size: 0.65rem;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            padding: 0.1rem 0.4rem;
+            color: rgba(255, 255, 255, 0.6);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+          }
+          .add-create-mention-empty {
+            padding: 0.45rem 0.6rem;
+            font-size: 0.75rem;
+            color: rgba(255, 255, 255, 0.5);
+          }
+          .add-create-attachments {
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+          }
+          .add-create-attachment {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.3rem 0.5rem;
+            border-radius: 0.5rem;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(8, 9, 14, 0.5);
+            font-size: 0.75rem;
+            color: rgba(255, 255, 255, 0.8);
+          }
+          .add-create-attachment-icon {
+            display: flex;
+            align-items: center;
+            color: rgba(255, 255, 255, 0.6);
+          }
+          .add-create-attachment-path {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          .add-create-attachment-remove {
+            border: 0;
+            background: transparent;
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 0.75rem;
+            &:hover {
+              cursor: pointer;
+              color: white;
+            }
+          }
+          .add-create-footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+          }
+          .add-create-hint {
+            font-size: 0.7rem;
+            color: rgba(255, 255, 255, 0.45);
+          }
+          .add-create-actions {
+            display: flex;
+            gap: 0.5rem;
+          }
+          .add-create-btn {
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            padding: 0.45rem 0.9rem;
+            font-size: 0.85rem;
+            cursor: pointer;
+            background: rgba(255, 255, 255, 0.04);
+          }
+          .add-create-btn.primary {
+            background: rgba(76, 224, 161, 0.2);
+            border-color: rgba(76, 224, 161, 0.5);
+            color: #bff6df;
+          }
+          .add-create-btn:disabled {
+            opacity: 0.5;
+            cursor: default;
+          }
+          .add-create-error {
+            color: #ff8b8b;
+            font-size: 0.85rem;
+          }
         `}
       >
         <div className='add-head'>
           <div className='add-title'>Add</div>
+          <div className={cls('add-action', { active: createOpen })} onClick={openCreate} title='AI Create'>
+            <CirclePlusIcon size='1.125rem' />
+          </div>
           <div className={cls('add-toggle', { active: trashMode })} onClick={() => setTrashMode(!trashMode)}>
             <Trash2Icon size='1.125rem' />
           </div>
@@ -1092,6 +1560,100 @@ function Add({ world, hidden }) {
             })}
           </div>
         </div>
+        {createOpen && (
+          <div className='add-create-overlay' onMouseDown={e => e.stopPropagation()}>
+            <div className='add-create-panel'>
+              <div className='add-create-title'>AI Create</div>
+              <div className='add-create-input'>
+                <textarea
+                  ref={createPromptRef}
+                  placeholder='Describe what you want to create. Use @ to attach files.'
+                  value={createPrompt}
+                  disabled={creating}
+                  onChange={handleCreatePromptChange}
+                  onKeyDown={handleCreatePromptKeyDown}
+                  onKeyUp={handleCreatePromptKeyUp}
+                  onBlur={() => setCreateMention(null)}
+                />
+                {createMention?.open && (
+                  <div className='add-create-mentions' onMouseDown={e => e.preventDefault()}>
+                    {createMention.items.length ? (
+                      createMention.items.map((item, index) => {
+                        const attached = createAttachmentSet.has(item.id)
+                        return (
+                          <div
+                            key={item.id}
+                            className={cls('add-create-mention-item', {
+                              active: index === createMention.activeIndex,
+                              disabled: attached,
+                            })}
+                            onMouseDown={e => e.preventDefault()}
+                            onClick={() => {
+                              if (!attached) addCreateAttachment(item)
+                            }}
+                          >
+                            <span className='add-create-mention-icon'>
+                              {item.type === 'doc' ? (
+                                <BookTextIcon size='0.85rem' />
+                              ) : (
+                                <CodeIcon size='0.85rem' />
+                              )}
+                            </span>
+                            <span className='add-create-mention-path'>{item.path}</span>
+                            <span className='add-create-mention-tag'>{attached ? 'attached' : item.type}</span>
+                          </div>
+                        )
+                      })
+                    ) : (
+                      <div className='add-create-mention-empty'>No matches</div>
+                    )}
+                  </div>
+                )}
+              </div>
+              {createAttachments.length > 0 && (
+                <div className='add-create-attachments'>
+                  {createAttachments.map(item => (
+                    <div key={`${item.type}:${item.path}`} className='add-create-attachment'>
+                      <span className='add-create-attachment-icon'>
+                        {item.type === 'doc' ? <BookTextIcon size='0.75rem' /> : <CodeIcon size='0.75rem' />}
+                      </span>
+                      <span className='add-create-attachment-path'>{item.path}</span>
+                      <button
+                        className='add-create-attachment-remove'
+                        type='button'
+                        onClick={() => removeCreateAttachment(item)}
+                      >
+                        x
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {createError && <div className='add-create-error'>{createError}</div>}
+              <div className='add-create-footer'>
+                <div className='add-create-hint'>Use @ to attach docs or scripts.</div>
+                <div className='add-create-actions'>
+                  <button
+                    type='button'
+                    className='add-create-btn'
+                    onClick={() => setCreateOpen(false)}
+                    disabled={creating}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type='button'
+                    className='add-create-btn primary'
+                    onClick={sendCreate}
+                    disabled={creating || !createPrompt.trim()}
+                  >
+                    {creating ? 'Creating...' : 'Create'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </Pane>
   )

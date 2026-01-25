@@ -8,9 +8,10 @@ integration points and review flow.
 
 1. AI proposes changes to one or more existing script files.
 2. The Script pane applies the proposed file contents to in-memory models and marks them dirty.
-3. The user reviews a diff overlay in the Script pane.
-4. The user applies or discards the proposal. Apply uploads all changed files under one
-   deploy lock and updates the script-root blueprint once.
+3. The user reviews a diff overlay in the Script pane (unless auto-apply is enabled).
+4. The user applies or discards the proposal. If auto-apply is enabled, the proposal
+   is committed immediately without a confirmation step. Apply uploads all changed files
+   under one deploy lock and updates the script-root blueprint once.
 
 ## Internal API
 
@@ -22,6 +23,7 @@ Emit an event or call the UI hook with a patch set (full file contents):
 - `summary` (optional): short description shown in the Script pane.
 - `source` (optional): AI provider or agent label.
 - `autoPreview` (optional, default true): open the diff overlay immediately.
+- `autoApply` (optional, default false): commit the proposal immediately without prompting.
 - `files` (required): list of `{ path, content }` entries, where `path` is a valid script path
   and `content` is the full file text. Paths may reference new files to create.
 

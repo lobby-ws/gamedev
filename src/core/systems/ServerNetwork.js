@@ -329,6 +329,7 @@ export class ServerNetwork extends System {
         blueprints: this.world.blueprints.serialize(),
         entities: this.world.entities.serialize(),
         livekit,
+        ai: this.world.ai?.serialize?.() || null,
         authToken,
         hasAdminCode: !!process.env.ADMIN_CODE,
       })
@@ -699,6 +700,14 @@ export class ServerNetwork extends System {
     if (!handler) return
     handler(socket, data).catch(err => {
       console.error('[ai-scripts] request failed', err)
+    })
+  }
+
+  onAiCreateRequest = (socket, data) => {
+    const handler = this.world.ai?.handleCreate
+    if (!handler) return
+    handler(socket, data).catch(err => {
+      console.error('[ai-create] request failed', err)
     })
   }
 

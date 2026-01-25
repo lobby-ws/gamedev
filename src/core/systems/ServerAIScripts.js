@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import { streamText } from 'ai'
+import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
 import { System } from './System'
 import { isValidScriptPath } from '../blueprintValidation'
@@ -338,7 +339,8 @@ export class ServerAIScripts extends System {
         scriptRootId,
         summary: normalized.summary,
         source,
-        autoPreview: true,
+        autoPreview: false,
+        autoApply: true,
         files: outputFiles,
       })
     } catch (err) {
@@ -438,32 +440,25 @@ class OpenAIClient {
 
 class AnthropicClient {
   constructor(apiKey, model) {
-    this.apiKey = apiKey
     this.model = model
-    this.maxTokens = 8192
-    this.url = 'https://api.anthropic.com/v1/messages'
+    this.maxOutputTokens = 8192
+    this.provider = createAnthropic({ apiKey })
   }
 
   async generate(systemPrompt, userPrompt) {
-    const resp = await fetch(this.url, {
-      method: 'POST',
-      headers: {
-        'x-api-key': this.apiKey,
-        'anthropic-version': '2023-06-01',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: this.model,
-        max_tokens: this.maxTokens,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userPrompt }],
-      }),
+    const result = streamText({
+      model: this.provider(this.model),
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      maxOutputTokens: this.maxOutputTokens,
     })
-    if (!resp.ok) {
-      throw new Error(`anthropic_request_failed:${resp.status}`)
+    let output = ''
+    for await (const delta of result.textStream) {
+      output += delta
     }
-    const data = await resp.json()
-    return data.content?.[0]?.text || ''
+    return output
   }
 }
 

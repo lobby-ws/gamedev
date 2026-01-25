@@ -33,6 +33,8 @@ function normalizeAiPatchSet(input) {
     normalizedFiles.push({ path, content })
   }
   if (!normalizedFiles.length) return null
+  const autoApply =
+    patchSet.autoApply === true || patchSet.autoCommit === true || patchSet.autoAccept === true
   return {
     id: typeof patchSet.id === 'string' ? patchSet.id : null,
     summary:
@@ -48,7 +50,8 @@ function normalizeAiPatchSet(input) {
         : typeof patchSet.blueprintId === 'string'
           ? patchSet.blueprintId
           : null,
-    autoPreview: patchSet.autoPreview !== false,
+    autoPreview: patchSet.autoPreview !== false && !autoApply,
+    autoApply,
     files: normalizedFiles,
   }
 }
@@ -110,6 +113,8 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
   const diffMountRef = useRef(null)
   const diffEditorRef = useRef(null)
   const diffOriginalsRef = useRef(new Map())
+  const placeholderModelRef = useRef(null)
+  const saveAllRef = useRef(null)
 
   const [selectedPath, setSelectedPath] = useState(null)
   const [fontSize, setFontSize] = useState(() => 12 * world.prefs.ui)
@@ -118,6 +123,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
   const [error, setError] = useState(null)
   const [conflict, setConflict] = useState(null)
   const [dirtyTick, setDirtyTick] = useState(0)
+  const [editorReady, setEditorReady] = useState(false)
   const [aiProposal, setAiProposal] = useState(null)
   const [aiPreviewOpen, setAiPreviewOpen] = useState(false)
   const [aiPreviewPath, setAiPreviewPath] = useState(null)
@@ -477,6 +483,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         setError('Invalid AI proposal.')
         return
       }
+      const shouldAutoApply = patchSet.autoApply === true
       if (patchSet.scriptRootId && patchSet.scriptRootId !== rootId) {
         return
       }
@@ -510,23 +517,69 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       try {
         clearAiProposal()
         const proposalFiles = []
+        const removedPaths = []
         for (const [path, content] of requestedPaths.entries()) {
+          const hadState = fileStatesRef.current.has(path)
           const allowMissing = !Object.prototype.hasOwnProperty.call(scriptFiles, path)
           const state = await ensureFileState(path, { allowMissing })
           if (!state?.model) {
             throw new Error('ai_state_missing')
           }
           const originalText = state.model.getValue()
-          state.model.setValue(content)
-          proposalFiles.push({
-            path,
-            originalText,
-            proposedText: content,
-            isNew: !!state.isNew,
-          })
+          const changed = content !== originalText
+          if (changed) {
+            state.model.setValue(content)
+            const nextDirty = content !== state.originalText
+            if (nextDirty !== state.dirty) {
+              state.dirty = nextDirty
+              setDirtyTick(tick => tick + 1)
+            }
+            proposalFiles.push({
+              path,
+              originalText,
+              proposedText: content,
+              isNew: !!state.isNew,
+            })
+          } else if (!hadState && state.isNew) {
+            state.disposable?.dispose()
+            state.model.dispose()
+            fileStatesRef.current.delete(path)
+            removedPaths.push(path)
+          }
+        }
+        if (removedPaths.length) {
+          const removed = new Set(removedPaths)
+          setExtraPaths(current => current.filter(path => !removed.has(path)))
+          if (selectedPath && removed.has(selectedPath)) {
+            const remaining = validPaths.filter(path => !removed.has(path))
+            setSelectedPath(remaining[0] || null)
+          }
+          setDirtyTick(tick => tick + 1)
+        }
+        if (!proposalFiles.length) {
+          setError(null)
+          setConflict(null)
+          world.emit('toast', 'AI returned no changes')
+          emitAiTelemetry('proposal_empty', { source: patchSet.source })
+          return
         }
         proposalFiles.sort((a, b) => a.path.localeCompare(b.path))
         const firstPath = proposalFiles[0]?.path || null
+        if (shouldAutoApply && saveAllRef.current) {
+          const aiPaths = new Set(proposalFiles.map(file => file.path))
+          emitAiTelemetry('commit_start', {
+            fileCount: aiPaths.size,
+            paths: Array.from(aiPaths),
+            autoApply: true,
+          })
+          const ok = await saveAllRef.current({ paths: aiPaths })
+          if (ok) {
+            world.emit('toast', 'AI changes applied')
+            emitAiTelemetry('commit_success', { fileCount: aiPaths.size, autoApply: true })
+            return
+          }
+          emitAiTelemetry('commit_failed', { autoApply: true })
+        }
         setAiProposal({
           id: patchSet.id,
           summary: patchSet.summary,
@@ -556,7 +609,17 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         setLoading(false)
       }
     },
-    [scriptRoot, scriptFiles, rootId, clearAiProposal, ensureFileState, emitAiTelemetry]
+    [
+      scriptRoot,
+      scriptFiles,
+      rootId,
+      clearAiProposal,
+      ensureFileState,
+      emitAiTelemetry,
+      selectedPath,
+      validPaths,
+      world,
+    ]
   )
 
   useEffect(() => {
@@ -564,11 +627,20 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     loadMonaco().then(monaco => {
       if (dead) return
       monacoRef.current = monaco
-      const placeholder = monaco.editor.createModel(
-        validPaths.length ? '// Loading...' : '// No module files',
-        'javascript',
-        monaco.Uri.parse(`inmemory://module/${rootId || 'default'}/placeholder`)
-      )
+      const placeholderText = validPaths.length ? '// Loading...' : '// No module files'
+      const placeholderUri = monaco.Uri.parse(`inmemory://module/${rootId || 'default'}/placeholder`)
+      let placeholder = monaco.editor.getModel(placeholderUri)
+      if (!placeholder) {
+        try {
+          placeholder = monaco.editor.createModel(placeholderText, 'javascript', placeholderUri)
+        } catch (err) {
+          placeholder = monaco.editor.getModel(placeholderUri)
+          if (!placeholder) throw err
+        }
+      } else if (placeholder.getValue() !== placeholderText) {
+        placeholder.setValue(placeholderText)
+      }
+      placeholderModelRef.current = placeholder
       const editor = monaco.editor.create(mountRef.current, {
         model: placeholder,
         language: 'javascript',
@@ -581,6 +653,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         fontSize: fontSize,
       })
       editorRef.current = editor
+      setEditorReady(true)
       if (selectedPath) {
         loadPath(selectedPath)
       } else if (validPaths.length) {
@@ -593,6 +666,8 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       editorRef.current = null
       diffEditorRef.current?.dispose()
       diffEditorRef.current = null
+      placeholderModelRef.current?.dispose()
+      placeholderModelRef.current = null
       for (const state of fileStatesRef.current.values()) {
         state.model?.dispose()
         state.disposable?.dispose()
@@ -606,9 +681,9 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
   }, [])
 
   useEffect(() => {
-    if (!selectedPath) return
+    if (!selectedPath || !editorReady) return
     loadPath(selectedPath)
-  }, [selectedPath, loadPath])
+  }, [selectedPath, editorReady, loadPath])
 
   useEffect(() => {
     if (!aiPreviewOpen) return
@@ -638,7 +713,21 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     let originalModel = diffOriginalsRef.current.get(aiPreviewPath)
     if (!originalModel) {
       const uri = monaco.Uri.parse(`inmemory://module-ai/${rootId}/${aiPreviewPath}`)
-      originalModel = monaco.editor.createModel(entry.originalText, getLanguageForPath(aiPreviewPath), uri)
+      originalModel = monaco.editor.getModel(uri)
+      if (!originalModel) {
+        try {
+          originalModel = monaco.editor.createModel(
+            entry.originalText,
+            getLanguageForPath(aiPreviewPath),
+            uri
+          )
+        } catch (err) {
+          originalModel = monaco.editor.getModel(uri)
+          if (!originalModel) throw err
+        }
+      } else if (originalModel.getValue() !== entry.originalText) {
+        originalModel.setValue(entry.originalText)
+      }
       diffOriginalsRef.current.set(aiPreviewPath, originalModel)
     } else if (originalModel.getValue() !== entry.originalText) {
       originalModel.setValue(entry.originalText)
@@ -926,9 +1015,12 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     [scriptRoot, scriptFiles, entryPath, rootVersion, world, saving]
   )
 
-  const commitAiProposal = useCallback(async () => {
+  saveAllRef.current = saveAll
+
+  const commitAiProposal = useCallback(async (options = {}) => {
     if (!aiProposal?.files?.length) return
     if (saving) return
+    const skipConfirm = options.skipConfirm === true
     const aiPaths = new Set(aiProposal.files.map(file => file.path))
     const otherDirty = []
     for (const [path, state] of fileStatesRef.current.entries()) {
@@ -936,7 +1028,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         otherDirty.push(path)
       }
     }
-    if (otherDirty.length) {
+    if (otherDirty.length && !skipConfirm) {
       const ok = await world.ui.confirm({
         title: 'Apply AI changes only?',
         message: `You have ${otherDirty.length} other unsaved file${otherDirty.length === 1 ? '' : 's'}. Apply AI changes without them?`,

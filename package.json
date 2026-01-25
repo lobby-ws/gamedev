@@ -70,6 +70,7 @@
     "gamedev": "bin/gamedev.mjs"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.23",
     "@ai-sdk/openai": "^3.0.18",
     "@aws-sdk/client-s3": "^3.859.0",
     "@fastify/compress": "^8.0.1",
