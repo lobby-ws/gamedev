@@ -9,7 +9,7 @@ Apps live in `apps/` and each app folder contains blueprint JSON plus a script e
 
 Local-first (project files):
 - Run `gamedev apps new <AppName>` (creates `apps/<AppName>/` with `index.js` + blueprint)
-- Or create `apps/<AppName>/index.js` (or `index.ts`) manually
+- Or create `apps/<AppName>/index.js` manually
 - Add one or more blueprints in `apps/<AppName>/*.json` (defaults, model, props, `scriptFormat`, `scriptEntry` when needed)
 - Put assets in top-level `assets/` and reference them from blueprint JSON or file props
 - Run `npm run dev` (or `gamedev dev`) for hot reload
