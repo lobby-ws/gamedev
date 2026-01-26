@@ -1,0 +1,75 @@
+{
+  "formatVersion": 2,
+  "settings": {
+    "title": null,
+    "desc": null,
+    "image": null,
+    "avatar": null,
+    "customAvatars": false,
+    "voice": "spatial",
+    "rank": 0,
+    "playerLimit": 0,
+    "ao": true
+  },
+  "spawn": {
+    "position": [
+      0,
+      0,
+      0
+    ],
+    "quaternion": [
+      0,
+      0,
+      0,
+      1
+    ]
+  },
+  "entities": [
+    {
+      "id": "fVRQfJeTM5",
+      "blueprint": "$scene",
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "quaternion": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "pinned": false,
+      "props": {},
+      "state": {}
+    },
+    {
+      "id": "STemdw3qrD",
+      "blueprint": "box",
+      "position": [
+        -0.12140715453815887,
+        0.0003039682537326893,
+        -4.084494967514701
+      ],
+      "quaternion": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "pinned": false,
+      "props": {},
+      "state": {}
+    }
+  ]
+}

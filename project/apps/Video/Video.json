@@ -1,0 +1,31 @@
+{
+  "author": null,
+  "url": null,
+  "desc": null,
+  "preload": false,
+  "public": false,
+  "locked": false,
+  "frozen": false,
+  "unique": false,
+  "disabled": false,
+  "scene": false,
+  "model": "assets/Video.glb",
+  "image": {
+    "url": "assets/Video.png"
+  },
+  "props": {
+    "width": 0,
+    "height": 2,
+    "fit": "cover",
+    "url": null,
+    "loop": true,
+    "autoplay": true,
+    "transparent": false,
+    "lit": false,
+    "shadows": true,
+    "placeholder": {
+      "type": "video",
+      "url": "assets/Video.mp4"
+    }
+  }
+}

@@ -174,7 +174,7 @@ export class PlayerLocal extends Entity {
     bindRotations(this.cam.quaternion, this.cam.rotation)
     this.cam.quaternion.copy(this.base.quaternion)
     this.cam.rotation.x += -15 * DEG2RAD
-    this.cam.zoom = 1.5
+    this.cam.zoom = 5
 
     if (this.world.loader?.preloader) {
       await this.world.loader.preloader

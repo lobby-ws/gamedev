@@ -1,0 +1,27 @@
+{
+  "author": null,
+  "url": null,
+  "desc": null,
+  "preload": false,
+  "public": false,
+  "locked": false,
+  "frozen": false,
+  "unique": false,
+  "disabled": false,
+  "scene": false,
+  "model": "assets/Text.glb",
+  "image": {
+    "url": "assets/Text.png"
+  },
+  "props": {
+    "width": 200,
+    "height": 200,
+    "text": "Enter text...",
+    "fontSize": 20,
+    "fontWeight": "bold",
+    "color": "#ffffff",
+    "transparent": false,
+    "lit": false,
+    "shadows": true
+  }
+}

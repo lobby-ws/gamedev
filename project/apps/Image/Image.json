@@ -1,0 +1,29 @@
+{
+  "author": null,
+  "url": null,
+  "desc": null,
+  "preload": false,
+  "public": false,
+  "locked": false,
+  "frozen": false,
+  "unique": false,
+  "disabled": false,
+  "scene": false,
+  "model": "assets/Image.glb",
+  "image": {
+    "url": "assets/Image.png"
+  },
+  "props": {
+    "width": 0,
+    "height": 2,
+    "fit": "cover",
+    "image": null,
+    "transparent": false,
+    "lit": false,
+    "shadows": true,
+    "placeholder": {
+      "type": "image",
+      "url": "assets/Image.png"
+    }
+  }
+}

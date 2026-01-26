@@ -1,0 +1,15 @@
+{
+  "dev": {
+    "worldUrl": "http://localhost:3000",
+    "worldId": "local-your-world-id",
+    "adminCode": "your-admin-code",
+    "deployCode": "your-deploy-code"
+  },
+  "prod": {
+    "worldUrl": "https://world.example.com",
+    "worldId": "prod-world-id",
+    "adminCode": "your-admin-code",
+    "deployCode": "your-deploy-code",
+    "confirm": true
+  }
+}
