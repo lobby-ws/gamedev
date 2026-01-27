@@ -123,9 +123,7 @@ function parseSemver(value) {
   const cleaned = value.trim().replace(/^v/, '')
   const match = cleaned.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/)
   if (!match) return null
-  const prerelease = match[4]
-    ? match[4].split('.').map(part => (/^\d+$/.test(part) ? Number(part) : part))
-    : null
+  const prerelease = match[4] ? match[4].split('.').map(part => (/^\d+$/.test(part) ? Number(part) : part)) : null
   return {
     major: Number(match[1]),
     minor: Number(match[2]),
@@ -864,9 +862,6 @@ async function main() {
   let result
 
   switch (command) {
-    case 'new-app':
-      result = await newAppCommand(args)
-      break
     case 'init':
       result = await initCommand(args)
       break
@@ -910,79 +905,3 @@ main()
     console.error('Error: CLI Error:', error?.message || error)
     process.exit(1)
   })
-
-// New App Command: creates apps/<name>/<name>.json and empty index.js, using Model assets
-async function newAppCommand(args = []) {
-  const name = args[0]
-  if (!isValidAppName(name)) {
-    console.error('Error: App name required and must not contain "/" or "\\"')
-    console.log('Usage: gamedev new-app <name>')
-    return 1
-  }
-
-  // Determine app-root: prefer cwd if it has apps/, else ./project
-  const cwdApps = path.join(projectDir, 'apps')
-  const nestedProject = path.join(projectDir, 'project')
-  const nestedApps = path.join(nestedProject, 'apps')
-  let appRoot = projectDir
-  if (fs.existsSync(cwdApps)) {
-    appRoot = projectDir
-  } else if (fs.existsSync(nestedApps) || fs.existsSync(nestedProject)) {
-    appRoot = nestedProject
-  }
-
-  const appsDir = path.join(appRoot, 'apps')
-  const assetsDir = path.join(appRoot, 'assets')
-  const appDir = path.join(appsDir, name)
-
-  if (fs.existsSync(appDir)) {
-    console.error(`Error: App folder already exists: ${appDir}`)
-    return 1
-  }
-
-  fs.mkdirSync(appsDir, { recursive: true })
-  fs.mkdirSync(assetsDir, { recursive: true })
-
-  // Ensure required assets
-  const required = ['Model.glb', 'Model.png']
-  for (const file of required) {
-    const dest = path.join(assetsDir, file)
-    if (!fs.existsSync(dest)) {
-      const src = resolveBuiltinAssetPath(file)
-      if (!src) {
-        console.error(`Error: Missing builtin asset ${file}`)
-        console.error('Hint: Build the package to generate assets, or add the file manually under assets/.')
-        return 1
-      }
-      fs.mkdirSync(path.dirname(dest), { recursive: true })
-      fs.copyFileSync(src, dest)
-    }
-  }
-
-  fs.mkdirSync(appDir, { recursive: true })
-
-  const blueprintPath = path.join(appDir, `${name}.json`)
-  const blueprint = {
-    image: { url: 'assets/Model.png' },
-    model: 'assets/Model.glb',
-    props: { collision: true },
-    preload: false,
-    public: false,
-    locked: false,
-    frozen: false,
-    unique: false,
-    scene: false,
-    disabled: false,
-  }
-  fs.writeFileSync(blueprintPath, JSON.stringify(blueprint, null, 2) + '\n', 'utf8')
-
-  const scriptPath = path.join(appDir, 'index.js')
-  fs.writeFileSync(scriptPath, '', 'utf8')
-
-  console.log(`✅ Created ${name}`)
-  console.log(`   • ${blueprintPath}`)
-  console.log(`   • ${scriptPath}`)
-  console.log(`   • ${path.join(assetsDir, 'Model.glb')}`)
-  console.log(`   • ${path.join(assetsDir, 'Model.png')}`)
-  return 0
-}

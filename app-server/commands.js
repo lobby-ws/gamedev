@@ -91,8 +91,7 @@ function parseBuildArgs(args = []) {
 function formatLockSummary(lock) {
   if (!lock || typeof lock !== 'object') return ''
   const owner = lock.owner ? `owner: ${lock.owner}` : 'owner: unknown'
-  const expiresIn =
-    typeof lock.expiresInMs === 'number' ? `, expires in ${Math.ceil(lock.expiresInMs / 1000)}s` : ''
+  const expiresIn = typeof lock.expiresInMs === 'number' ? `, expires in ${Math.ceil(lock.expiresInMs / 1000)}s` : ''
   return `${owner}${expiresIn}`
 }
 
@@ -293,12 +292,12 @@ export class HyperfyCLI {
     }
 
     console.log(`🧩 Creating local app: ${appName}`)
-    const assetDest = path.join(this.assetsDir, 'empty.glb')
+    const assetDest = path.join(this.assetsDir, 'Model.glb')
     if (!fs.existsSync(assetDest)) {
-      const assetSrc = resolveBuiltinAssetPath('empty.glb')
+      const assetSrc = resolveBuiltinAssetPath('Model.glb')
       if (!assetSrc) {
-        console.error('❌ Missing builtin asset empty.glb')
-        console.log(`💡 Expected empty.glb in build/world/assets or src/world/assets`)
+        console.error('❌ Missing builtin asset Model.glb')
+        console.log(`💡 Expected Model.glb in build/world/assets or src/world/assets`)
         return
       }
       fs.mkdirSync(this.assetsDir, { recursive: true })
@@ -309,7 +308,10 @@ export class HyperfyCLI {
 
     const blueprintPath = path.join(appDir, `${appName}.json`)
     const blueprint = {
-      model: 'assets/empty.glb',
+      model: 'assets/Model.glb',
+      image: {
+        url: 'assets/Model.png',
+      },
       props: {},
       preload: false,
       public: false,
@@ -332,68 +334,6 @@ export class HyperfyCLI {
     console.log(`   • ${blueprintPath}`)
     console.log(`   • ${scriptPath}`)
     console.log(`   • ${assetDest}`)
-  }
-
-  async newModel(appName) {
-    if (!isValidAppName(appName)) {
-      console.error(`❌ Invalid app name: ${appName}`)
-      console.log(`💡 App names cannot contain / or \\`)
-      return
-    }
-
-    const appDir = path.join(this.appsDir, appName)
-    if (fs.existsSync(appDir)) {
-      console.error(`❌ App folder already exists: ${appDir}`)
-      return
-    }
-
-    console.log(`🧩 Creating model-based app: ${appName}`)
-
-    // Ensure required assets exist locally; if not, copy from package builtins
-    fs.mkdirSync(this.assetsDir, { recursive: true })
-    const neededAssets = ['Model.glb', 'Model.png']
-    for (const filename of neededAssets) {
-      const dest = path.join(this.assetsDir, filename)
-      if (!fs.existsSync(dest)) {
-        const src = resolveBuiltinAssetPath(filename)
-        if (!src) {
-          console.error(`❌ Missing builtin asset ${filename}`)
-          console.log(`💡 Expected ${filename} in build/world/assets or src/world/assets`)
-          return
-        }
-        fs.copyFileSync(src, dest)
-      }
-    }
-
-    fs.mkdirSync(appDir, { recursive: true })
-
-    // Blueprint mirrors the built-in Model blueprint fields
-    const blueprintPath = path.join(appDir, `${appName}.json`)
-    const blueprint = {
-      image: { url: 'assets/Model.png' },
-      model: 'assets/Model.glb',
-      props: { collision: true },
-      preload: false,
-      public: false,
-      locked: false,
-      frozen: false,
-      unique: false,
-      scene: false,
-      disabled: false,
-    }
-    fs.writeFileSync(blueprintPath, JSON.stringify(blueprint, null, 2) + '\n', 'utf8')
-
-    // Empty JS entrypoint as requested
-    const scriptPath = path.join(appDir, 'index.js')
-    if (!fs.existsSync(scriptPath)) {
-      fs.writeFileSync(scriptPath, '', 'utf8')
-    }
-
-    console.log(`✅ Created ${appName}`)
-    console.log(`   • ${blueprintPath}`)
-    console.log(`   • ${scriptPath}`)
-    console.log(`   • ${path.join(this.assetsDir, 'Model.glb')}`)
-    console.log(`   • ${path.join(this.assetsDir, 'Model.png')}`)
   }
 
   async create(appName, options = {}) {
@@ -532,7 +472,7 @@ app.on("update", (delta) => {
     } catch (error) {
       console.error(`❌ Error creating app:`, error?.message || error)
       if (!this.worldUrl) {
-        console.error(`💡 Set WORLD_URL (and ADMIN_CODE if required)`) 
+        console.error(`💡 Set WORLD_URL (and ADMIN_CODE if required)`)
       }
     } finally {
       this._closeAdminClient(server)
@@ -691,7 +631,7 @@ app.on("update", (delta) => {
         console.log(`✅ Script validation passed for ${appName}`)
         console.log(`🔗 Hash: ${localHash}`)
       } else {
-        console.log(`💡 Run 'gamedev apps deploy ${appName}' (or save the file with app-server running)`) 
+        console.log(`💡 Run 'gamedev apps deploy ${appName}' (or save the file with app-server running)`)
       }
     } catch (error) {
       console.error(`❌ Error validating app:`, error?.message || error)
@@ -814,7 +754,6 @@ Usage:
 
 Commands:
   new <appName>              Create a local app folder + blueprint
-  new-model <appName>        Create a local app using Model.glb/png with empty index.js
   create <appName>           Create a new app in the connected world
   list                       List local apps in ./apps
   build <appName>            Build app bundle to ./dist/apps/<appName>.js
@@ -880,15 +819,6 @@ export async function runAppCommand({ command, args = [], rootDir = process.cwd(
         return 1
       }
       await cli.new(args[0])
-      break
-
-    case 'new-model':
-      if (!args[0]) {
-        console.error('❌ App name required')
-        console.log(`Usage: ${commandPrefix} new-model <appName>`)
-        return 1
-      }
-      await cli.newModel(args[0])
       break
 
     case 'create':
