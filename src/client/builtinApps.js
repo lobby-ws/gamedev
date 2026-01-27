@@ -6,6 +6,11 @@ export const BUILTIN_APP_TEMPLATES = [
     },
     model: 'asset://Model.glb',
     script: 'asset://Model.js',
+    scriptEntry: 'Model.js',
+    scriptFiles: {
+      'Model.js': 'asset://Model.js',
+    },
+    scriptFormat: 'module',
     props: {
       collision: true,
     },
@@ -24,6 +29,11 @@ export const BUILTIN_APP_TEMPLATES = [
     },
     model: 'asset://Image.glb',
     script: 'asset://Image.js',
+    scriptEntry: 'Image.js',
+    scriptFiles: {
+      'Image.js': 'asset://Image.js',
+    },
+    scriptFormat: 'module',
     props: {
       width: 0,
       height: 2,
@@ -52,6 +62,11 @@ export const BUILTIN_APP_TEMPLATES = [
     },
     model: 'asset://Video.glb',
     script: 'asset://Video.js',
+    scriptEntry: 'Video.js',
+    scriptFiles: {
+      'Video.js': 'asset://Video.js',
+    },
+    scriptFormat: 'module',
     props: {
       width: 0,
       height: 2,
@@ -82,6 +97,11 @@ export const BUILTIN_APP_TEMPLATES = [
     },
     model: 'asset://Text.glb',
     script: 'asset://Text.js',
+    scriptEntry: 'Text.js',
+    scriptFiles: {
+      'Text.js': 'asset://Text.js',
+    },
+    scriptFormat: 'module',
     props: {
       width: 200,
       height: 200,
@@ -108,6 +128,11 @@ export const BUILTIN_APP_TEMPLATES = [
     },
     model: 'asset://Webview.glb',
     script: 'asset://Webview.js',
+    scriptEntry: 'Webview.js',
+    scriptFiles: {
+      'Webview.js': 'asset://Webview.js',
+    },
+    scriptFormat: 'module',
     props: {
       url: "https://www.youtube.com/embed/jfKfPfyJRdk?autoplay=1"
     },

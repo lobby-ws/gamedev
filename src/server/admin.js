@@ -3,6 +3,14 @@ import fs from 'fs'
 
 import { readPacket, writePacket } from '../core/packets.js'
 
+const SCRIPT_BLUEPRINT_FIELDS = new Set([
+  'script',
+  'scriptEntry',
+  'scriptFiles',
+  'scriptFormat',
+  'scriptRef',
+])
+
 function normalizeHeader(value) {
   if (Array.isArray(value)) return value[0]
   return value
@@ -213,6 +221,22 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
     return id
   }
 
+function hasScriptFields(data) {
+  if (!data || typeof data !== 'object') return false
+  for (const field of SCRIPT_BLUEPRINT_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(data, field)) continue
+    if (field === 'script' && data.script === '') continue
+    return true
+  }
+  return false
+}
+
+  function deriveScriptLockScope(data) {
+    const refId =
+      data && typeof data.scriptRef === 'string' && data.scriptRef.trim() ? data.scriptRef : data?.id
+    return deriveLockScopeFromBlueprintId(refId)
+  }
+
   async function createDeploySnapshot({ ids, target, note, scope } = {}) {
     if (!db) {
       throw new Error('db_unavailable')
@@ -399,8 +423,8 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
               sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
               return
             }
-            if (data.blueprint?.script) {
-              const scope = deriveLockScopeFromBlueprintId(data.blueprint.id)
+            if (hasScriptFields(data.blueprint)) {
+              const scope = deriveScriptLockScope(data.blueprint)
               const lockCheck = ensureDeployLock(data?.lockToken, scope)
               if (!lockCheck.ok) {
                 sendPacket(ws, 'adminResult', {
@@ -427,8 +451,10 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
               return
             }
             const change = data.change
-            const hasScriptChange = Object.prototype.hasOwnProperty.call(change, 'script')
-            const nonScriptKeys = Object.keys(change).filter(key => !['id', 'version', 'script'].includes(key))
+            const hasScriptChange = hasScriptFields(change)
+            const nonScriptKeys = Object.keys(change).filter(
+              key => !['id', 'version', ...SCRIPT_BLUEPRINT_FIELDS].includes(key)
+            )
             if (nonScriptKeys.length > 0 && !capabilities.builder) {
               sendPacket(ws, 'adminResult', { ok: false, error: 'builder_required', requestId })
               return
@@ -438,7 +464,7 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
               return
             }
             if (hasScriptChange) {
-              const scope = deriveLockScopeFromBlueprintId(change.id)
+              const scope = deriveScriptLockScope(change)
               const lockCheck = ensureDeployLock(data?.lockToken, scope)
               if (!lockCheck.ok) {
                 sendPacket(ws, 'adminResult', {

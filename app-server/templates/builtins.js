@@ -4,6 +4,7 @@ export const BUILTIN_APP_TEMPLATES = [
     fileBase: 'Model',
     scriptAsset: 'Model.js',
     config: {
+      scriptFormat: 'module',
       image: {
         url: 'asset://Model.png',
       },
@@ -25,6 +26,7 @@ export const BUILTIN_APP_TEMPLATES = [
     fileBase: 'Image',
     scriptAsset: 'Image.js',
     config: {
+      scriptFormat: 'module',
       image: {
         url: 'asset://Image.png',
       },
@@ -56,6 +58,7 @@ export const BUILTIN_APP_TEMPLATES = [
     fileBase: 'Video',
     scriptAsset: 'Video.js',
     config: {
+      scriptFormat: 'module',
       image: {
         url: 'asset://Video.png',
       },
@@ -89,6 +92,7 @@ export const BUILTIN_APP_TEMPLATES = [
     fileBase: 'Text',
     scriptAsset: 'Text.js',
     config: {
+      scriptFormat: 'module',
       image: {
         url: 'asset://Text.png',
       },
@@ -118,6 +122,7 @@ export const BUILTIN_APP_TEMPLATES = [
     fileBase: 'Webview',
     scriptAsset: 'Webview.js',
     config: {
+      scriptFormat: 'module',
       image: {
         url: 'asset://Webview.png',
       },
@@ -141,6 +146,7 @@ export const SCENE_TEMPLATE = {
   fileBase: '$scene',
   scriptAsset: 'scene.js',
   config: {
+    scriptFormat: 'module',
     image: null,
     author: null,
     url: null,

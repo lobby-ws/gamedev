@@ -40,6 +40,8 @@ dist/
 .DS_Store
 `
 
+const DEFAULT_NVMRC = '22.11.0\n'
+
 const DEFAULT_TSCONFIG = {
   compilerOptions: {
     target: 'ES2022',
@@ -51,7 +53,7 @@ const DEFAULT_TSCONFIG = {
     skipLibCheck: true,
     types: ['gamedev'],
   },
-  include: ['apps/**/*'],
+  include: ['apps/**/*', 'shared/**/*'],
 }
 
 function normalizePackageName(name, fallback) {
@@ -297,6 +299,12 @@ export function scaffoldBaseProject({
     report,
   })
 
+  writeFileWithPolicy(path.join(rootDir, '.nvmrc'), DEFAULT_NVMRC, {
+    force,
+    writeFile,
+    report,
+  })
+
   writeFileWithPolicy(path.join(rootDir, 'package.json'), buildPackageJson({
     packageName: normalizedName,
     sdkName,
@@ -397,7 +405,7 @@ export function scaffoldBuiltins({ rootDir, force = false, writeFile } = {}) {
       })
     }
 
-    const scriptPath = path.join(appDir, 'index.ts')
+    const scriptPath = path.join(appDir, 'index.js')
     if (!fs.existsSync(scriptPath) || force) {
       const script = readBuiltinScript(template)
       writeFileWithPolicy(scriptPath, script, { force, writeFile, report })

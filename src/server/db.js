@@ -338,6 +338,11 @@ const migrations = [
           desc: null,
           model: 'asset://The_Meadow.glb',
           script: 'asset://scene.js',
+          scriptEntry: 'scene.js',
+          scriptFiles: {
+            'scene.js': 'asset://scene.js',
+          },
+          scriptFormat: 'module',
           props: {
             hour: 4,
             period: 'pm',
@@ -494,6 +499,11 @@ const migrations = [
         image: { url: 'asset://Model.png' },
         model: 'asset://Model.glb',
         script: 'asset://Model.js',
+        scriptEntry: 'Model.js',
+        scriptFiles: {
+          'Model.js': 'asset://Model.js',
+        },
+        scriptFormat: 'module',
         props: { collision: true },
       },
       {
@@ -502,6 +512,11 @@ const migrations = [
         image: { url: 'asset://Image.png' },
         model: 'asset://Image.glb',
         script: 'asset://Image.js',
+        scriptEntry: 'Image.js',
+        scriptFiles: {
+          'Image.js': 'asset://Image.js',
+        },
+        scriptFormat: 'module',
         props: {
           width: 0,
           height: 2,
@@ -522,6 +537,11 @@ const migrations = [
         image: { url: 'asset://Video.png' },
         model: 'asset://Video.glb',
         script: 'asset://Video.js',
+        scriptEntry: 'Video.js',
+        scriptFiles: {
+          'Video.js': 'asset://Video.js',
+        },
+        scriptFormat: 'module',
         props: {
           width: 0,
           height: 2,
@@ -544,6 +564,11 @@ const migrations = [
         image: { url: 'asset://Text.png' },
         model: 'asset://Text.glb',
         script: 'asset://Text.js',
+        scriptEntry: 'Text.js',
+        scriptFiles: {
+          'Text.js': 'asset://Text.js',
+        },
+        scriptFormat: 'module',
         props: {
           width: 200,
           height: 200,
@@ -572,6 +597,9 @@ const migrations = [
           desc: null,
           model: template.model,
           script: template.script,
+          scriptEntry: template.scriptEntry,
+          scriptFiles: template.scriptFiles,
+          scriptFormat: template.scriptFormat,
           props: template.props,
           preload: false,
           public: false,

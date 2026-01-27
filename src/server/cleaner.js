@@ -48,6 +48,13 @@ class Cleaner {
       if (blueprint.script && blueprint.script.startsWith('asset://')) {
         assetsToKeep.add(blueprint.script.replace('asset://', ''))
       }
+      if (blueprint.scriptFiles && typeof blueprint.scriptFiles === 'object') {
+        for (const url of Object.values(blueprint.scriptFiles)) {
+          if (typeof url === 'string' && url.startsWith('asset://')) {
+            assetsToKeep.add(url.replace('asset://', ''))
+          }
+        }
+      }
       // blueprint image (metadata)
       if (blueprint.image?.url && blueprint.image.url.startsWith('asset://')) {
         assetsToKeep.add(blueprint.image.url.replace('asset://', ''))

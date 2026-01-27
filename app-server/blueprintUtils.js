@@ -36,7 +36,7 @@ export function isBlueprintDenylist(filename) {
 export function getScriptPath(appName, appsDir) {
   const appPath = path.join(appsDir, appName)
   const _jsPath = path.join(appPath, 'index.js')
-  const _tsPath = path.join(appPath, 'index.ts')
+  const _tsPath = path.join(appPath, 'index.js')
   if (fs.existsSync(_tsPath)) return _tsPath
   if (fs.existsSync(_jsPath)) return _jsPath
   return _tsPath

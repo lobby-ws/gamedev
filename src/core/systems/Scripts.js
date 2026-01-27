@@ -1,4 +1,5 @@
 import { System } from './System'
+import { parse as acornParse } from 'acorn'
 
 import * as THREE from '../extras/three'
 import { DEG2RAD, RAD2DEG } from '../extras/general'
@@ -9,6 +10,16 @@ import { Curve } from '../extras/Curve'
 import { prng } from '../extras/prng'
 import { BufferedLerpVector3 } from '../extras/BufferedLerpVector3'
 import { BufferedLerpQuaternion } from '../extras/BufferedLerpQuaternion'
+import { isValidScriptPath } from '../blueprintValidation'
+import { buildLegacyBodyModuleSource } from '../legacyBody'
+import {
+  buildModuleSpecifier,
+  parseModuleSpecifier,
+  resolveRelativeModuleSpecifier,
+  isRelativeImport,
+  normalizeSharedRelPath,
+  getSharedRelPathAlternate,
+} from '../moduleSpecifiers'
 
 /**
  * Script System
@@ -21,7 +32,8 @@ import { BufferedLerpQuaternion } from '../extras/BufferedLerpQuaternion'
 export class Scripts extends System {
   constructor(world) {
     super(world)
-    this.compartment = new Compartment({
+    this.moduleSourceCache = new Map()
+    this.endowments = {
       console: {
         log: (...args) => console.log(...args),
         warn: (...args) => console.warn(...args),
@@ -57,7 +69,8 @@ export class Scripts extends System {
       RAD2DEG,
       uuid,
       // pause: () => this.world.pause(),
-    })
+    }
+    this.compartment = new Compartment(this.endowments)
   }
 
   evaluate(code) {
@@ -70,6 +83,128 @@ export class Scripts extends System {
       code,
     }
     return result
+  }
+
+  async loadModuleScript({ blueprint }) {
+    const scriptFiles = blueprint?.scriptFiles
+    const scriptEntry = blueprint?.scriptEntry
+    const scriptFormat = blueprint?.scriptFormat
+    if (!scriptFiles || !scriptEntry) {
+      throw new Error('module_script_missing_fields')
+    }
+    if (!isValidScriptPath(scriptEntry) || !Object.prototype.hasOwnProperty.call(scriptFiles, scriptEntry)) {
+      throw new Error('module_script_entry_missing')
+    }
+    if (scriptFormat && scriptFormat !== 'module' && scriptFormat !== 'legacy-body') {
+      throw new Error(`invalid_script_format:${scriptFormat}`)
+    }
+    const resolvedScriptFormat = scriptFormat || 'legacy-body'
+
+    const blueprintId = blueprint.id
+    const version = Number.isFinite(blueprint.version) ? blueprint.version : 0
+    const entrySpecifier = buildModuleSpecifier({
+      blueprintId,
+      version,
+      relPath: scriptEntry,
+    })
+
+    const resolveHook = (importSpecifier, referrerSpecifier) => {
+      if (importSpecifier.startsWith('app://')) {
+        const parsed = parseModuleSpecifier(importSpecifier)
+        if (!parsed || !isValidScriptPath(parsed.relPath)) {
+          throw new Error(`invalid_module_specifier:${importSpecifier}`)
+        }
+        if (parsed.blueprintId !== blueprintId || parsed.version !== String(version)) {
+          throw new Error(`cross_app_import_not_allowed:${importSpecifier}`)
+        }
+        return importSpecifier
+      }
+      const sharedRelPath = normalizeSharedRelPath(importSpecifier)
+      if (sharedRelPath) {
+        let relPath = sharedRelPath
+        if (!Object.prototype.hasOwnProperty.call(scriptFiles, relPath)) {
+          const altRelPath = getSharedRelPathAlternate(relPath)
+          if (altRelPath && Object.prototype.hasOwnProperty.call(scriptFiles, altRelPath)) {
+            relPath = altRelPath
+          }
+        }
+        return buildModuleSpecifier({
+          blueprintId,
+          version,
+          relPath,
+        })
+      }
+      if (isRelativeImport(importSpecifier)) {
+        const resolved = resolveRelativeModuleSpecifier(importSpecifier, referrerSpecifier)
+        if (!resolved) {
+          throw new Error(`invalid_relative_import:${importSpecifier}`)
+        }
+        return resolved
+      }
+      throw new Error(`unsupported_import:${importSpecifier}`)
+    }
+
+    const importHook = async moduleSpecifier => {
+      const parsed = parseModuleSpecifier(moduleSpecifier)
+      if (!parsed || !isValidScriptPath(parsed.relPath)) {
+        throw new Error(`invalid_module_specifier:${moduleSpecifier}`)
+      }
+      if (parsed.blueprintId !== blueprintId || parsed.version !== String(version)) {
+        throw new Error(`cross_app_import_not_allowed:${moduleSpecifier}`)
+      }
+      const assetUrl = scriptFiles[parsed.relPath]
+      if (!assetUrl) {
+        throw new Error(`module_not_found:${parsed.relPath}`)
+      }
+      if (this.moduleSourceCache.has(moduleSpecifier)) {
+        return this.moduleSourceCache.get(moduleSpecifier)
+      }
+      const sourceText = await this._loadModuleText(assetUrl)
+      const isEntry = parsed.relPath === scriptEntry
+      const useLegacyBody = resolvedScriptFormat === 'legacy-body' && isEntry
+      const moduleSource = useLegacyBody
+        ? compileLegacyBodyModuleSource(sourceText, moduleSpecifier)
+        : compileModuleSource(sourceText, moduleSpecifier)
+      this.moduleSourceCache.set(moduleSpecifier, moduleSource)
+      return moduleSource
+    }
+
+    const importMetaHook = (moduleSpecifier, importMeta) => {
+      importMeta.url = moduleSpecifier
+    }
+
+    const compartment = new Compartment(this.endowments, {}, {
+      resolveHook,
+      importHook,
+      importMetaHook,
+      __noNamespaceBox__: true,
+    })
+
+    const namespaceBox = await compartment.import(entrySpecifier)
+    const namespace = namespaceBox && namespaceBox.namespace ? namespaceBox.namespace : namespaceBox
+    const exec = (...args) => {
+      if (!namespace || typeof namespace.default !== 'function') {
+        throw new Error('module_entry_missing_default_export')
+      }
+      return namespace.default(...args)
+    }
+
+    return { exec, entryUrl: entrySpecifier, namespace }
+  }
+
+  async _loadModuleText(url) {
+    if (!url) return ''
+    if (this.world?.loader?.loadFile) {
+      const file = await this.world.loader.loadFile(url)
+      return file.text()
+    }
+    if (this.world?.loader?.fetchText) {
+      const resolved = this.world.resolveURL(url, true)
+      return this.world.loader.fetchText(resolved)
+    }
+    const resolved = this.world.resolveURL ? this.world.resolveURL(url, true) : url
+    const response = await fetch(resolved)
+    return response.text()
   }
 }
 
@@ -84,4 +219,238 @@ function wrapRawCode(code) {
     }
   })()
   `
+}
+
+export function compileLegacyBodyModuleSource(code, moduleSpecifier) {
+  const moduleSource = buildLegacyBodyModuleSource(code, moduleSpecifier)
+  return compileModuleSource(moduleSource, moduleSpecifier)
+}
+
+function compileModuleSource(code, moduleSpecifier) {
+  const ast = acornParse(code, {
+    ecmaVersion: 'latest',
+    sourceType: 'module',
+    allowHashBang: true,
+  })
+  const importStatements = []
+  const exportStatements = []
+  const bodyChunks = []
+  const importSpecifiers = []
+  const importSet = new Set()
+  const exportSet = new Set()
+  const importVars = new Map()
+  let importIndex = 0
+  const addImport = specifier => {
+    if (!importSet.has(specifier)) {
+      importSet.add(specifier)
+      importSpecifiers.push(specifier)
+    }
+  }
+  const ensureImportVar = specifier => {
+    let name = importVars.get(specifier)
+    if (!name) {
+      name = `__hyp_import_${importIndex++}__`
+      importVars.set(specifier, name)
+      importStatements.push(`const ${name} = importNow(${JSON.stringify(specifier)});`)
+      addImport(specifier)
+    }
+    return name
+  }
+  const addExport = name => {
+    exportSet.add(name)
+  }
+  const getExportName = node => {
+    if (!node) return null
+    if (node.type === 'Identifier') return node.name
+    if (node.type === 'Literal') return String(node.value)
+    return null
+  }
+  const isValidIdentifier = name => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)
+  const propAccess = (obj, prop) =>
+    isValidIdentifier(prop) ? `${obj}.${prop}` : `${obj}[${JSON.stringify(prop)}]`
+  const collectBindingNames = (node, names) => {
+    if (!node) return
+    switch (node.type) {
+      case 'Identifier':
+        names.push(node.name)
+        break
+      case 'ObjectPattern':
+        for (const prop of node.properties) {
+          if (prop.type === 'RestElement') {
+            collectBindingNames(prop.argument, names)
+          } else {
+            collectBindingNames(prop.value || prop.argument, names)
+          }
+        }
+        break
+      case 'ArrayPattern':
+        for (const element of node.elements) {
+          if (element) collectBindingNames(element, names)
+        }
+        break
+      case 'AssignmentPattern':
+        collectBindingNames(node.left, names)
+        break
+      case 'RestElement':
+        collectBindingNames(node.argument, names)
+        break
+      default:
+        break
+    }
+  }
+
+  for (const node of ast.body) {
+    if (node.type === 'ImportDeclaration') {
+      const specifier = node.source?.value
+      if (!specifier || typeof specifier !== 'string') {
+        throw new Error(`invalid_import_specifier:${moduleSpecifier}`)
+      }
+      if (node.specifiers.length === 0) {
+        importStatements.push(`importNow(${JSON.stringify(specifier)});`)
+        addImport(specifier)
+        continue
+      }
+      const importVar = ensureImportVar(specifier)
+      for (const spec of node.specifiers) {
+        if (spec.type === 'ImportDefaultSpecifier') {
+          importStatements.push(`const ${spec.local.name} = ${importVar}.default;`)
+        } else if (spec.type === 'ImportNamespaceSpecifier') {
+          importStatements.push(`const ${spec.local.name} = ${importVar};`)
+        } else if (spec.type === 'ImportSpecifier') {
+          const importedName = getExportName(spec.imported)
+          if (!importedName) {
+            throw new Error(`invalid_import_specifier:${moduleSpecifier}`)
+          }
+          importStatements.push(`const ${spec.local.name} = ${propAccess(importVar, importedName)};`)
+        }
+      }
+      continue
+    }
+
+    if (node.type === 'ExportAllDeclaration') {
+      throw new Error(`export_all_not_supported:${moduleSpecifier}`)
+    }
+
+    if (node.type === 'ExportDefaultDeclaration') {
+      addExport('default')
+      const decl = node.declaration
+      if (decl.type === 'FunctionDeclaration' || decl.type === 'ClassDeclaration') {
+        if (decl.id && decl.id.name) {
+          bodyChunks.push(code.slice(decl.start, decl.end))
+          exportStatements.push(`exports.default = ${decl.id.name};`)
+        } else {
+          const declCode = code.slice(decl.start, decl.end)
+          bodyChunks.push(`const __hyp_default__ = ${declCode};`)
+          exportStatements.push('exports.default = __hyp_default__;')
+        }
+      } else {
+        const exprCode = code.slice(decl.start, decl.end)
+        bodyChunks.push(`const __hyp_default__ = ${exprCode};`)
+        exportStatements.push('exports.default = __hyp_default__;')
+      }
+      continue
+    }
+
+    if (node.type === 'ExportNamedDeclaration') {
+      if (node.source) {
+        const specifier = node.source.value
+        if (typeof specifier !== 'string') {
+          throw new Error(`invalid_export_specifier:${moduleSpecifier}`)
+        }
+        const importVar = ensureImportVar(specifier)
+        for (const spec of node.specifiers) {
+          if (spec.type === 'ExportSpecifier') {
+            const localName = getExportName(spec.local)
+            const exportedName = getExportName(spec.exported)
+            if (!localName || !exportedName) {
+              throw new Error(`invalid_export_specifier:${moduleSpecifier}`)
+            }
+            addExport(exportedName)
+            exportStatements.push(
+              `${propAccess('exports', exportedName)} = ${propAccess(importVar, localName)};`
+            )
+          } else if (spec.type === 'ExportNamespaceSpecifier') {
+            const exportedName = getExportName(spec.exported)
+            if (!exportedName) {
+              throw new Error(`invalid_export_specifier:${moduleSpecifier}`)
+            }
+            addExport(exportedName)
+            exportStatements.push(`${propAccess('exports', exportedName)} = ${importVar};`)
+          }
+        }
+      } else if (node.declaration) {
+        const decl = node.declaration
+        bodyChunks.push(code.slice(decl.start, decl.end))
+        const names = []
+        if (decl.type === 'FunctionDeclaration' || decl.type === 'ClassDeclaration') {
+          if (!decl.id || !decl.id.name) {
+            throw new Error(`invalid_export_declaration:${moduleSpecifier}`)
+          }
+          names.push(decl.id.name)
+        } else if (decl.type === 'VariableDeclaration') {
+          for (const declarator of decl.declarations) {
+            collectBindingNames(declarator.id, names)
+          }
+        }
+        for (const name of names) {
+          addExport(name)
+          exportStatements.push(`${propAccess('exports', name)} = ${name};`)
+        }
+      } else if (node.specifiers.length) {
+        for (const spec of node.specifiers) {
+          if (spec.type !== 'ExportSpecifier') continue
+          const localName = getExportName(spec.local)
+          const exportedName = getExportName(spec.exported)
+          if (!localName || !exportedName) {
+            throw new Error(`invalid_export_specifier:${moduleSpecifier}`)
+          }
+          addExport(exportedName)
+          exportStatements.push(`${propAccess('exports', exportedName)} = ${localName};`)
+        }
+      }
+      continue
+    }
+
+    bodyChunks.push(code.slice(node.start, node.end))
+  }
+
+  const moduleBody = [
+    '"use strict";',
+    ...importStatements,
+    ...bodyChunks,
+    ...exportStatements,
+  ]
+    .filter(Boolean)
+    .join('\n')
+
+  const wrapperSource = `(exports, importNow) => {\n${moduleBody}\n}`
+  const compiledByCompartment = new WeakMap()
+
+  return {
+    imports: importSpecifiers,
+    exports: Array.from(exportSet),
+    execute(exportsTarget, compartment, resolvedImports) {
+      let compiled = compiledByCompartment.get(compartment)
+      if (!compiled) {
+        compiled = compartment.evaluate(wrapperSource)
+        compiledByCompartment.set(compartment, compiled)
+      }
+      const importCache = Object.create(null)
+      const importNow = spec => {
+        const resolved = resolvedImports?.[spec]
+        if (!resolved) {
+          throw new Error(`module_import_unresolved:${spec}`)
+        }
+        if (!importCache[spec]) {
+          let namespace = compartment.importNow(resolved)
+          if (namespace && namespace.namespace) {
+            namespace = namespace.namespace
+          }
+          importCache[spec] = namespace
+        }
+        return importCache[spec]
+      }
+      compiled(exportsTarget, importNow)
+    },
+  }
 }

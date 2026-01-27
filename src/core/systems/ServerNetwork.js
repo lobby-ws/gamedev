@@ -7,6 +7,7 @@ import { createJWT, readJWT } from '../utils-server'
 import { cloneDeep, isNumber } from 'lodash-es'
 import * as THREE from '../extras/three'
 import { Ranks } from '../extras/ranks'
+import { validateBlueprintScriptFields } from '../blueprintValidation'
 
 const SAVE_INTERVAL = parseInt(process.env.SAVE_INTERVAL || '60') // seconds
 const PING_RATE = 10 // seconds
@@ -328,6 +329,7 @@ export class ServerNetwork extends System {
         blueprints: this.world.blueprints.serialize(),
         entities: this.world.entities.serialize(),
         livekit,
+        ai: this.world.ai?.serialize?.() || null,
         authToken,
         hasAdminCode: !!process.env.ADMIN_CODE,
       })
@@ -479,6 +481,8 @@ export class ServerNetwork extends System {
   }
 
   applyBlueprintAdded(blueprint, { ignoreNetworkId } = {}) {
+    const validation = validateBlueprintScriptFields(blueprint)
+    if (!validation.ok) return validation
     this.world.blueprints.add(blueprint)
     this.send('blueprintAdded', blueprint, ignoreNetworkId)
     this.dirtyBlueprints.add(blueprint.id)
@@ -487,6 +491,8 @@ export class ServerNetwork extends System {
   }
 
   applyBlueprintModified(change, { ignoreNetworkId } = {}) {
+    const validation = validateBlueprintScriptFields(change)
+    if (!validation.ok) return validation
     const blueprint = this.world.blueprints.get(change.id)
     if (!blueprint) {
       return { ok: false, error: 'not_found' }
@@ -687,6 +693,22 @@ export class ServerNetwork extends System {
     const [id, version, name, data] = event
     const entity = this.world.entities.get(id)
     entity?.onEvent(version, name, data, socket.id)
+  }
+
+  onScriptAiRequest = (socket, data) => {
+    const handler = this.world.aiScripts?.handleRequest
+    if (!handler) return
+    handler(socket, data).catch(err => {
+      console.error('[ai-scripts] request failed', err)
+    })
+  }
+
+  onAiCreateRequest = (socket, data) => {
+    const handler = this.world.ai?.handleCreate
+    if (!handler) return
+    handler(socket, data).catch(err => {
+      console.error('[ai-create] request failed', err)
+    })
   }
 
   onEntityRemoved = (socket, id) => {

@@ -26,6 +26,36 @@ if (typeof window !== 'undefined') {
   safeMode = new URLSearchParams(window.location.search).get('safemode')
 }
 
+function hasScriptFiles(blueprint) {
+  return blueprint?.scriptFiles && typeof blueprint.scriptFiles === 'object' && !isArray(blueprint.scriptFiles)
+}
+
+function getBlueprintAppName(id) {
+  if (typeof id !== 'string' || !id) return ''
+  if (id === '$scene') return '$scene'
+  const idx = id.indexOf('__')
+  return idx === -1 ? id : id.slice(0, idx)
+}
+
+function resolveScriptRootBlueprint(blueprint, world) {
+  if (!blueprint) return null
+  const scriptRef = typeof blueprint.scriptRef === 'string' ? blueprint.scriptRef.trim() : ''
+  if (scriptRef) {
+    const scriptRoot = world.blueprints.get(scriptRef)
+    if (!scriptRoot) {
+      throw new Error(`script_ref_not_found:${scriptRef}`)
+    }
+    return scriptRoot
+  }
+  if (hasScriptFiles(blueprint)) return blueprint
+  const appName = getBlueprintAppName(blueprint.id)
+  if (appName && appName !== blueprint.id) {
+    const baseBlueprint = world.blueprints.get(appName)
+    if (hasScriptFiles(baseBlueprint)) return baseBlueprint
+  }
+  return null
+}
+
 export class App extends Entity {
   constructor(world, data, local) {
     super(world, data, local)
@@ -114,14 +144,17 @@ export class App extends Entity {
         // no model, will use crash block below
       }
       // fetch script (if any)
-      if (blueprint.script) {
-        try {
+      try {
+        const scriptRoot = resolveScriptRootBlueprint(blueprint, this.world)
+        if (hasScriptFiles(scriptRoot)) {
+          script = await this.world.scripts.loadModuleScript({ blueprint: scriptRoot })
+        } else if (blueprint.script) {
           script = this.world.loader.get('script', blueprint.script)
           if (!script) script = await this.world.loader.load('script', blueprint.script)
-        } catch (err) {
-          console.error(err)
-          crashed = true
         }
+      } catch (err) {
+        console.error(err)
+        crashed = true
       }
     }
     // if script crashed (or failed to load model), show crash-block

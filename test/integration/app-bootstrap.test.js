@@ -39,14 +39,16 @@ test('scaffold writes builtins and world manifest', async () => {
   assert.equal(await fileExists(path.join(rootDir, 'hyperfy.app-runtime.d.ts')), false)
 
   const modelConfig = await readJson(path.join(rootDir, 'apps', 'Model', 'Model.json'))
-  assert.equal(modelConfig.model, 'asset://Model.glb')
-  assert.equal(modelConfig.image?.url, 'asset://Model.png')
+  assert.equal(modelConfig.model, 'assets/Model.glb')
+  assert.equal(modelConfig.image?.url, 'assets/Model.png')
+  assert.equal(modelConfig.scriptFormat, 'module')
 
   const sceneConfig = await readJson(path.join(rootDir, 'apps', '$scene', '$scene.json'))
   assert.equal(sceneConfig.scene, true)
-  assert.equal(sceneConfig.model, 'asset://The_Meadow.glb')
+  assert.equal(sceneConfig.model, 'assets/The_Meadow.glb')
+  assert.equal(sceneConfig.scriptFormat, 'module')
 
-  const modelScript = await fs.readFile(path.join(rootDir, 'apps', 'Model', 'index.ts'), 'utf8')
+  const modelScript = await fs.readFile(path.join(rootDir, 'apps', 'Model', 'index.js'), 'utf8')
   assert.ok(!modelScript.startsWith('// @ts-nocheck'))
   assert.match(modelScript, /app\.configure/)
 })

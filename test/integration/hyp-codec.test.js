@@ -26,6 +26,7 @@ test('exportApp/importApp round-trips .hyp bundles', async () => {
 
   const modelUrl = 'asset://model.glb'
   const scriptUrl = 'asset://script.js'
+  const helperUrl = 'asset://helpers.js'
   const iconUrl = 'asset://icon.png'
   const skyUrl = 'asset://sky.hdr'
   const previewUrl = 'asset://preview.webp'
@@ -33,10 +34,21 @@ test('exportApp/importApp round-trips .hyp bundles', async () => {
 
   addFile(modelUrl, new Uint8Array([1, 2, 3, 4]), 'model.glb', 'model/gltf-binary')
   addFile(scriptUrl, 'console.log("ok")', 'script.js', 'application/javascript')
+  addFile(helperUrl, 'export const add = (a, b) => a + b', 'helpers.js', 'application/javascript')
   addFile(iconUrl, new Uint8Array([5, 6, 7]), 'icon.png', 'image/png')
   addFile(skyUrl, new Uint8Array([8, 9]), 'sky.hdr', 'application/octet-stream')
   addFile(previewUrl, new Uint8Array([10, 11, 12]), 'preview.webp', 'image/webp')
   addFile(soundUrl, new Uint8Array([13, 14, 15, 16]), 'sound.mp3', 'audio/mpeg')
+
+  const scriptRoot = {
+    id: 'bp1__script',
+    scriptEntry: 'index.js',
+    scriptFormat: 'module',
+    scriptFiles: {
+      'index.js': scriptUrl,
+      'helpers/math.js': helperUrl,
+    },
+  }
 
   const blueprint = {
     id: 'bp1',
@@ -48,6 +60,7 @@ test('exportApp/importApp round-trips .hyp bundles', async () => {
     desc: 'Round-trip test',
     model: modelUrl,
     script: scriptUrl,
+    scriptRef: scriptRoot.id,
     props: {
       sky: { url: skyUrl, intensity: 1 },
       preview: { url: previewUrl },
@@ -69,13 +82,22 @@ test('exportApp/importApp round-trips .hyp bundles', async () => {
     return file
   }
 
-  const hypFile = await exportApp(blueprint, resolveFile)
+  const hypFile = await exportApp(blueprint, resolveFile, id => (id === scriptRoot.id ? scriptRoot : null))
   const header = await readHypHeader(hypFile)
 
   assert.equal(header.blueprint.name, blueprint.name)
   assert.equal(header.blueprint.author, blueprint.author)
   assert.equal(header.blueprint.model, blueprint.model)
   assert.equal(header.blueprint.script, blueprint.script)
+  assert.equal(header.blueprint.scriptRef, undefined)
+  assert.equal(header.blueprint.scriptEntry, scriptRoot.scriptEntry)
+  assert.equal(header.blueprint.scriptFormat, scriptRoot.scriptFormat)
+  assert.deepEqual(
+    Object.keys(header.blueprint.scriptFiles).sort(),
+    Object.keys(scriptRoot.scriptFiles).sort()
+  )
+  assert.equal(header.blueprint.scriptFiles['index.js'], scriptUrl)
+  assert.equal(header.blueprint.scriptFiles['helpers/math.js'], helperUrl)
 
   const hdrAsset = header.assets.find(asset => asset.url === skyUrl)
   assert.equal(hdrAsset.type, 'hdr')
@@ -95,6 +117,12 @@ test('exportApp/importApp round-trips .hyp bundles', async () => {
   assert.equal(imported.blueprint.model, expectedUrls.get(modelUrl))
   assert.equal(imported.blueprint.script, expectedUrls.get(scriptUrl))
   assert.equal(imported.blueprint.image.url, expectedUrls.get(iconUrl))
+  assert.equal(imported.blueprint.scriptRef, undefined)
+  assert.equal(imported.blueprint.scriptEntry, scriptRoot.scriptEntry)
+  assert.equal(imported.blueprint.scriptFormat, scriptRoot.scriptFormat)
+  assert.deepEqual(Object.keys(imported.blueprint.scriptFiles).sort(), Object.keys(scriptRoot.scriptFiles).sort())
+  assert.equal(imported.blueprint.scriptFiles['index.js'], expectedUrls.get(scriptUrl))
+  assert.equal(imported.blueprint.scriptFiles['helpers/math.js'], expectedUrls.get(helperUrl))
   assert.equal(imported.blueprint.props.sky.url, expectedUrls.get(skyUrl))
   assert.equal(imported.blueprint.props.sky.intensity, 1)
   assert.equal(imported.blueprint.props.preview.url, expectedUrls.get(previewUrl))

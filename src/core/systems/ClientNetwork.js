@@ -6,6 +6,13 @@ import { uuid } from '../utils'
 import { hashFile } from '../utils-client'
 import { System } from './System'
 
+function hasModuleScript(blueprint) {
+  if (!blueprint) return false
+  if (typeof blueprint.scriptRef === 'string' && blueprint.scriptRef.trim()) return true
+  const scriptFiles = blueprint.scriptFiles
+  return scriptFiles && typeof scriptFiles === 'object' && !Array.isArray(scriptFiles)
+}
+
 /**
  * Client Network System
  *
@@ -113,7 +120,13 @@ export class ClientNetwork extends System {
           this.world.loader.preload(type, item.model)
         }
         if (item.script) {
-          this.world.loader.preload('script', item.script)
+          if (hasModuleScript(item)) {
+            this.world.loader.loadFile?.(item.script).catch(err => {
+              console.warn('module entry preload failed', err)
+            })
+          } else {
+            this.world.loader.preload('script', item.script)
+          }
         }
         for (const value of Object.values(item.props || {})) {
           if (value === undefined || value === null || !value?.url || !value?.type) continue
@@ -140,6 +153,7 @@ export class ClientNetwork extends System {
     this.world.blueprints.deserialize(data.blueprints)
     this.world.entities.deserialize(data.entities)
     this.world.livekit?.deserialize(data.livekit)
+    this.world.ai?.deserialize?.(data.ai)
     storage.set('authToken', data.authToken)
     this.world.admin?.onSnapshot?.(data)
   }
@@ -184,6 +198,14 @@ export class ClientNetwork extends System {
     const [id, version, name, data] = event
     const entity = this.world.entities.get(id)
     entity?.onEvent(version, name, data)
+  }
+
+  onScriptAiProposal = data => {
+    if (this.world.aiScripts?.onProposal) {
+      this.world.aiScripts.onProposal(data)
+      return
+    }
+    this.world.emit?.('script-ai-proposal', data)
   }
 
   onEntityRemoved = id => {

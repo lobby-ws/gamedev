@@ -5,17 +5,19 @@ Engine source and reference docs are also available in `node_modules/gamedev/src
 
 ## Creating Apps
 
-Apps live in `apps/` and each app folder shares a single script. There are two ways to create them:
+Apps live in `apps/` and each app folder contains blueprint JSON plus a script entry and optional modules (no bundling). There are two ways to create them:
 
 Local-first (project files):
-- Create `apps/<AppName>/index.ts` (or `index.js`)
-- Add one or more blueprints in `apps/<AppName>/*.json` (defaults, model, props, flags)
+- Run `gamedev apps new <AppName>` (creates `apps/<AppName>/` with `index.js` + blueprint)
+- Or create `apps/<AppName>/index.js` manually
+- Add one or more blueprints in `apps/<AppName>/*.json` (defaults, model, props, `scriptFormat`, `scriptEntry` when needed)
 - Put assets in top-level `assets/` and reference them from blueprint JSON or file props
-- Run `npm run dev` for hot reload
+- Run `npm run dev` (or `gamedev dev`) for hot reload
 
 Remote-first (connected world):
-- Run `gamedev apps create <AppName>` (requires WORLD_URL and ADMIN_CODE when prompted)
-- Then run `gamedev world export --include-built-scripts` to sync the app into `apps/`
+- Run `gamedev apps create <AppName>` (requires WORLD_URL + WORLD_ID; ADMIN_CODE/DEPLOY_CODE if the world needs them)
+- Then run `gamedev world export` to sync the app into `apps/`
+- Use `--include-built-scripts` only for legacy single-file scripts
 
 Example local layout:
 
@@ -23,9 +25,14 @@ Example local layout:
 apps/
   MyApp/
     MyApp.json
-    index.ts
+    index.js
+    helpers.js
+shared/
+  math.js
 assets/
 ```
+
+Entry files default to `index.js`/`index.ts`. Set `scriptEntry` in the blueprint JSON if you want a different entry file. New apps default to `scriptFormat: "module"` and should `export default (world, app, fetch, props, setTimeout) => { ... }`; set `scriptFormat: "legacy-body"` for classic body scripts.
 
 If your model includes a placeholder mesh named `Block` (for example from the built-in Model.glb), disable it:
 
@@ -51,11 +58,11 @@ Rotations are in radians but you can use degrees by multiplying by the global co
 
 ## Globals
 
-Scripts execute in isolated compartments with a curated runtime API. See `node_modules/gamedev/index.d.ts` (loaded via `compilerOptions.types: ["gamedev"]`) and `docs/scripting/README.md` for the current globals and methods. Common ones include:
+Scripts execute in isolated compartments with a curated runtime API. See `node_modules/gamedev/index.d.ts` (loaded via `compilerOptions.types: ["gamedev"]`) and `docs/scripting/README.md` for the current globals and methods. The `fetch` and `setTimeout` helpers are passed into the entry function (they are not globals; `fetch` is the same as `app.fetch`). Common ones include:
 
 - app, world, props
-- Math, prng, uuid
-- Vector3, Euler, Quaternion
+- Math, num, prng, clamp, uuid
+- Vector3, Euler, Quaternion, Matrix4
 - DEG2RAD, RAD2DEG
 - URL, Date.now
 
@@ -394,6 +401,8 @@ You can split code into multiple files using ES module imports:
 import { doSomething } from './helper.js'
 import { lerp } from './utils/math.js'
 ```
+
+Shared modules live in `shared/` and are imported via `@shared/...` or `shared/...`. Bare imports (`react`, `lodash`), node builtins, and cross-app imports are not supported.
 
 ## Golden Rules
 

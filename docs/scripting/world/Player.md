@@ -105,6 +105,15 @@ Can only be called on a local player.
 
 Prompts the player to share their screen, and then casts it to all video nodes that have a matching `.screenId` property.
 
+### `.setSessionAvatar(url)`
+
+Temporarily overrides the player's avatar for the current session. The session avatar takes priority over the player's default avatar.
+
+- **url**: A URL to a VRM avatar file. Pass `null` to clear the session avatar and revert to the player's default avatar.
+
+This change is synced across the network to all clients.
+
+
 ### `.setVoiceLevel(level)`
 
 Overrides the players voice chat level to `disabled`, `spatial` or `global`.
