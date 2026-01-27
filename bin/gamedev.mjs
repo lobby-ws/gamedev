@@ -107,9 +107,7 @@ function parseSemver(value) {
   const cleaned = value.trim().replace(/^v/, '')
   const match = cleaned.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/)
   if (!match) return null
-  const prerelease = match[4]
-    ? match[4].split('.').map(part => (/^\d+$/.test(part) ? Number(part) : part))
-    : null
+  const prerelease = match[4] ? match[4].split('.').map(part => (/^\d+$/.test(part) ? Number(part) : part)) : null
   return {
     major: Number(match[1]),
     minor: Number(match[2]),
@@ -831,7 +829,7 @@ Commands:
   init                      Scaffold a new world project in the current folder
   dev                       Start the world (local or remote) + app-server sync
   app-server                Start app-server sync only (no world server)
-  apps <command>            Manage apps (create, list, build, clean, deploy, update, validate, status)
+  apps <command>            Manage apps (new, list, build, clean, deploy, update, validate, status)
   world export              Export world.json + apps/assets from the world (use --include-built-scripts for scripts)
   world import              Import local apps + world.json into the world
   help                      Show this help

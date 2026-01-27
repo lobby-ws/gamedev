@@ -91,8 +91,7 @@ function parseBuildArgs(args = []) {
 function formatLockSummary(lock) {
   if (!lock || typeof lock !== 'object') return ''
   const owner = lock.owner ? `owner: ${lock.owner}` : 'owner: unknown'
-  const expiresIn =
-    typeof lock.expiresInMs === 'number' ? `, expires in ${Math.ceil(lock.expiresInMs / 1000)}s` : ''
+  const expiresIn = typeof lock.expiresInMs === 'number' ? `, expires in ${Math.ceil(lock.expiresInMs / 1000)}s` : ''
   return `${owner}${expiresIn}`
 }
 
@@ -293,12 +292,12 @@ export class HyperfyCLI {
     }
 
     console.log(`🧩 Creating local app: ${appName}`)
-    const assetDest = path.join(this.assetsDir, 'empty.glb')
+    const assetDest = path.join(this.assetsDir, 'Model.glb')
     if (!fs.existsSync(assetDest)) {
-      const assetSrc = resolveBuiltinAssetPath('empty.glb')
+      const assetSrc = resolveBuiltinAssetPath('Model.glb')
       if (!assetSrc) {
-        console.error('❌ Missing builtin asset empty.glb')
-        console.log(`💡 Expected empty.glb in build/world/assets or src/world/assets`)
+        console.error('❌ Missing builtin asset Model.glb')
+        console.log(`💡 Expected Model.glb in build/world/assets or src/world/assets`)
         return
       }
       fs.mkdirSync(this.assetsDir, { recursive: true })
@@ -309,7 +308,10 @@ export class HyperfyCLI {
 
     const blueprintPath = path.join(appDir, `${appName}.json`)
     const blueprint = {
-      model: 'assets/empty.glb',
+      model: 'assets/Model.glb',
+      image: {
+        url: 'assets/Model.png',
+      },
       props: {},
       preload: false,
       public: false,
@@ -332,149 +334,6 @@ export class HyperfyCLI {
     console.log(`   • ${blueprintPath}`)
     console.log(`   • ${scriptPath}`)
     console.log(`   • ${assetDest}`)
-  }
-
-  async create(appName, options = {}) {
-    if (!isValidAppName(appName)) {
-      console.error(`❌ Invalid app name: ${appName}`)
-      console.log(`💡 App names cannot contain / or \\`)
-      return
-    }
-
-    console.log(`🚀 Creating new app: ${appName}`)
-
-    const bundlePath = await this._buildAppBundle(appName)
-    if (!bundlePath) return
-
-    const server = await this._connectAdminClient()
-    try {
-      const scriptContent =
-        options.script ||
-        `// scripts exist inside apps, which are isolated from eachother but can communicate
-// global variables: Vector3, Quaternion, Matrix4, Euler, fetch, num(min, max) (similar to Math.random)
-
-// exposes variables to the UI (docs/scripting/app/Props.md)
-app.configure([
-  {
-    type: "text",
-    key: "color",
-    label: "Box Color",
-    placeholder: "Enter a hex color",
-    initial: "#ff0000",
-  },
-]);
-
-// create nodes (docs/scripting/nodes/types/**.md)
-const group = app.create("group");
-const box = app.create("prim", {
-  type: "box",
-  scale: [2, 1, 3],
-  position: [0, 1, 0],
-  color: props.color,
-});
-group.add(box);
-app.add(group); // add to world space with world.add(group)
-
-// networking (docs/scripting/Networking.md)
-if (world.isServer) {
-  app.on("ping", () => {
-    console.log("ping heard on server of original app");
-    app.emit("cross-app-ping", {});
-  });
-  world.on("cross-app-pong", () => {
-    app.send("end", {});
-  });
-}
-
-if (world.isClient) {
-  // get player objects (docs/scripting/world/World.md)
-  const localPlayer = world.getPlayer();
-  world.on('enter', (player) => {
-    console.log('player entered', player.playerId)
-  })
-  // client-side code
-  app.on("end", () => {
-    console.log("full loop ended");
-  });
-  app.send("ping", {});
-}
-
-app.on("update", (delta) => {
-  // runs on both client and server
-  // 'fixedUpdate' is better for physics
-});
-`
-
-      const scriptHash = sha256Hex(scriptContent)
-      const scriptFilename = `${scriptHash}.js`
-      await server.client.uploadAsset({
-        filename: scriptFilename,
-        buffer: Buffer.from(scriptContent, 'utf8'),
-        mimeType: 'text/javascript',
-      })
-
-      const existingIds = new Set(server.snapshot?.blueprints?.keys() || [])
-      let fileBase = appName
-      let blueprintId = deriveBlueprintId(appName, fileBase)
-      let suffix = 2
-      while (existingIds.has(blueprintId)) {
-        fileBase = `${appName}_${suffix}`
-        blueprintId = deriveBlueprintId(appName, fileBase)
-        suffix += 1
-      }
-
-      const entityId = uuid()
-
-      const blueprint = {
-        id: blueprintId,
-        version: 0,
-        name: fileBase,
-        image: null,
-        author: null,
-        url: null,
-        desc: null,
-        model: options.model || 'asset://Model.glb',
-        script: `asset://${scriptFilename}`,
-        props: options.props || {},
-        preload: false,
-        public: false,
-        locked: false,
-        frozen: false,
-        unique: false,
-        scene: false,
-        disabled: false,
-      }
-
-      const entity = {
-        id: entityId,
-        type: 'app',
-        blueprint: blueprintId,
-        position: options.position || [0, 0, 0],
-        quaternion: options.quaternion || [0, 0, 0, 1],
-        scale: options.scale || [1, 1, 1],
-        mover: null,
-        uploader: null,
-        pinned: false,
-        props: {},
-        state: options.state || {},
-      }
-
-      await server.client.request('blueprint_add', { blueprint })
-      await server.client.request('entity_add', { entity })
-
-      console.log(`✅ Successfully created app in world: ${appName}`)
-      console.log(`   • Blueprint: ${blueprintId}`)
-      console.log(`   • Entity:    ${entityId}`)
-      console.log(`💡 Run "gamedev world export" to sync into ${this.appsDir}.`)
-      console.log(`   Use --include-built-scripts if you need script code locally.`)
-    } catch (error) {
-      console.error(`❌ Error creating app:`, error?.message || error)
-      if (!this.worldUrl) {
-        console.error(`💡 Set WORLD_URL (and ADMIN_CODE if required)`) 
-      }
-    } finally {
-      this._closeAdminClient(server)
-    }
   }
 
   async deploy(appName, options = {}) {
@@ -629,7 +488,7 @@ app.on("update", (delta) => {
         console.log(`✅ Script validation passed for ${appName}`)
         console.log(`🔗 Hash: ${localHash}`)
       } else {
-        console.log(`💡 Run 'gamedev apps deploy ${appName}' (or save the file with app-server running)`) 
+        console.log(`💡 Run 'gamedev apps deploy ${appName}' (or save the file with app-server running)`)
       }
     } catch (error) {
       console.error(`❌ Error validating app:`, error?.message || error)
@@ -752,7 +611,6 @@ Usage:
 
 Commands:
   new <appName>              Create a local app folder + blueprint
-  create <appName>           Create a new app in the connected world
   list                       List local apps in ./apps
   build <appName>            Build app bundle to ./dist/apps/<appName>.js
   build --all                Build bundles for all local apps
@@ -817,15 +675,6 @@ export async function runAppCommand({ command, args = [], rootDir = process.cwd(
         return 1
       }
       await cli.new(args[0])
-      break
-
-    case 'create':
-      if (!args[0]) {
-        console.error('❌ App name required')
-        console.log(`Usage: ${commandPrefix} create <appName>`)
-        return 1
-      }
-      await cli.create(args[0])
       break
 
     case 'deploy':
