@@ -24,22 +24,6 @@ const DEFAULT_WORLD_URL = 'http://localhost:3000'
 const UPDATE_CHECK_TIMEOUT_MS = 1500
 const UPDATE_CHECK_ENV = 'GAMEDEV_DISABLE_UPDATE_CHECK'
 
-function resolveBuiltinAssetPath(filename) {
-  const buildPath = path.join(packageRoot, 'build', 'world', 'assets', filename)
-  if (fs.existsSync(buildPath)) return buildPath
-  const srcPath = path.join(packageRoot, 'src', 'world', 'assets', filename)
-  if (fs.existsSync(srcPath)) return srcPath
-  return null
-}
-
-function isValidAppName(name) {
-  if (typeof name !== 'string') return false
-  const trimmed = name.trim()
-  if (!trimmed) return false
-  if (trimmed.includes('/') || trimmed.includes('\\')) return false
-  return true
-}
-
 function normalizeBaseUrl(url) {
   if (!url) return ''
   return url.replace(/\/+$/, '')
