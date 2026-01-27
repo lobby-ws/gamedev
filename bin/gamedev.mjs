@@ -107,9 +107,7 @@ function parseSemver(value) {
   const cleaned = value.trim().replace(/^v/, '')
   const match = cleaned.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/)
   if (!match) return null
-  const prerelease = match[4]
-    ? match[4].split('.').map(part => (/^\d+$/.test(part) ? Number(part) : part))
-    : null
+  const prerelease = match[4] ? match[4].split('.').map(part => (/^\d+$/.test(part) ? Number(part) : part)) : null
   return {
     major: Number(match[1]),
     minor: Number(match[2]),

@@ -82,6 +82,8 @@ function buildPackageJson({ packageName, sdkName, sdkVersion }) {
     type: 'module',
     scripts: {
       dev: 'gamedev dev',
+      'new-app': 'gamedev new-app',
+      build: 'gamedev apps build --all',
       typecheck: 'tsc --noEmit',
     },
     devDependencies,
