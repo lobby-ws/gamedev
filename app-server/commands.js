@@ -317,7 +317,7 @@ export class HyperfyCLI {
 
     const blueprintPath = path.join(appDir, `${appName}.json`)
     const blueprint = {
-      model: 'assets/empty.glb',
+      model: 'assets/Model.glb',
       scriptFormat: 'module',
       image: {
         url: 'assets/Model.png',
@@ -507,9 +507,7 @@ export class HyperfyCLI {
       return false
     }
 
-    const blueprints = listLocalBlueprints(this.appsDir).filter(item =>
-      appName ? item.appName === appName : true
-    )
+    const blueprints = listLocalBlueprints(this.appsDir).filter(item => (appName ? item.appName === appName : true))
     if (!blueprints.length) {
       console.error(`❌ No blueprints found${appName ? ` for ${appName}` : ''}`)
       return false
