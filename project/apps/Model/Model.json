@@ -1,0 +1,16 @@
+{
+  "image": {
+    "url": "assets/Model.png"
+  },
+  "model": "assets/Model.glb",
+  "props": {
+    "collision": true
+  },
+  "preload": false,
+  "public": false,
+  "locked": false,
+  "frozen": false,
+  "unique": false,
+  "scene": false,
+  "disabled": false
+}
