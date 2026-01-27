@@ -569,6 +569,11 @@ class WorldAdminClient extends EventEmitter {
           this.emit('message', { type: name, blueprint: data })
           return
         }
+        if (name === 'blueprintRemoved') {
+          const id = data?.id || data
+          this.emit('message', { type: name, id })
+          return
+        }
         if (name === 'entityAdded' || name === 'entityModified') {
           this.emit('message', { type: name, entity: data })
           return
@@ -577,6 +582,16 @@ class WorldAdminClient extends EventEmitter {
           this.emit('message', { type: name, id: data })
           return
         }
+        if (name === 'settingsModified') {
+          this.emit('message', { type: name, data })
+          return
+        }
+        if (name === 'spawnModified') {
+          this.emit('message', { type: name, spawn: data })
+          return
+        }
+        this.emit('message', { type: name, data })
+        return
       }
 
       this.emit('message', { type: null, data })
