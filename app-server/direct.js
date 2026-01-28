@@ -639,6 +639,20 @@ class WorldAdminClient extends EventEmitter {
     return data.blueprint
   }
 
+  async removeBlueprint(id) {
+    const res = await fetch(joinUrl(this.httpBase, `/admin/blueprints/${encodeURIComponent(id)}`), {
+      method: 'DELETE',
+      headers: this.adminHeaders(),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => null)
+      const err = new Error(data?.error || `blueprint_remove_failed:${res.status}`)
+      err.code = data?.error || 'blueprint_remove_failed'
+      throw err
+    }
+    return res.json().catch(() => ({ ok: true }))
+  }
+
   async setSpawn({ position, quaternion }) {
     const res = await fetch(joinUrl(this.httpBase, '/admin/spawn'), {
       method: 'PUT',
@@ -799,6 +813,7 @@ export class DirectAppServer {
     })
     this.deployTimers = new Map()
     this.deployQueues = new Map()
+    this.removeTimers = new Map()
     this.pendingWrites = new Set()
     this.watchers = new Map()
     this.reconnecting = false
@@ -1163,6 +1178,7 @@ export class DirectAppServer {
       const abs = path.join(this.appsDir, filename)
       if (!fs.existsSync(abs)) {
         this._closeWatchersUnderDir(abs)
+        this._scheduleRemoveApp(filename, abs)
         return
       }
       if (!fs.statSync(abs).isDirectory()) return
@@ -1218,9 +1234,12 @@ export class DirectAppServer {
       }
 
       if (dirPath === rootPath && filename.endsWith('.json') && !isBlueprintDenylist(filename)) {
-        if (!fs.existsSync(abs)) return
         const fileBase = path.basename(filename, '.json')
         const id = deriveBlueprintId(appName, fileBase)
+        if (!fs.existsSync(abs)) {
+          this._scheduleRemoveBlueprint(id, abs)
+          return
+        }
         this._scheduleDeployBlueprint(id)
         return
       }
@@ -1337,6 +1356,90 @@ export class DirectAppServer {
         this._closeWatcher(key)
       }
     }
+  }
+
+  _scheduleRemoveApp(appName, appPath) {
+    const key = `remove:app:${appName}`
+    if (this.removeTimers.has(key)) clearTimeout(this.removeTimers.get(key))
+    const timer = setTimeout(() => {
+      this.removeTimers.delete(key)
+      if (appPath && fs.existsSync(appPath)) return
+      this._removeAppFromWorld(appName).catch(err => {
+        console.warn(`⚠️  Failed to remove app ${appName} from world:`, err?.message || err)
+      })
+    }, 100)
+    this.removeTimers.set(key, timer)
+  }
+
+  _scheduleRemoveBlueprint(id, configPath) {
+    const key = `remove:blueprint:${id}`
+    if (this.removeTimers.has(key)) clearTimeout(this.removeTimers.get(key))
+    const timer = setTimeout(() => {
+      this.removeTimers.delete(key)
+      if (configPath && fs.existsSync(configPath)) return
+      this._removeBlueprintsAndEntities([id]).catch(err => {
+        console.warn(`⚠️  Failed to remove blueprint ${id}:`, err?.message || err)
+      })
+    }, 100)
+    this.removeTimers.set(key, timer)
+  }
+
+  _getBlueprintIdsForApp(appName) {
+    const ids = []
+    if (!this.snapshot?.blueprints) return ids
+    for (const id of this.snapshot.blueprints.keys()) {
+      const parsed = parseBlueprintId(id)
+      if (parsed.appName === appName) {
+        ids.push(id)
+      }
+    }
+    return ids
+  }
+
+  async _removeBlueprintsAndEntities(blueprintIds) {
+    if (!Array.isArray(blueprintIds) || blueprintIds.length === 0) return
+    const ids = Array.from(new Set(blueprintIds)).filter(Boolean)
+    if (!ids.length) return
+
+    const entityIds = []
+    if (this.snapshot?.entities) {
+      for (const entity of this.snapshot.entities.values()) {
+        if (entity?.type !== 'app') continue
+        if (ids.includes(entity.blueprint)) {
+          entityIds.push(entity.id)
+        }
+      }
+    }
+
+    for (const id of entityIds) {
+      try {
+        await this.client.request('entity_remove', { id })
+      } catch (err) {
+        const code = err?.code || err?.message
+        if (code === 'not_found') continue
+        console.warn(`⚠️  Failed to remove entity ${id}:`, err?.message || err)
+      }
+    }
+
+    for (const id of ids) {
+      try {
+        await this.client.removeBlueprint(id)
+      } catch (err) {
+        const code = err?.code || err?.message
+        if (code === 'not_found') continue
+        if (code === 'in_use') {
+          console.warn(`⚠️  Blueprint ${id} is still in use and was not removed.`)
+          continue
+        }
+        console.warn(`⚠️  Failed to remove blueprint ${id}:`, err?.message || err)
+      }
+    }
+  }
+
+  async _removeAppFromWorld(appName) {
+    const ids = this._getBlueprintIdsForApp(appName)
+    if (!ids.length) return
+    await this._removeBlueprintsAndEntities(ids)
   }
 
   _watchWorldFile() {
@@ -2052,6 +2155,30 @@ export class DirectAppServer {
       } catch (err) {
         console.warn(`⚠️  Failed to delete blueprint config: ${configPath}`)
       }
+    }
+    this._maybeRemoveEmptyAppFolder(parsed.appName)
+  }
+
+  _maybeRemoveEmptyAppFolder(appName) {
+    const appPath = path.join(this.appsDir, appName)
+    if (!fs.existsSync(appPath)) return
+    let entries = []
+    try {
+      entries = fs.readdirSync(appPath, { withFileTypes: true })
+    } catch {
+      return
+    }
+    const hasBlueprint = entries.some(entry => {
+      if (!entry.isFile()) return false
+      if (!entry.name.endsWith('.json')) return false
+      return !isBlueprintDenylist(entry.name)
+    })
+    if (hasBlueprint) return
+    this._closeWatchersUnderDir(appPath)
+    try {
+      fs.rmSync(appPath, { recursive: true, force: true })
+    } catch (err) {
+      console.warn(`⚠️  Failed to delete app folder: ${appPath}`)
     }
   }
 

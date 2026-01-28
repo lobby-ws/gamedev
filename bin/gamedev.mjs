@@ -372,7 +372,7 @@ async function promptValue(prompt) {
 
 function ensureEnvForStart() {
   if (!fs.existsSync(envPath)) {
-    const worldId = `local-${uuid()}`
+    const worldId = `local-xxxxxxxxxx`
     const adminCode = generateAdminCode()
     const jwtSecret = generateJwtSecret()
     const envText = buildDefaultEnv({ worldUrl: DEFAULT_WORLD_URL, worldId, adminCode, jwtSecret })
