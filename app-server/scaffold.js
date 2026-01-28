@@ -10,13 +10,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const TEMPLATES_DIR = path.join(__dirname, 'templates')
 const DOCS_TEMPLATE_DIR = path.join(__dirname, '..', 'docs')
 const CLAUDE_MD_TEMPLATE = path.join(TEMPLATES_DIR, 'claude', 'CLAUDE.md')
-const CLAUDE_SKILL_TEMPLATE = path.join(
-  TEMPLATES_DIR,
-  'claude',
-  'skills',
-  'hyperfy-app-scripting',
-  'SKILL.md'
-)
+const CLAUDE_SKILL_TEMPLATE = path.join(TEMPLATES_DIR, 'claude', 'skills', 'hyperfy-app-scripting', 'SKILL.md')
+const AGENTS_MD_TEMPLATE = path.join(TEMPLATES_DIR, 'openai', 'AGENTS.md')
+const CURSOR_RULES_TEMPLATE = path.join(TEMPLATES_DIR, 'cursor', 'rules.md')
 
 const DEFAULT_GITIGNORE = `# Dependencies
 node_modules/
@@ -62,10 +58,16 @@ function normalizePackageName(name, fallback) {
   const scopeMatch = base.startsWith('@') ? base.split('/') : null
   if (scopeMatch && scopeMatch.length === 2) {
     const scope = scopeMatch[0].toLowerCase().replace(/[^a-z0-9._-]+/g, '')
-    const pkg = scopeMatch[1].toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')
+    const pkg = scopeMatch[1]
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
     if (scope && pkg) return `${scope}/${pkg}`
   }
-  const normalized = base.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')
+  const normalized = base
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
   return normalized || 'lobby-world'
 }
 
@@ -142,25 +144,27 @@ PUBLIC_DEV_SERVER=false
 }
 
 function buildTargetsExample() {
-  return JSON.stringify(
-    {
-      dev: {
-        worldUrl: 'http://localhost:3000',
-        worldId: 'local-your-world-id',
-        adminCode: 'your-admin-code',
-        deployCode: 'your-deploy-code',
+  return (
+    JSON.stringify(
+      {
+        dev: {
+          worldUrl: 'http://localhost:3000',
+          worldId: 'local-your-world-id',
+          adminCode: 'your-admin-code',
+          deployCode: 'your-deploy-code',
+        },
+        prod: {
+          worldUrl: 'https://world.example.com',
+          worldId: 'prod-world-id',
+          adminCode: 'your-admin-code',
+          deployCode: 'your-deploy-code',
+          confirm: true,
+        },
       },
-      prod: {
-        worldUrl: 'https://world.example.com',
-        worldId: 'prod-world-id',
-        adminCode: 'your-admin-code',
-        deployCode: 'your-deploy-code',
-        confirm: true,
-      },
-    },
-    null,
-    2
-  ) + '\n'
+      null,
+      2
+    ) + '\n'
+  )
 }
 
 function ensureDir(dirPath) {
@@ -305,15 +309,19 @@ export function scaffoldBaseProject({
     report,
   })
 
-  writeFileWithPolicy(path.join(rootDir, 'package.json'), buildPackageJson({
-    packageName: normalizedName,
-    sdkName,
-    sdkVersion,
-  }), {
-    force,
-    writeFile,
-    report,
-  })
+  writeFileWithPolicy(
+    path.join(rootDir, 'package.json'),
+    buildPackageJson({
+      packageName: normalizedName,
+      sdkName,
+      sdkVersion,
+    }),
+    {
+      force,
+      writeFile,
+      report,
+    }
+  )
 
   writeFileWithPolicy(path.join(rootDir, 'tsconfig.json'), JSON.stringify(DEFAULT_TSCONFIG, null, 2) + '\n', {
     force,
@@ -353,9 +361,31 @@ export function scaffoldBaseProject({
   if (fs.existsSync(CLAUDE_MD_TEMPLATE)) {
     const docContent = readText(CLAUDE_MD_TEMPLATE)
     if (docContent != null) {
+      writeFileWithPolicy(path.join(rootDir, 'CLAUDE.md'), docContent.endsWith('\n') ? docContent : `${docContent}\n`, {
+        force,
+        writeFile,
+        report,
+      })
+    }
+  }
+
+  if (fs.existsSync(AGENTS_MD_TEMPLATE)) {
+    const agentsContent = readText(AGENTS_MD_TEMPLATE)
+    if (agentsContent != null) {
       writeFileWithPolicy(
-        path.join(rootDir, 'CLAUDE.md'),
-        docContent.endsWith('\n') ? docContent : `${docContent}\n`,
+        path.join(rootDir, 'AGENTS.md'),
+        agentsContent.endsWith('\n') ? agentsContent : `${agentsContent}\n`,
+        { force, writeFile, report }
+      )
+    }
+  }
+
+  if (fs.existsSync(CURSOR_RULES_TEMPLATE)) {
+    const cursorContent = readText(CURSOR_RULES_TEMPLATE)
+    if (cursorContent != null) {
+      writeFileWithPolicy(
+        path.join(rootDir, '.cursor', 'rules.md'),
+        cursorContent.endsWith('\n') ? cursorContent : `${cursorContent}\n`,
         { force, writeFile, report }
       )
     }
