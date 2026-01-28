@@ -348,7 +348,7 @@ const migrations = [
             period: 'pm',
             intensity: 1,
             sky: {
-              url: 'asset://sky.webp',
+              url: 'asset://sky.jpg',
             },
             hdr: {
               url: 'asset://sky.hdr',
