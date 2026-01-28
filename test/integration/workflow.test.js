@@ -62,7 +62,6 @@ test('workflow vnext integrations (server/app-server)', { timeout: 120000 }, asy
       const appServer = new DirectAppServer({
         worldUrl: world.worldUrl,
         adminCode: world.adminCode,
-        deployCode: world.deployCode,
         rootDir,
       })
       try {
@@ -71,7 +70,6 @@ test('workflow vnext integrations (server/app-server)', { timeout: 120000 }, asy
         const admin = new AdminWsClient({
           worldUrl: world.worldUrl,
           adminCode: world.adminCode,
-          deployCode: world.deployCode,
         })
         await admin.connect()
 
@@ -131,72 +129,27 @@ test('workflow vnext integrations (server/app-server)', { timeout: 120000 }, asy
     })
   })
 
-  await t.test('B1 deploy capability blocks script changes', async () => {
+  await t.test('B1 admin code gates deploy endpoints', async () => {
     await withWorldServer(async world => {
-      const adminDeploy = new AdminWsClient({
-        worldUrl: world.worldUrl,
-        adminCode: world.adminCode,
-        deployCode: world.deployCode,
-      })
-      await adminDeploy.connect()
-
-      const { data: lock } = await fetchJson(`${world.worldUrl}/admin/deploy-lock`, {
-        adminCode: world.adminCode,
-        deployCode: world.deployCode,
+      const noAuth = await fetchJson(`${world.worldUrl}/admin/deploy-lock`, {
         method: 'POST',
         body: { owner: 'b1-test' },
       })
+      assert.equal(noAuth.res.status, 403)
+      assert.equal(noAuth.data?.error, 'admin_required')
 
-      const blueprintId = 'b1app__main'
-      await adminDeploy.request('blueprint_add', {
-        blueprint: buildBlueprintPayload({ id: blueprintId, name: 'B1App', script: 'console.log("v1")' }),
-        lockToken: lock.token,
+      const { data: lock } = await fetchJson(`${world.worldUrl}/admin/deploy-lock`, {
+        adminCode: world.adminCode,
+        method: 'POST',
+        body: { owner: 'b1-test' },
       })
+      assert.ok(lock?.token)
 
       await fetchJson(`${world.worldUrl}/admin/deploy-lock`, {
         adminCode: world.adminCode,
-        deployCode: world.deployCode,
         method: 'DELETE',
         body: { token: lock.token },
       })
-
-      const adminBuilder = new AdminWsClient({
-        worldUrl: world.worldUrl,
-        adminCode: world.adminCode,
-      })
-      await adminBuilder.connect()
-
-      const { data: current } = await fetchJson(`${world.worldUrl}/admin/blueprints/${blueprintId}`, {
-        adminCode: world.adminCode,
-      })
-      const nextVersion = (current.blueprint?.version || 0) + 1
-
-      await assert.rejects(
-        () =>
-          adminBuilder.request('blueprint_modify', {
-            change: { id: blueprintId, version: nextVersion, script: 'console.log("v2")' },
-          }),
-        err => err?.code === 'deploy_required'
-      )
-
-      await assert.rejects(
-        () =>
-          adminBuilder.request('blueprint_modify', {
-            change: {
-              id: blueprintId,
-              version: nextVersion,
-              scriptFiles: { 'index.js': 'asset://entry.js' },
-            },
-          }),
-        err => err?.code === 'deploy_required'
-      )
-
-      await adminBuilder.request('blueprint_modify', {
-        change: { id: blueprintId, version: nextVersion, name: 'B1AppUpdated' },
-      })
-
-      adminBuilder.close()
-      adminDeploy.close()
     })
   })
 
@@ -245,7 +198,6 @@ test('workflow vnext integrations (server/app-server)', { timeout: 120000 }, asy
               worldUrl: world.worldUrl,
               worldId: world.worldId,
               adminCode: world.adminCode,
-              deployCode: world.deployCode,
             },
           },
           null,
@@ -257,14 +209,12 @@ test('workflow vnext integrations (server/app-server)', { timeout: 120000 }, asy
         WORLD_URL: process.env.WORLD_URL,
         WORLD_ID: process.env.WORLD_ID,
         ADMIN_CODE: process.env.ADMIN_CODE,
-        DEPLOY_CODE: process.env.DEPLOY_CODE,
         HYPERFY_TARGET: process.env.HYPERFY_TARGET,
         HYPERFY_TARGET_CONFIRM: process.env.HYPERFY_TARGET_CONFIRM,
       }
       delete process.env.WORLD_URL
       delete process.env.WORLD_ID
       delete process.env.ADMIN_CODE
-      delete process.env.DEPLOY_CODE
       delete process.env.HYPERFY_TARGET
       delete process.env.HYPERFY_TARGET_CONFIRM
 
@@ -279,7 +229,6 @@ test('workflow vnext integrations (server/app-server)', { timeout: 120000 }, asy
         process.env.WORLD_URL = savedEnv.WORLD_URL
         process.env.WORLD_ID = savedEnv.WORLD_ID
         process.env.ADMIN_CODE = savedEnv.ADMIN_CODE
-        process.env.DEPLOY_CODE = savedEnv.DEPLOY_CODE
         process.env.HYPERFY_TARGET = savedEnv.HYPERFY_TARGET
         process.env.HYPERFY_TARGET_CONFIRM = savedEnv.HYPERFY_TARGET_CONFIRM
       }
@@ -291,13 +240,11 @@ test('workflow vnext integrations (server/app-server)', { timeout: 120000 }, asy
       const admin = new AdminWsClient({
         worldUrl: world.worldUrl,
         adminCode: world.adminCode,
-        deployCode: world.deployCode,
       })
       await admin.connect()
 
       const { data: lockA } = await fetchJson(`${world.worldUrl}/admin/deploy-lock`, {
         adminCode: world.adminCode,
-        deployCode: world.deployCode,
         method: 'POST',
         body: { owner: 'lock-a' },
       })
@@ -310,7 +257,6 @@ test('workflow vnext integrations (server/app-server)', { timeout: 120000 }, asy
 
       await fetchJson(`${world.worldUrl}/admin/deploy-lock`, {
         adminCode: world.adminCode,
-        deployCode: world.deployCode,
         method: 'DELETE',
         body: { token: lockA.token },
       })
@@ -338,7 +284,6 @@ test('workflow vnext integrations (server/app-server)', { timeout: 120000 }, asy
 
       const { data: lockB } = await fetchJson(`${world.worldUrl}/admin/deploy-lock`, {
         adminCode: world.adminCode,
-        deployCode: world.deployCode,
         method: 'POST',
         body: { owner: 'lock-b' },
       })
@@ -364,7 +309,6 @@ test('workflow vnext integrations (server/app-server)', { timeout: 120000 }, asy
 
       await fetchJson(`${world.worldUrl}/admin/deploy-lock`, {
         adminCode: world.adminCode,
-        deployCode: world.deployCode,
         method: 'DELETE',
         body: { token: lockB.token },
       })
@@ -378,13 +322,11 @@ test('workflow vnext integrations (server/app-server)', { timeout: 120000 }, asy
       const admin = new AdminWsClient({
         worldUrl: world.worldUrl,
         adminCode: world.adminCode,
-        deployCode: world.deployCode,
       })
       await admin.connect()
 
       const { data: lock } = await fetchJson(`${world.worldUrl}/admin/deploy-lock`, {
         adminCode: world.adminCode,
-        deployCode: world.deployCode,
         method: 'POST',
         body: { owner: 'snapshot-test' },
       })
@@ -397,7 +339,6 @@ test('workflow vnext integrations (server/app-server)', { timeout: 120000 }, asy
 
       const snapshot = await fetchJson(`${world.worldUrl}/admin/deploy-snapshots`, {
         adminCode: world.adminCode,
-        deployCode: world.deployCode,
         method: 'POST',
         body: { ids: [blueprintId], note: 'before-change', lockToken: lock.token },
       })
@@ -415,7 +356,6 @@ test('workflow vnext integrations (server/app-server)', { timeout: 120000 }, asy
 
       const rollback = await fetchJson(`${world.worldUrl}/admin/deploy-snapshots/rollback`, {
         adminCode: world.adminCode,
-        deployCode: world.deployCode,
         method: 'POST',
         body: { id: snapshot.data.id, lockToken: lock.token },
       })
@@ -428,7 +368,6 @@ test('workflow vnext integrations (server/app-server)', { timeout: 120000 }, asy
 
       await fetchJson(`${world.worldUrl}/admin/deploy-lock`, {
         adminCode: world.adminCode,
-        deployCode: world.deployCode,
         method: 'DELETE',
         body: { token: lock.token },
       })
@@ -459,7 +398,6 @@ test('workflow vnext integrations (server/app-server)', { timeout: 120000 }, asy
       const server = new DirectAppServer({
         worldUrl: world.worldUrl,
         adminCode: world.adminCode,
-        deployCode: world.deployCode,
         rootDir,
       })
       try {

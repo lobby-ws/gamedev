@@ -11,7 +11,6 @@ App-server is the dev server that syncs local files to a world via `/admin`. It 
   - `WORLD_URL` (e.g. `http://localhost:3000`)
   - `WORLD_ID` (must match the target worldId)
   - `ADMIN_CODE` (must match the world server, if set)
-  - `DEPLOY_CODE` (required for script updates when configured)
 
 ---
 
@@ -46,13 +45,11 @@ Define targets in `.lobby/targets.json` and pass `--target <name>` to the CLI or
     "worldUrl": "http://localhost:3000",
     "worldId": "dev-world",
     "adminCode": "secret",
-    "deployCode": "deploy-secret"
   },
   "prod": {
     "worldUrl": "https://world.example.com",
     "worldId": "prod-world",
     "adminCode": "secret",
-    "deployCode": "deploy-secret",
     "confirm": true
   }
 }
@@ -130,6 +127,6 @@ For prod targets, the CLI asks for confirmation unless you pass `--yes`.
 
 - Bootstrap didn’t happen: ensure the target world is empty/default or run `gamedev world export` (add `--include-built-scripts` for legacy single-file apps).
 - Unauthorized: ensure `ADMIN_CODE` matches the world server `ADMIN_CODE`.
-- Script updates rejected: ensure `DEPLOY_CODE` matches and the deploy lock is free.
+- Script updates rejected: ensure `ADMIN_CODE` matches and the deploy lock is free.
 - WORLD_ID mismatch: set `WORLD_ID` to match the target world id.
 - Changes not appearing: confirm `apps/<appName>/index.js` (or blueprint JSON) is being edited and app-server is connected.

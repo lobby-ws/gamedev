@@ -1076,13 +1076,11 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       world.emit('toast', 'Script saved')
     } catch (err) {
       const code = err?.code || err?.message
-      if (code === 'deploy_required') {
-        setError('Deploy code required.')
+      if (code === 'admin_required' || code === 'admin_code_missing' || code === 'deploy_required') {
+        setError('Admin code required.')
       } else if (code === 'locked' || code === 'deploy_locked' || code === 'deploy_lock_required') {
         const owner = err?.lock?.owner
         setError(owner ? `Deploy locked by ${owner}.` : 'Deploy locked by another session.')
-      } else if (code === 'admin_required' || code === 'admin_code_missing') {
-        setError('Admin code required.')
       } else if (code === 'upload_failed') {
         setError('Upload failed.')
       } else {
@@ -1208,13 +1206,11 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         return true
       } catch (err) {
         const code = err?.code || err?.message
-        if (code === 'deploy_required') {
-          setError('Deploy code required.')
+        if (code === 'admin_required' || code === 'admin_code_missing' || code === 'deploy_required') {
+          setError('Admin code required.')
         } else if (code === 'locked' || code === 'deploy_locked' || code === 'deploy_lock_required') {
           const owner = err?.lock?.owner
           setError(owner ? `Deploy locked by ${owner}.` : 'Deploy locked by another session.')
-        } else if (code === 'admin_required' || code === 'admin_code_missing') {
-          setError('Admin code required.')
         } else if (code === 'upload_failed') {
           setError('Upload failed.')
         } else {

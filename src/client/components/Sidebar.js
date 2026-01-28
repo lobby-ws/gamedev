@@ -1076,13 +1076,11 @@ function Add({ world, hidden }) {
         setCreateError('AI is not configured on this server.')
       } else if (code === 'builder_required') {
         setCreateError('Builder access required.')
-      } else if (code === 'deploy_required') {
-        setCreateError('Deploy code required.')
+      } else if (code === 'admin_required' || code === 'admin_code_missing' || code === 'deploy_required') {
+        setCreateError('Admin code required.')
       } else if (code === 'locked' || code === 'deploy_locked' || code === 'deploy_lock_required') {
         const owner = err?.lock?.owner
         setCreateError(owner ? `Deploy locked by ${owner}.` : 'Deploy locked by another session.')
-      } else if (code === 'admin_required' || code === 'admin_code_missing') {
-        setCreateError('Admin code required.')
       } else if (code === 'upload_failed') {
         setCreateError('Upload failed.')
       } else {

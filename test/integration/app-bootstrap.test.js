@@ -45,7 +45,7 @@ test('scaffold writes builtins and world manifest', async () => {
 
   const sceneConfig = await readJson(path.join(rootDir, 'apps', '$scene', '$scene.json'))
   assert.equal(sceneConfig.scene, true)
-  assert.equal(sceneConfig.model, 'assets/The_Meadow.glb')
+  assert.equal(sceneConfig.model, 'assets/Model.glb')
   assert.equal(sceneConfig.scriptFormat, 'module')
 
   const modelScript = await fs.readFile(path.join(rootDir, 'apps', 'Model', 'index.js'), 'utf8')

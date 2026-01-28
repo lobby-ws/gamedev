@@ -1245,8 +1245,8 @@ export class ClientBuilder extends System {
         this.world.emit('toast', 'Deploy locked')
         return
       }
-      if (code === 'deploy_required') {
-        this.world.emit('toast', 'Deploy lock required')
+      if (code === 'admin_required' || code === 'admin_code_missing' || code === 'deploy_required') {
+        this.world.emit('toast', 'Admin code required')
         return
       }
       console.error(err)

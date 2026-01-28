@@ -171,12 +171,6 @@ export class HyperfyCLI {
         : typeof process.env.ADMIN_CODE === 'string'
           ? process.env.ADMIN_CODE
           : null
-    this.deployCode =
-      typeof overrides.deployCode === 'string'
-        ? overrides.deployCode
-        : typeof process.env.DEPLOY_CODE === 'string'
-          ? process.env.DEPLOY_CODE
-          : null
   }
 
   _requireWorldUrl() {
@@ -230,7 +224,6 @@ export class HyperfyCLI {
     const server = new DirectAppServer({
       worldUrl: this.worldUrl,
       adminCode,
-      deployCode: this.deployCode,
       rootDir: this.rootDir,
     })
     try {
@@ -245,7 +238,6 @@ export class HyperfyCLI {
       const retryServer = new DirectAppServer({
         worldUrl: this.worldUrl,
         adminCode,
-        deployCode: this.deployCode,
         rootDir: this.rootDir,
       })
       await retryServer.connect()
@@ -590,7 +582,7 @@ Commands:
   reset [--force]            Delete local apps/assets/world.json
   status                     Show /admin snapshot summary
   help                       Show this help
-  --target <name>            Use .lobby/targets.json entry for WORLD_URL/WORLD_ID/ADMIN_CODE/DEPLOY_CODE
+  --target <name>            Use .lobby/targets.json entry for WORLD_URL/WORLD_ID/ADMIN_CODE
 
 Options:
   --dry-run, -n              Show deploy plan without applying changes
@@ -601,12 +593,11 @@ Environment:
   WORLD_URL                  World server base URL (e.g. http://localhost:3000)
   WORLD_ID                   World ID (must match remote worldId)
   ADMIN_CODE                 Admin code (if the world requires it)
-  DEPLOY_CODE                Deploy code (required for script updates when configured)
 
 Notes:
   - Blueprints live at apps/<appName>/*.json with a shared index.js/js script.
   - Start the direct app-server for continuous sync:
-      WORLD_URL=... WORLD_ID=... ADMIN_CODE=... DEPLOY_CODE=... node <path-to-repo>/app-server/server.js
+      WORLD_URL=... WORLD_ID=... ADMIN_CODE=... node <path-to-repo>/app-server/server.js
 `)
   }
 }

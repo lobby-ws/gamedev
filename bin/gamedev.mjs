@@ -436,7 +436,6 @@ async function startCommand(args = []) {
       WORLD_URL: target.worldUrl || env.WORLD_URL,
       WORLD_ID: target.worldId || env.WORLD_ID,
       ADMIN_CODE: typeof target.adminCode === 'string' ? target.adminCode : env.ADMIN_CODE,
-      DEPLOY_CODE: typeof target.deployCode === 'string' ? target.deployCode : env.DEPLOY_CODE,
     }
   }
 
@@ -551,7 +550,6 @@ async function appServerCommand(args = []) {
       WORLD_URL: target.worldUrl || env.WORLD_URL,
       WORLD_ID: target.worldId || env.WORLD_ID,
       ADMIN_CODE: typeof target.adminCode === 'string' ? target.adminCode : env.ADMIN_CODE,
-      DEPLOY_CODE: typeof target.deployCode === 'string' ? target.deployCode : env.DEPLOY_CODE,
     }
   }
 

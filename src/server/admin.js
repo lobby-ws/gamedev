@@ -30,23 +30,9 @@ function isAdminCodeValid(code) {
   return isCodeValid(adminCode, code)
 }
 
-function isDeployCodeValid(code, builderOk) {
-  const deployCode = process.env.DEPLOY_CODE
-  if (deployCode) {
-    return isCodeValid(deployCode, code)
-  }
-  return builderOk
-}
-
 function getAdminCodeFromRequest(req) {
   const header = normalizeHeader(req.headers['x-admin-code'])
   return typeof header === 'string' ? header : null
-}
-
-function getDeployCodeFromRequest(req) {
-  const header = normalizeHeader(req.headers['x-deploy-code'])
-  if (typeof header === 'string') return header
-  return getAdminCodeFromRequest(req)
 }
 
 function sendPacket(ws, name, payload) {
@@ -109,11 +95,9 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
   }
 
   function requireDeploy(req, reply) {
-    const adminCode = getAdminCodeFromRequest(req)
-    const builderOk = isAdminCodeValid(adminCode)
-    const deployCode = getDeployCodeFromRequest(req)
-    if (!isDeployCodeValid(deployCode, builderOk)) {
-      reply.code(403).send({ error: 'deploy_required' })
+    const code = getAdminCodeFromRequest(req)
+    if (!isAdminCodeValid(code)) {
+      reply.code(403).send({ error: 'admin_required' })
       return false
     }
     return true
@@ -375,7 +359,7 @@ function hasScriptFields(data) {
             return
           }
           const builderOk = isAdminCodeValid(data?.code)
-          const deployOk = isDeployCodeValid(data?.deployCode, builderOk)
+          const deployOk = builderOk
           if (!builderOk && !deployOk) {
             sendPacket(ws, 'adminAuthError', { error: 'invalid_code' })
             ws.close()
@@ -460,7 +444,7 @@ function hasScriptFields(data) {
               return
             }
             if (hasScriptChange && !capabilities.deploy) {
-              sendPacket(ws, 'adminResult', { ok: false, error: 'deploy_required', requestId })
+              sendPacket(ws, 'adminResult', { ok: false, error: 'admin_required', requestId })
               return
             }
             if (hasScriptChange) {

@@ -116,7 +116,6 @@ function buildEnvExample() {
 WORLD_URL=http://localhost:3000
 WORLD_ID=local-your-world-id
 ADMIN_CODE=your-admin-code
-DEPLOY_CODE=your-deploy-code
 
 # World server
 PORT=3000
@@ -157,13 +156,11 @@ function buildTargetsExample() {
           worldUrl: 'http://localhost:3000',
           worldId: 'local-your-world-id',
           adminCode: 'your-admin-code',
-          deployCode: 'your-deploy-code',
         },
         prod: {
           worldUrl: 'https://world.example.com',
           worldId: 'prod-world-id',
           adminCode: 'your-admin-code',
-          deployCode: 'your-deploy-code',
           confirm: true,
         },
       },

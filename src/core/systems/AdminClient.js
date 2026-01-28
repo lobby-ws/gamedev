@@ -32,20 +32,13 @@ export class AdminClient extends System {
     this.error = null
     this.queue = []
     this.code = null
-    this.deployCode = storage.get('deployCode')
     this.deployLockToken = null
     this.deployLockScope = null
     this.requireCode = false
   }
 
-  init({ adminUrl, requireAdminCode, deployCode } = {}) {
+  init({ adminUrl, requireAdminCode } = {}) {
     this.code = storage.get('adminCode')
-    if (deployCode !== undefined) {
-      this.deployCode = deployCode || null
-      storage.set('deployCode', this.deployCode)
-    } else if (this.deployCode === undefined) {
-      this.deployCode = storage.get('deployCode')
-    }
     if (adminUrl) {
       this.adminUrl = normalizeAdminUrl(adminUrl)
       this.requireCode = !!requireAdminCode
@@ -63,15 +56,6 @@ export class AdminClient extends System {
     this.code = code
     storage.set('adminCode', code)
     this.world.emit('admin-code', code)
-    this.error = null
-    this.disconnect()
-    this.connect()
-  }
-
-  setDeployCode(code) {
-    this.deployCode = code
-    storage.set('deployCode', code)
-    this.world.emit('deploy-code', code)
     this.error = null
     this.disconnect()
     this.connect()
@@ -112,7 +96,6 @@ export class AdminClient extends System {
     this.error = null
     this.sendPacket('adminAuth', {
       code: this.code,
-      deployCode: this.deployCode,
       subscriptions: { snapshot: false, players: false, runtime: false },
       networkId: this.world.network?.id || null,
     })
@@ -191,12 +174,12 @@ export class AdminClient extends System {
   getDeployHeaders() {
     const headers = {}
     if (this.code) headers['X-Admin-Code'] = this.code
-    if (this.deployCode) headers['X-Deploy-Code'] = this.deployCode
     return Object.keys(headers).length > 0 ? headers : undefined
   }
 
   async acquireDeployLock({ owner, ttl, scope } = {}) {
     if (!this.adminUrl) throw new Error('admin_url_missing')
+    if (this.requireCode && !this.code) throw new Error('admin_code_missing')
     const headers = this.getDeployHeaders() || {}
     const payload = {}
     if (owner) payload.owner = owner
@@ -211,8 +194,8 @@ export class AdminClient extends System {
       body: JSON.stringify(payload),
     })
     if (res.status === 403) {
-      const error = new Error('deploy_required')
-      error.code = 'deploy_required'
+      const error = new Error('admin_required')
+      error.code = 'admin_required'
       throw error
     }
     if (res.status === 409) {
@@ -239,6 +222,7 @@ export class AdminClient extends System {
 
   async releaseDeployLock(token, scope) {
     if (!this.adminUrl) throw new Error('admin_url_missing')
+    if (this.requireCode && !this.code) throw new Error('admin_code_missing')
     const lockToken = token || this.deployLockToken
     if (!lockToken) return { ok: true }
     const lockScope = scope || this.deployLockScope
@@ -254,8 +238,8 @@ export class AdminClient extends System {
       body: JSON.stringify(payload),
     })
     if (res.status === 403) {
-      const error = new Error('deploy_required')
-      error.code = 'deploy_required'
+      const error = new Error('admin_required')
+      error.code = 'admin_required'
       throw error
     }
     if (!res.ok) {

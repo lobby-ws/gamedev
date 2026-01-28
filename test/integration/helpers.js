@@ -72,7 +72,7 @@ export async function waitForHealth(worldUrl, { timeoutMs = 20000 } = {}) {
   }, { timeoutMs, intervalMs: 200 })
 }
 
-export async function startWorldServer({ adminCode = 'admin', deployCode = 'deploy' } = {}) {
+export async function startWorldServer({ adminCode = 'admin' } = {}) {
   const port = await getAvailablePort()
   const worldDir = await createTempDir('hyperfy-world-')
   const worldId = `test-${crypto.randomUUID()}`
@@ -85,7 +85,6 @@ export async function startWorldServer({ adminCode = 'admin', deployCode = 'depl
     WORLD: worldDir,
     WORLD_ID: worldId,
     ADMIN_CODE: adminCode,
-    DEPLOY_CODE: deployCode,
     JWT_SECRET: crypto.randomBytes(24).toString('base64url'),
     PUBLIC_WS_URL: wsUrl,
     PUBLIC_API_URL: `${worldUrl}/api`,
@@ -136,16 +135,14 @@ export async function startWorldServer({ adminCode = 'admin', deployCode = 'depl
     worldId,
     worldDir,
     adminCode,
-    deployCode,
     stop,
   }
 }
 
 export class AdminWsClient {
-  constructor({ worldUrl, adminCode, deployCode, subscriptions } = {}) {
+  constructor({ worldUrl, adminCode, subscriptions } = {}) {
     this.worldUrl = normalizeBaseUrl(worldUrl)
     this.adminCode = adminCode || null
-    this.deployCode = deployCode || null
     this.subscriptions = subscriptions || { snapshot: true, players: false, runtime: false }
     this.ws = null
     this.pending = new Map()
@@ -170,7 +167,6 @@ export class AdminWsClient {
         ws.send(
           writePacket('adminAuth', {
             code: this.adminCode,
-            deployCode: this.deployCode,
             subscriptions: this.subscriptions,
           })
         )
@@ -313,10 +309,9 @@ export async function stopAppServer(server) {
   } catch {}
 }
 
-export async function fetchJson(url, { adminCode, deployCode, method = 'GET', body } = {}) {
+export async function fetchJson(url, { adminCode, method = 'GET', body } = {}) {
   const headers = {}
   if (adminCode) headers['X-Admin-Code'] = adminCode
-  if (deployCode) headers['X-Deploy-Code'] = deployCode
   if (body) headers['Content-Type'] = 'application/json'
   const res = await fetch(url, {
     method,

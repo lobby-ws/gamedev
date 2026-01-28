@@ -439,11 +439,10 @@ function formatNameList(items, limit = 6) {
 }
 
 class WorldAdminClient extends EventEmitter {
-  constructor({ worldUrl, adminCode, deployCode }) {
+  constructor({ worldUrl, adminCode }) {
     super()
     this.worldUrl = normalizeBaseUrl(worldUrl)
     this.adminCode = adminCode || null
-    this.deployCode = deployCode || null
     this.ws = null
     this.pending = new Map()
   }
@@ -460,10 +459,9 @@ class WorldAdminClient extends EventEmitter {
     return joinUrl(this.wsBase, '/admin')
   }
 
-  adminHeaders(extra = {}, { includeDeploy } = {}) {
+  adminHeaders(extra = {}) {
     const headers = { ...extra }
     if (this.adminCode) headers['X-Admin-Code'] = this.adminCode
-    if (includeDeploy && this.deployCode) headers['X-Deploy-Code'] = this.deployCode
     return headers
   }
 
@@ -479,7 +477,6 @@ class WorldAdminClient extends EventEmitter {
         ws.send(
           writePacket('adminAuth', {
             code: this.adminCode,
-            deployCode: this.deployCode,
             subscriptions: { snapshot: false, players: false, runtime: false },
           })
         )
@@ -695,7 +692,7 @@ class WorldAdminClient extends EventEmitter {
   async getDeployLockStatus({ scope } = {}) {
     const suffix = scope ? `?scope=${encodeURIComponent(scope)}` : ''
     const res = await fetch(joinUrl(this.httpBase, `/admin/deploy-lock${suffix}`), {
-      headers: this.adminHeaders({}, { includeDeploy: true }),
+      headers: this.adminHeaders(),
     })
     if (!res.ok) {
       throw new Error(`deploy_lock_status_failed:${res.status}`)
@@ -708,7 +705,7 @@ class WorldAdminClient extends EventEmitter {
     if (scope) payload.scope = scope
     const res = await fetch(joinUrl(this.httpBase, '/admin/deploy-lock'), {
       method: 'POST',
-      headers: this.adminHeaders({ 'Content-Type': 'application/json' }, { includeDeploy: true }),
+      headers: this.adminHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload),
     })
     if (!res.ok) {
@@ -726,7 +723,7 @@ class WorldAdminClient extends EventEmitter {
     if (scope) payload.scope = scope
     const res = await fetch(joinUrl(this.httpBase, '/admin/deploy-lock'), {
       method: 'PUT',
-      headers: this.adminHeaders({ 'Content-Type': 'application/json' }, { includeDeploy: true }),
+      headers: this.adminHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload),
     })
     if (!res.ok) {
@@ -744,7 +741,7 @@ class WorldAdminClient extends EventEmitter {
     if (scope) payload.scope = scope
     const res = await fetch(joinUrl(this.httpBase, '/admin/deploy-lock'), {
       method: 'DELETE',
-      headers: this.adminHeaders({ 'Content-Type': 'application/json' }, { includeDeploy: true }),
+      headers: this.adminHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload),
     })
     if (!res.ok) {
@@ -762,7 +759,7 @@ class WorldAdminClient extends EventEmitter {
     if (scope) payload.scope = scope
     const res = await fetch(joinUrl(this.httpBase, '/admin/deploy-snapshots'), {
       method: 'POST',
-      headers: this.adminHeaders({ 'Content-Type': 'application/json' }, { includeDeploy: true }),
+      headers: this.adminHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload),
     })
     if (!res.ok) {
@@ -780,7 +777,7 @@ class WorldAdminClient extends EventEmitter {
     if (scope) payload.scope = scope
     const res = await fetch(joinUrl(this.httpBase, '/admin/deploy-snapshots/rollback'), {
       method: 'POST',
-      headers: this.adminHeaders({ 'Content-Type': 'application/json' }, { includeDeploy: true }),
+      headers: this.adminHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload),
     })
     if (!res.ok) {
@@ -795,11 +792,10 @@ class WorldAdminClient extends EventEmitter {
 }
 
 export class DirectAppServer {
-  constructor({ worldUrl, adminCode, deployCode, rootDir = process.cwd() }) {
+  constructor({ worldUrl, adminCode, rootDir = process.cwd() }) {
     this.rootDir = rootDir
     this.worldUrl = normalizeBaseUrl(worldUrl)
     this.adminCode = adminCode || null
-    this.deployCode = deployCode || null
     this.appsDir = path.join(this.rootDir, 'apps')
     this.assetsDir = path.join(this.rootDir, 'assets')
     this.sharedDir = path.join(this.rootDir, SHARED_DIR_NAME)
@@ -809,7 +805,6 @@ export class DirectAppServer {
     this.client = new WorldAdminClient({
       worldUrl: this.worldUrl,
       adminCode: this.adminCode,
-      deployCode: this.deployCode,
     })
     this.deployTimers = new Map()
     this.deployQueues = new Map()
@@ -2515,12 +2510,11 @@ export class DirectAppServer {
 export async function main() {
   const worldUrl = process.env.WORLD_URL
   const adminCode = process.env.ADMIN_CODE
-  const deployCode = process.env.DEPLOY_CODE
   if (!worldUrl) {
     console.error('Missing env WORLD_URL (e.g. http://localhost:3000)')
     process.exit(1)
   }
-  const server = new DirectAppServer({ worldUrl, adminCode, deployCode })
+  const server = new DirectAppServer({ worldUrl, adminCode })
   await server.start()
   const shutdown = async () => {
     await server.stop()
