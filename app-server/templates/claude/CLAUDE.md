@@ -1,23 +1,16 @@
 # Docs
 
 Project docs are copied into `docs/` on init. Start with `docs/scripting/README.md`.
-Engine source and reference docs are also available in `node_modules/gamedev/src/` and `node_modules/gamedev/docs/` after install.
 
 ## Creating Apps
 
 Apps live in `apps/` and each app folder contains blueprint JSON plus a script entry and optional modules (no bundling). There are two ways to create them:
 
 Local-first (project files):
-- Run `gamedev apps new <AppName>` (creates `apps/<AppName>/` with `index.js` + blueprint)
-- Or create `apps/<AppName>/index.js` manually
-- Add one or more blueprints in `apps/<AppName>/*.json` (defaults, model, props, `scriptFormat`, `scriptEntry` when needed)
-- Put assets in top-level `assets/` and reference them from blueprint JSON or file props
-- Run `npm run dev` (or `gamedev dev`) for hot reload
 
-Remote-first (connected world):
-- Run `gamedev apps create <AppName>` (requires WORLD_URL + WORLD_ID; ADMIN_CODE/DEPLOY_CODE if the world needs them)
-- Then run `gamedev world export` to sync the app into `apps/`
-- Use `--include-built-scripts` only for legacy single-file scripts
+- Run `pnpm run apps:new <AppName>` (creates `apps/<AppName>/` with `index.js` + blueprint)
+- Put assets in top-level `assets/` and reference them from blueprint JSON for app.config props
+- Run `npm run dev` for hot reload
 
 Example local layout:
 
@@ -32,13 +25,13 @@ shared/
 assets/
 ```
 
-Entry files default to `index.js`/`index.ts`. Set `scriptEntry` in the blueprint JSON if you want a different entry file. New apps default to `scriptFormat: "module"` and should `export default (world, app, fetch, props, setTimeout) => { ... }`; set `scriptFormat: "legacy-body"` for classic body scripts.
+Entry files default to `index.js`. New apps should `export default (world, app, fetch, props, setTimeout) => { ... }` to ensure access to all "globals"
 
 If your model includes a placeholder mesh named `Block` (for example from the built-in Model.glb), disable it:
 
 ```javascript
-const block = app.get('Block')
-if (block) block.active = false
+const block = app.get("Block");
+if (block) block.active = false;
 ```
 
 ## Environment
@@ -50,15 +43,9 @@ Players are free to grab apps, move them around or duplicate them.
 The origin of an app should always be treated as the 'ground' position, as players generally move apps across surfaces of other apps.
 Players are around 1.7m tall, are able to jump around 1.5m high and around 5m in distance when running and jumping.
 
-## Coordinate System & Units
-
-For all intents and purposes these virtual worlds use the same coordinate system as three.js (X = Right, Y = Up, Z = forward).
-The unit of measurement for distance or size is in meters.
-Rotations are in radians but you can use degrees by multiplying by the global constant `DEG2RAD`.
-
 ## Globals
 
-Scripts execute in isolated compartments with a curated runtime API. See `node_modules/gamedev/index.d.ts` (loaded via `compilerOptions.types: ["gamedev"]`) and `docs/scripting/README.md` for the current globals and methods. The `fetch` and `setTimeout` helpers are passed into the entry function (they are not globals; `fetch` is the same as `app.fetch`). Common ones include:
+Scripts execute in isolated compartments with a curated runtime API. See `docs/scripting/README.md` for the current globals and methods. The `fetch`, `setTimeout`, `app`, `world` and `props` helpers are passed into the entry function (they are not globals; `fetch` is the same as `app.fetch`). Common ones include:
 
 - app, world, props
 - Math, num, prng, clamp, uuid
@@ -68,41 +55,47 @@ Scripts execute in isolated compartments with a curated runtime API. See `node_m
 
 Not all browser APIs are available; rely on the docs/types as the source of truth.
 
+## Coordinate System & Units
+
+For all intents and purposes these virtual worlds use the same coordinate system as three.js (X = Right, Y = Up, Z = forward).
+The unit of measurement for distance or size is in meters.
+Rotations are in radians but you can use degrees by multiplying by the global constant `DEG2RAD`.
+
 ## Shapes
 
 Shapes are the primary way to create visuals, we call these prims. Each `type` of prim has its own `size` format. This is how you create them:
 
 ```jsx
-const box = app.create('prim', {
-  type: 'box',
+const box = app.create("prim", {
+  type: "box",
   size: [1, 2, 3], // width, height, depth
-  color: '#ff0000' // red
-})
+  color: "#ff0000", // red
+});
 
-const sphere = app.create('prim', {
-  type: 'sphere',
+const sphere = app.create("prim", {
+  type: "sphere",
   size: [0.5], // radius
-  color: '#00ff00' // green
-})
+  color: "#00ff00", // green
+});
 
-const cylinder = app.create('prim', {
-  type: 'cylinder',
+const cylinder = app.create("prim", {
+  type: "cylinder",
   size: [0.5, 0.5, 1], // topRadius, bottomRadius, height
-  color: '#0000ff' // blue
-})
+  color: "#0000ff", // blue
+});
 ```
 
 Once created you can also edit their properties if needed:
 
 ```jsx
-const box = app.create('prim', {
-  type: 'box',
+const box = app.create("prim", {
+  type: "box",
   size: [1, 2, 3],
-  color: '#ff0000'
-})
+  color: "#ff0000",
+});
 
 // change the box color
-box.color = 'green'
+box.color = "green";
 ```
 
 ## Opacity
@@ -110,12 +103,12 @@ box.color = 'green'
 Some shapes might need to be semi-transparent, and the `opacity` property controls this:
 
 ```jsx
-const window = app.create('prim', {
-  type: 'box',
+const window = app.create("prim", {
+  type: "box",
   size: [2, 2, 0.1],
-  color: 'blue',
+  color: "blue",
   opacity: 0.5,
-})
+});
 ```
 
 ## Rendering
@@ -123,55 +116,55 @@ const window = app.create('prim', {
 Creating a node (eg a prim) does not automatically make it visible. Only nodes added to the `app` global become visible in the world.
 
 ```jsx
-app.add(boxA)
+app.add(boxA);
 ```
 
 ## Nested Hierarchy
 
-It is beneficial to group different prims together to form each part of an overall object. 
+It is beneficial to group different prims together to form each part of an overall object.
 For example when making a wheel for a car, you can construct one wheel and then easily clone it and move it around.
 
 To do this, there is also a special `group` node that doesn't have a visual and is purely for grouping other nodes.
 
 ```jsx
-const wheel = app.create('group')
-const tire = app.create('prim', {
-  type: 'cylinder',
+const wheel = app.create("group");
+const tire = app.create("prim", {
+  type: "cylinder",
   size: [0.5, 0.5, 0.2],
-  color: 'black',
-  physics: 'static',
-})
-const hub = app.create('prim', {
-  type: 'cylinder',
+  color: "black",
+  physics: "static",
+});
+const hub = app.create("prim", {
+  type: "cylinder",
   size: [0.3, 0.3, 0.25],
-  color: 'grey',
-  physics: 'static',
-})
-wheel.add(tire)
-wheel.add(hub)
-const wheelFL = wheel.clone(true) // clone all children
-const wheelFR = wheel.clone(true)
-const wheelBL = wheel.clone(true)
-const wheelBR = wheel.clone(true)
+  color: "grey",
+  physics: "static",
+});
+wheel.add(tire);
+wheel.add(hub);
+const wheelFL = wheel.clone(true); // clone all children
+const wheelFR = wheel.clone(true);
+const wheelBL = wheel.clone(true);
+const wheelBR = wheel.clone(true);
 // ...position the wheels (not shown)
-app.add(wheelFL)
-app.add(wheelFR)
-app.add(wheelBL)
-app.add(wheelBR)
+app.add(wheelFL);
+app.add(wheelFR);
+app.add(wheelBL);
+app.add(wheelBR);
 ```
 
 It is also very useful to 'change' the pivot point of something and make it easier to work with:
 
 ```jsx
-const bar = app.create('group')
-const beam = app.create('prim', {
-  type: 'box',
+const bar = app.create("group");
+const beam = app.create("prim", {
+  type: "box",
   size: [1, 0.2, 10],
   position: [0, 0, -5], // shift back
-})
-bar.add(beam)
+});
+bar.add(beam);
 // bar.rotation.y now spins the beam at one end of it instead of the center
-bar.rotation.y += 45 * DEG2RAD
+bar.rotation.y += 45 * DEG2RAD;
 ```
 
 ## App Origin
@@ -180,12 +173,12 @@ Most of the time, players will place apps on top of other surfaces, so app origi
 This means that most of the time you will need to lift things up:
 
 ```jsx
-const box = app.create('prim', {
-  type: 'box',
+const box = app.create("prim", {
+  type: "box",
   size: [1, 1, 1],
-  position: [0, 0.5, 0] // lift up so it sits on the ground surface
-})
-app.add(box)
+  position: [0, 0.5, 0], // lift up so it sits on the ground surface
+});
+app.add(box);
 ```
 
 ## Transforms
@@ -193,13 +186,13 @@ app.add(box)
 When creating prims you can also specify position, rotation (or quaternion) and scale:
 
 ```jsx
-const box = app.create('prim', {
-  type: 'box',
+const box = app.create("prim", {
+  type: "box",
   size: [1, 1, 1],
   position: [0, 2, 0], // xyz in meters
   rotation: [0, 45 * DEG2RAD, 0], // xyz in radians
   scale: [1, 1, 1], // xyz
-})
+});
 ```
 
 Eulers for rotation are in radians. Multiply with the globals `DEG2RAD` and `RAD2DEG` to convert degrees to radians and vice versa.
@@ -207,19 +200,19 @@ Eulers for rotation are in radians. Multiply with the globals `DEG2RAD` and `RAD
 Once created they become actual transform class instances (Vector3, Euler, Quaternion) and you can edit them like this:
 
 ```jsx
-box.position.set(0, 4, 0)
-box.rotation.y += 10 * DEG2RAD
-box.quaternion.slerp(target, 0.2)
-box.scale.multiply(otherBox.scale)
+box.position.set(0, 4, 0);
+box.rotation.y += 10 * DEG2RAD;
+box.quaternion.slerp(target, 0.2);
+box.scale.multiply(otherBox.scale);
 ```
 
 These constructs are also available as globals if you need to use them independently:
 
 ```jsx
-const pos = new Vector3(0, 2, 0)
-const rot = new Euler(0, 0, 0, 'YXZ')
-const qua = new Quaternion(0, 0, 0, 1)
-const sca = new Vector3(1, 1, 1)
+const pos = new Vector3(0, 2, 0);
+const rot = new Euler(0, 0, 0, "YXZ");
+const qua = new Quaternion(0, 0, 0, 1);
+const sca = new Vector3(1, 1, 1);
 ```
 
 Vector3, Euler and Quaternion are identical to three.js
@@ -230,11 +223,11 @@ By default prims have no collision but it's likely you'll want to make them have
 Objects that should have collision should use `static` collision, but if they move programmatically they should have `kinematic` collision.
 
 ```jsx
-const box = app.create('prim', {
-  type: 'box',
+const box = app.create("prim", {
+  type: "box",
   size: [1, 2, 3],
-  physics: 'static', // null, 'static' or 'kinematic'
-})
+  physics: "static", // null, 'static' or 'kinematic'
+});
 ```
 
 ## Animation
@@ -242,9 +235,9 @@ const box = app.create('prim', {
 Only when requested, you can make things move or change over time by hooking into the animation cycle:
 
 ```jsx
-app.on('animate', delta => {
-  box.rotation.y += 45 * DEG2RAD * delta // rotate around Y axis each frame 45 degrees per second
-})
+app.on("animate", (delta) => {
+  box.rotation.y += 45 * DEG2RAD * delta; // rotate around Y axis each frame 45 degrees per second
+});
 ```
 
 The `animate` rate is dynamic based on how far away the app is from the camera, so be sure to use `delta` time to normalize speeds.
@@ -252,15 +245,15 @@ The `animate` rate is dynamic based on how far away the app is from the camera, 
 If animations start in response to triggers or actions and have an end time, subscribe and unsubscribe for performance:
 
 ```jsx
-const animate = delta => {
+const animate = (delta) => {
   // do things
-}
+};
 
 // subscribe when something needs to happen
-app.on('animate', animate)
+app.on("animate", animate);
 
 // unsubscribe when finsihed to save resources
-app.off('animate', animate)
+app.off("animate", animate);
 ```
 
 ## Bloom
@@ -268,13 +261,13 @@ app.off('animate', animate)
 In addition to setting the color of a prim you can also push its color into HDR range causing it glow:
 
 ```jsx
-const box = app.create('prim', {
-  type: 'box',
+const box = app.create("prim", {
+  type: "box",
   size: [1, 1, 1],
-  color: 'red',
-  emissive: 'red', // usually the same as `color`
+  color: "red",
+  emissive: "red", // usually the same as `color`
   emissiveIntensity: 5, // 0 is no bloom, ~5 is a nice bloom, 10 is mega bloom (MUST be >= 0)
-})
+});
 ```
 
 ## Randomization
@@ -282,8 +275,8 @@ const box = app.create('prim', {
 Scripts execute on every client, so if you use any kind of procedural randomisation, it's best to use `prng` so that each client sees the same thing:
 
 ```jsx
-const num = prng(1) // create a prng generate with a seed (1)
-const result = num(0, 100, 2) // min, max, decimalPlaces (defaults to 0)
+const num = prng(1); // create a prng generate with a seed (1)
+const result = num(0, 100, 2); // min, max, decimalPlaces (defaults to 0)
 // result is a number between 0 and 100 with 2 dp.
 ```
 
@@ -293,14 +286,14 @@ If requested you can add simple response to interaction with an `action` node.
 An action node displays a label when players come near it and if they click it the script is notified:
 
 ```jsx
-const action = app.create('action', {
-  label: 'Open',
+const action = app.create("action", {
+  label: "Open",
   position: [0, 0.5, 0],
   onTrigger: () => {
-    door.rotation.y = 90 * DEG2RAD
-  }
-})
-app.add(action)
+    door.rotation.y = 90 * DEG2RAD;
+  },
+});
+app.add(action);
 ```
 
 ## Triggers
@@ -308,21 +301,21 @@ app.add(action)
 Prims can become trigger zones and notify you when a player enters or leaves the prim volume:
 
 ```jsx
-const zone = app.create('prim', {
-  type: 'box',
+const zone = app.create("prim", {
+  type: "box",
   size: [4, 4, 4],
   opacity: 0,
-  physics: 'static', // physics must be enabled
+  physics: "static", // physics must be enabled
   trigger: true, // treat physics as a trigger not a collider
-  onTriggerEnter: e => {
-    if (!e.isLocalPlayer) return
+  onTriggerEnter: (e) => {
+    if (!e.isLocalPlayer) return;
     // do things...
   },
-  onTriggerLeave: e => {
-    if (!e.isLocalPlayer) return
+  onTriggerLeave: (e) => {
+    if (!e.isLocalPlayer) return;
     // do things...
-  }
-})
+  },
+});
 ```
 
 Note that you can make invisible trigger areas by setting opacity to 0.
@@ -342,15 +335,15 @@ if (world.isServer) {
 }
 
 // send an event from a client to the server
-app.send('someEvent', { some: 'data' })
+app.send("someEvent", { some: "data" });
 
 // send an event from the server to all clients
-app.send('anotherEvent', { some: 'data' })
+app.send("anotherEvent", { some: "data" });
 
 // subscribe to an event sent from the server or a client
-app.on('someEvent', data => {
-  console.log(data) // { some: 'data' }
-})
+app.on("someEvent", (data) => {
+  console.log(data); // { some: 'data' }
+});
 ```
 
 On the server, you have access to a `state` object to store current state as the app changes. It is just a plain old javascript object.
@@ -360,9 +353,9 @@ When a client reads this state, it is only a single one-time snapshot and does n
 ```jsx
 if (world.isClient) {
   if (app.state.ready) {
-    init(app.state)
+    init(app.state);
   } else {
-    app.on('init', init)
+    app.on("init", init);
   }
   function init(state) {
     // at this point it is guaranteed that the server has initialised the app and its state.
@@ -372,9 +365,9 @@ if (world.isClient) {
 }
 
 if (world.isServer) {
-  app.state.open = false // a door variable for example
-  app.state.ready = true
-  app.send('init', app.state)
+  app.state.open = false; // a door variable for example
+  app.state.ready = true;
+  app.send("init", app.state);
 }
 ```
 
@@ -383,12 +376,10 @@ if (world.isServer) {
 Assets live in top-level `assets/` and are referenced from blueprint JSON or file props. For file props:
 
 ```jsx
-app.configure([
-  { key: 'image', type: 'file', kind: 'image', label: 'Image' }
-])
-const image = app.create('image')
-image.src = props.image?.url
-app.add(image)
+app.configure([{ key: "image", type: "file", kind: "image", label: "Image" }]);
+const image = app.create("image");
+image.src = props.image?.url;
+app.add(image);
 ```
 
 For fixed assets, point to `assets/...` in the blueprint JSON (eg `model`, `image`, or other file props).
@@ -398,8 +389,8 @@ For fixed assets, point to `assets/...` in the blueprint JSON (eg `model`, `imag
 You can split code into multiple files using ES module imports:
 
 ```jsx
-import { doSomething } from './helper.js'
-import { lerp } from './utils/math.js'
+import { doSomething } from "./helper.js";
+import { lerp } from "./utils/math.js";
 ```
 
 Shared modules live in `shared/` and are imported via `@shared/...` or `shared/...`. Bare imports (`react`, `lodash`), node builtins, and cross-app imports are not supported.

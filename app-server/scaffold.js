@@ -83,10 +83,16 @@ function buildPackageJson({ packageName, sdkName, sdkVersion }) {
     private: true,
     type: 'module',
     scripts: {
+      init: 'gamedev init',
+      help: 'gamedev help',
       dev: 'gamedev dev',
-      'new-app': 'gamedev new-app',
+      'apps:new': 'gamedev apps new',
       build: 'gamedev apps build --all',
+      'deploy:fly': 'bash scripts/fly-deploy.sh',
+      'deploy:app': 'gamedev apps deploy',
+      'update:engine': 'bash scripts/update-engine.sh',
       typecheck: 'tsc --noEmit',
+      'hyp:extract': 'node scripts/extract-hyp.mjs',
     },
     devDependencies,
   }
