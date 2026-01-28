@@ -450,12 +450,14 @@ export class ClientBuilder extends System {
     if (destroy) {
       const entity = this.selected || this.getEntityAtBeam()
       if (entity?.isApp && !entity.data.pinned && !entity.blueprint.scene) {
-        this.select(null)
+        // Destroy first to avoid any rebuilds triggered by deselection
         this.addUndo({
           name: 'add-entity',
           data: cloneDeep(entity.data),
         })
         entity?.destroy(true)
+        // Then clear selection without sending mover updates/rebuilds
+        this.select(null)
       }
     }
     // undo
@@ -693,7 +695,8 @@ export class ClientBuilder extends System {
     if (this.selected === app) return
     // deselect existing
     if (this.selected && this.selected !== app) {
-      if (!this.selected.dead && this.selected.data.mover === this.world.network.id) {
+      // If the selected app was destroyed, skip mover updates and rebuilds
+      if (!this.selected.destroyed && !this.selected.dead && this.selected.data.mover === this.world.network.id) {
         const app = this.selected
         app.data.mover = null
         app.data.position = app.root.position.toArray()
