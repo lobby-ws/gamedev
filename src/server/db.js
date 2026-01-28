@@ -331,12 +331,12 @@ const migrations = [
         data: JSON.stringify({
           id: blueprintId,
           version: 0,
-          name: 'The Meadow',
+          name: 'Scene',
           image: null,
           author: null,
           url: null,
           desc: null,
-          model: 'asset://The_Meadow.glb',
+          model: 'asset://Model.glb',
           script: 'asset://scene.js',
           scriptEntry: 'scene.js',
           scriptFiles: {

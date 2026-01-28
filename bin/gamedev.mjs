@@ -176,7 +176,7 @@ async function checkForUpdates() {
   const npxCommand = `npx ${pkg.name}@latest`
   console.warn(
     `Update available for ${pkg.name}: ${pkg.version} -> ${latest}\n` +
-      `Run "${updateCommand}" to update your project, or "${npxCommand}" for a one-off.`
+      `Run "${updateCommand}" to update your project.`
   )
 }
 
