@@ -266,7 +266,7 @@ function buildDefaultEnv({ worldUrl, worldId, adminCode, jwtSecret }) {
   lines.push('# Hyperfy project environment')
   lines.push(`WORLD_URL=${normalizeBaseUrl(worldUrl)}`)
   lines.push(`WORLD_ID=${worldId}`)
-  lines.push(`ADMIN_CODE=${adminCode}`)
+  lines.push(`ADMIN_CODE=`)
   lines.push('')
   lines.push('# World server')
   lines.push(`PORT=${derived.port}`)
