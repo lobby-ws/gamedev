@@ -393,6 +393,9 @@ export class App extends Entity {
   destroy(local) {
     if (this.destroyed) return
     this.destroyed = true
+    // Invalidate any in-flight builds started before destruction
+    // so they early-exit when awaiting resources
+    this.n += 1
 
     this.unbuild()
 
