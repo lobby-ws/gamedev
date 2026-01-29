@@ -95,6 +95,16 @@ function sanitizeFileBaseName(name) {
   return base
 }
 
+function stripTrailingExtension(name, ext) {
+  if (!ext) return name
+  const lowerExt = ext.toLowerCase()
+  let base = name
+  while (base.toLowerCase().endsWith(lowerExt)) {
+    base = base.slice(0, -lowerExt.length)
+  }
+  return base
+}
+
 function sanitizeDirName(name) {
   const base = sanitizeFileBaseName(name)
   return base.replace(/[. ]+$/g, '').replace(/^[. ]+/g, '') || 'app'
@@ -1096,10 +1106,31 @@ export class DirectAppServer {
 
   _getScriptPath(appName) {
     const appPath = path.join(this.appsDir, appName)
-    const tsPath = path.join(appPath, 'index.js')
+    const tsPath = path.join(appPath, 'index.ts')
     const jsPath = path.join(appPath, 'index.js')
     if (fs.existsSync(tsPath)) return tsPath
     if (fs.existsSync(jsPath)) return jsPath
+    const files = listScriptFiles(appPath)
+    if (files.length === 1) {
+      const file = files[0]
+      if (!file.relPath.includes('/')) {
+        const filename = path.basename(file.absPath)
+        if (isHashedAssetFilename(filename)) {
+          const ext = path.extname(filename) || '.js'
+          const nextPath = path.join(appPath, `index${ext}`)
+          if (!fs.existsSync(nextPath)) {
+            try {
+              fs.renameSync(file.absPath, nextPath)
+              return nextPath
+            } catch {
+              return file.absPath
+            }
+          }
+          return nextPath
+        }
+      }
+      return file.absPath
+    }
     return null
   }
 
@@ -2427,7 +2458,10 @@ export class DirectAppServer {
       throw new Error(`asset_hash_mismatch:${filename}`)
     }
 
-    const base = sanitizeFileBaseName(path.basename(suggestedName, ext) || `${appName}${ext}`)
+    const safeSuggested = sanitizeFileBaseName(suggestedName || `${appName}${ext}`)
+    let base = stripTrailingExtension(safeSuggested, ext)
+    base = base.replace(/[. ]+$/g, '')
+    if (!base) base = sanitizeFileBaseName(appName)
     for (let idx = 0; idx < 10000; idx += 1) {
       const suffix = idx === 0 ? '' : `_${idx}`
       const candidate = `${base}${suffix}${ext}`
