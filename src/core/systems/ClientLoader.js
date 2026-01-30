@@ -22,6 +22,8 @@ import Hls from 'hls.js/dist/hls.js'
  * - Basic file loader for many different formats, cached.
  *
  */
+let sparkRenderer = null
+
 export class ClientLoader extends System {
   constructor(world) {
     super(world)
@@ -33,6 +35,45 @@ export class ClientLoader extends System {
     this.gltfLoader = new GLTFLoader()
     this.gltfLoader.register(parser => new VRMLoaderPlugin(parser))
     this.preloadItems = []
+  }
+
+  async ensureSparkRenderer() {
+    if (sparkRenderer) return sparkRenderer
+    if (!this.world.camera || !this.world.graphics?.renderer) return null
+    const { SparkRenderer } = await import('@sparkjsdev/spark')
+    sparkRenderer = new SparkRenderer({
+      renderer: this.world.graphics.renderer,
+    })
+    this.world.camera.add(sparkRenderer)
+    return sparkRenderer
+  }
+
+  async createSplatMesh(fileBytes) {
+    await this.ensureSparkRenderer()
+    const { SplatMesh } = await import('@sparkjsdev/spark')
+    const blob = new Blob([fileBytes], { type: 'application/octet-stream' })
+    const blobUrl = URL.createObjectURL(blob)
+    return new Promise((resolve, reject) => {
+      try {
+        const splatMesh = new SplatMesh({
+          url: blobUrl,
+          fileType: 'spz',
+          onLoad: mesh => {
+            URL.revokeObjectURL(blobUrl)
+            resolve(mesh)
+          },
+        })
+        setTimeout(() => {
+          if (!splatMesh.isInitialized) {
+            URL.revokeObjectURL(blobUrl)
+            resolve(splatMesh)
+          }
+        }, 30000)
+      } catch (error) {
+        URL.revokeObjectURL(blobUrl)
+        reject(error)
+      }
+    })
   }
 
   start() {
@@ -237,6 +278,26 @@ export class ClientLoader extends System {
         this.results.set(key, audioBuffer)
         return audioBuffer
       }
+      if (type === 'splat') {
+        const fileBytes = await file.arrayBuffer()
+        const splatMesh = await this.createSplatMesh(fileBytes)
+        // Wrap in a node structure like models
+        const node = createNode('group', { id: '$root' })
+        const splatNode = createNode('splat', { id: 'splat', mesh: splatMesh })
+        node.add(splatNode)
+        const splat = {
+          toNodes() {
+            return node.clone(true)
+          },
+          getStats() {
+            return {
+              fileBytes: file.size,
+            }
+          },
+        }
+        this.results.set(key, splat)
+        return splat
+      }
     })
     this.promises.set(key, promise)
     return promise
@@ -352,6 +413,31 @@ export class ClientLoader extends System {
           const audioBuffer = await this.world.audio.ctx.decodeAudioData(arrayBuffer)
           this.results.set(key, audioBuffer)
           resolve(audioBuffer)
+        } catch (err) {
+          reject(err)
+        }
+      })
+    }
+    if (type === 'splat') {
+      promise = new Promise(async (resolve, reject) => {
+        try {
+          const fileBytes = await file.arrayBuffer()
+          const splatMesh = await this.createSplatMesh(fileBytes)
+          const node = createNode('group', { id: '$root' })
+          const splatNode = createNode('splat', { id: 'splat', mesh: splatMesh })
+          node.add(splatNode)
+          const splat = {
+            toNodes() {
+              return node.clone(true)
+            },
+            getStats() {
+              return {
+                fileBytes: file.size,
+              }
+            },
+          }
+          this.results.set(key, splat)
+          resolve(splat)
         } catch (err) {
           reject(err)
         }
