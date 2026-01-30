@@ -421,4 +421,8 @@ export const fileRemaps = {
     field.type = 'file'
     field.kind = 'audio'
   },
+  splat: field => {
+    field.type = 'file'
+    field.kind = 'splat'
+  },
 }

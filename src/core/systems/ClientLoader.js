@@ -237,6 +237,43 @@ export class ClientLoader extends System {
         this.results.set(key, audioBuffer)
         return audioBuffer
       }
+      if (type === 'splat') {
+        const fileBytes = await file.arrayBuffer()
+        const splatData = {
+          file,
+          url,
+          fileBytes,
+          size: file.size,
+          createSplatMesh: async () => {
+            const { SplatMesh } = await import('@sparkjsdev/spark')
+            const blob = new Blob([fileBytes], { type: 'application/octet-stream' })
+            const blobUrl = URL.createObjectURL(blob)
+            return new Promise((resolve, reject) => {
+              try {
+                const splatMesh = new SplatMesh({
+                  url: blobUrl,
+                  fileType: 'spz',
+                  onLoad: mesh => {
+                    URL.revokeObjectURL(blobUrl)
+                    resolve(mesh)
+                  },
+                })
+                setTimeout(() => {
+                  if (!splatMesh.isInitialized) {
+                    URL.revokeObjectURL(blobUrl)
+                    resolve(splatMesh)
+                  }
+                }, 30000)
+              } catch (error) {
+                URL.revokeObjectURL(blobUrl)
+                reject(error)
+              }
+            })
+          },
+        }
+        this.results.set(key, splatData)
+        return splatData
+      }
     })
     this.promises.set(key, promise)
     return promise
@@ -352,6 +389,49 @@ export class ClientLoader extends System {
           const audioBuffer = await this.world.audio.ctx.decodeAudioData(arrayBuffer)
           this.results.set(key, audioBuffer)
           resolve(audioBuffer)
+        } catch (err) {
+          reject(err)
+        }
+      })
+    }
+    if (type === 'splat') {
+      promise = new Promise(async (resolve, reject) => {
+        try {
+          const fileBytes = await file.arrayBuffer()
+          const splatData = {
+            file,
+            url,
+            fileBytes,
+            size: file.size,
+            createSplatMesh: async () => {
+              const { SplatMesh } = await import('@sparkjsdev/spark')
+              const blob = new Blob([fileBytes], { type: 'application/octet-stream' })
+              const blobUrl = URL.createObjectURL(blob)
+              return new Promise((res, rej) => {
+                try {
+                  const splatMesh = new SplatMesh({
+                    url: blobUrl,
+                    fileType: 'spz',
+                    onLoad: mesh => {
+                      URL.revokeObjectURL(blobUrl)
+                      res(mesh)
+                    },
+                  })
+                  setTimeout(() => {
+                    if (!splatMesh.isInitialized) {
+                      URL.revokeObjectURL(blobUrl)
+                      res(splatMesh)
+                    }
+                  }, 30000)
+                } catch (error) {
+                  URL.revokeObjectURL(blobUrl)
+                  rej(error)
+                }
+              })
+            },
+          }
+          this.results.set(key, splatData)
+          resolve(splatData)
         } catch (err) {
           reject(err)
         }
