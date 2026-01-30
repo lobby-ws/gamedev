@@ -8,57 +8,10 @@ import { createNode } from '../extras/createNode'
 import { createVRMFactory } from '../extras/createVRMFactory'
 import { glbToNodes } from '../extras/glbToNodes'
 import { createEmoteFactory } from '../extras/createEmoteFactory'
-import { Node } from '../nodes/Node'
 import { TextureLoader } from 'three'
 import { formatBytes } from '../extras/formatBytes'
 import { emoteUrls } from '../extras/playerEmotes'
 import Hls from 'hls.js/dist/hls.js'
-
-// Internal splat node - not exported publicly
-class SplatNode extends Node {
-  constructor(data = {}) {
-    super(data)
-    this.name = 'splat'
-    this._mesh = data.mesh || null
-  }
-
-  mount() {
-    if (this.ctx.world.network.isServer) return
-    if (!this._mesh) return
-    this._mesh.matrix.copy(this.matrixWorld)
-    this._mesh.matrixAutoUpdate = false
-    this._mesh.updateMatrixWorld(true)
-    this.ctx.world.stage.scene.add(this._mesh)
-  }
-
-  commit(didMove) {
-    if (didMove && this._mesh) {
-      this._mesh.matrix.copy(this.matrixWorld)
-      this._mesh.updateMatrixWorld(true)
-    }
-  }
-
-  unmount() {
-    if (this._mesh) {
-      this.ctx.world.stage.scene.remove(this._mesh)
-    }
-  }
-
-  copy(source, recursive) {
-    super.copy(source, recursive)
-    this._mesh = source._mesh
-    return this
-  }
-
-  getProxy() {
-    if (!this.proxy) {
-      let proxy = {}
-      proxy = Object.defineProperties(proxy, Object.getOwnPropertyDescriptors(super.getProxy()))
-      this.proxy = proxy
-    }
-    return this.proxy
-  }
-}
 
 // THREE.Cache.enabled = true
 
@@ -330,7 +283,7 @@ export class ClientLoader extends System {
         const splatMesh = await this.createSplatMesh(fileBytes)
         // Wrap in a node structure like models
         const node = createNode('group', { id: '$root' })
-        const splatNode = new SplatNode({ id: 'splat', mesh: splatMesh })
+        const splatNode = createNode('splat', { id: 'splat', mesh: splatMesh })
         node.add(splatNode)
         const splat = {
           toNodes() {
@@ -471,7 +424,7 @@ export class ClientLoader extends System {
           const fileBytes = await file.arrayBuffer()
           const splatMesh = await this.createSplatMesh(fileBytes)
           const node = createNode('group', { id: '$root' })
-          const splatNode = new SplatNode({ id: 'splat', mesh: splatMesh })
+          const splatNode = createNode('splat', { id: 'splat', mesh: splatMesh })
           node.add(splatNode)
           const splat = {
             toNodes() {
