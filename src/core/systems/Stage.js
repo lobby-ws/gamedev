@@ -15,14 +15,11 @@ const vec2 = new THREE.Vector2()
  * - This is a logical scene graph, no rendering etc is handled here.
  *
  */
-let sparkRendererInstance = null
-
 export class Stage extends System {
   constructor(world) {
     super(world)
     this.scene = new THREE.Scene()
     this.models = new Map() // id -> Model
-    this.splatMeshes = new Map()
     this.octree = new LooseOctree({
       scene: this.scene,
       center: new THREE.Vector3(0, 0, 0),
@@ -262,38 +259,8 @@ export class Stage extends System {
     return this.raycastHits
   }
 
-  async insertSplat({ splatData, matrix, node }) {
-    const { SparkRenderer } = await import('@sparkjsdev/spark')
-    if (!sparkRendererInstance && this.world.camera && this.world.graphics?.renderer) {
-      sparkRendererInstance = new SparkRenderer({
-        renderer: this.world.graphics.renderer,
-      })
-      this.world.camera.add(sparkRendererInstance)
-    }
-    const splatMesh = await splatData.createSplatMesh()
-    splatMesh.matrix.copy(matrix)
-    splatMesh.matrixAutoUpdate = false
-    splatMesh.updateMatrixWorld(true)
-    this.scene.add(splatMesh)
-    const id = node.id || `splat_${Date.now()}`
-    this.splatMeshes.set(id, splatMesh)
-    return {
-      splatMesh,
-      move: newMatrix => {
-        splatMesh.matrix.copy(newMatrix)
-        splatMesh.updateMatrixWorld(true)
-      },
-      destroy: () => {
-        this.scene.remove(splatMesh)
-        this.splatMeshes.delete(id)
-        splatMesh.dispose?.()
-      },
-    }
-  }
-
   destroy() {
     this.models.clear()
-    this.splatMeshes.clear()
   }
 }
 
