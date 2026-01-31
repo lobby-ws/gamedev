@@ -26,6 +26,33 @@ Removes a node from world-space, outside of the apps local hierarchy.
 
 Adds a node into world-space, maintaining its current world transform.
 
+### `.load(type, url)`: Promise\<Node\>
+
+Asynchronously loads an asset and returns a node tree that can be added to the app or world.
+
+**Supported types:**
+- `'model'` - Loads a GLB/GLTF model file
+- `'avatar'` - Loads a VRM avatar file
+- `'splat'` - Loads a gaussian splat file (.spz)
+
+**Example:**
+```javascript
+// Load a model
+const model = await world.load('model', props.modelFile?.url)
+app.add(model)
+
+// Load a splat
+const splat = await world.load('splat', props.splatFile?.url)
+app.add(splat)
+
+// Traverse loaded nodes
+model.traverse(node => {
+  if (node.name === 'mesh') {
+    // do something with mesh nodes
+  }
+})
+```
+
 ### `.on(event, callback)`
 
 Subscribes to both engine events (eg when players `enter` or `leave` the world) and custom events emitted by other apps (via `app.emit()`)

@@ -139,6 +139,30 @@ export const BUILTIN_APP_TEMPLATES = [
       disabled: false,
     },
   },
+  {
+    appName: 'Splat',
+    fileBase: 'Splat',
+    scriptAsset: 'Splat.js',
+    config: {
+      model: 'asset://Model.glb',
+      props: {
+        src: null,
+        collisionFile: null,
+        blockVisible: true,
+      },
+      scriptFormat: 'module',
+      image: {
+        url: 'asset://Splats.png',
+      },
+      preload: false,
+      public: false,
+      locked: false,
+      frozen: false,
+      unique: false,
+      scene: false,
+      disabled: false,
+    },
+  },
 ]
 
 export const SCENE_TEMPLATE = {

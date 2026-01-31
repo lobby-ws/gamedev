@@ -39,7 +39,7 @@ export class Apps extends System {
   initWorldHooks() {
     const self = this
     const world = this.world
-    const allowLoaders = ['avatar', 'model']
+    const allowLoaders = ['avatar', 'model', 'splat']
     this.worldGetters = {
       networkId(entity) {
         return world.network.id
@@ -420,5 +420,9 @@ export const fileRemaps = {
   audio: field => {
     field.type = 'file'
     field.kind = 'audio'
+  },
+  splat: field => {
+    field.type = 'file'
+    field.kind = 'splat'
   },
 }
