@@ -46,6 +46,14 @@ function getUrlFilename(url) {
   return last || null
 }
 
+function isHashedFilename(name) {
+  if (typeof name !== 'string' || !name) return false
+  const cleaned = name.split('#')[0].split('?')[0]
+  const idx = cleaned.lastIndexOf('.')
+  const base = idx >= 0 ? cleaned.slice(0, idx) : cleaned
+  return /^[a-f0-9]{64}$/i.test(base)
+}
+
 function normalizeProps(value) {
   if (value && typeof value === 'object' && !Array.isArray(value)) return value
   return {}
@@ -107,6 +115,9 @@ function getScriptFiles(blueprint) {
 
 function deriveLegacyEntryPath(scriptUrl) {
   let entryPath = getUrlFilename(scriptUrl) || 'index.js'
+  if (isHashedFilename(entryPath)) {
+    entryPath = 'index.js'
+  }
   if (!getExtension(entryPath)) {
     entryPath = `${entryPath}.js`
   }
