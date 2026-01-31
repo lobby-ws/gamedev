@@ -1,5 +1,27 @@
 import { assets } from './assets'
 
+function collectAssetUrls(value, out) {
+  if (!out) out = new Set()
+  if (typeof value === 'string') {
+    if (value.startsWith('asset://')) {
+      out.add(value.replace('asset://', ''))
+    }
+    return out
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectAssetUrls(item, out)
+    }
+    return out
+  }
+  if (value && typeof value === 'object') {
+    for (const item of Object.values(value)) {
+      collectAssetUrls(item, out)
+    }
+  }
+  return out
+}
+
 class Cleaner {
   constructor() {
     // ...
@@ -67,6 +89,10 @@ class Cleaner {
           assetsToKeep.add(url.replace('asset://', ''))
         }
       }
+    }
+    // keep assets referenced by entity instance props
+    for (const entity of entities) {
+      collectAssetUrls(entity?.props, assetsToKeep)
     }
     // get a list of assets to delete
     const assetsToDelete = new Set()
