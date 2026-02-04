@@ -9,6 +9,8 @@ import { uuid } from './utils.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const TEMPLATES_DIR = path.join(__dirname, 'templates')
 const DOCS_TEMPLATE_DIR = path.join(__dirname, '..', 'docs')
+const SCRIPTS_TEMPLATE_DIR = path.join(TEMPLATES_DIR, 'scripts')
+const README_TEMPLATE = path.join(TEMPLATES_DIR, 'README.md')
 const CLAUDE_MD_TEMPLATE = path.join(TEMPLATES_DIR, 'claude', 'CLAUDE.md')
 const CLAUDE_SKILL_TEMPLATE = path.join(TEMPLATES_DIR, 'claude', 'skills', 'hyperfy-app-scripting', 'SKILL.md')
 const AGENTS_MD_TEMPLATE = path.join(TEMPLATES_DIR, 'openai', 'AGENTS.md')
@@ -350,6 +352,29 @@ export function scaffoldBaseProject({
     writeFile,
     report,
   })
+
+  copyDirWithPolicy(SCRIPTS_TEMPLATE_DIR, path.join(rootDir, 'scripts'), {
+    force,
+    writeFile,
+    report,
+  })
+
+  writeFileWithPolicy(path.join(rootDir, 'hyp', '.gitkeep'), '', {
+    force,
+    writeFile,
+    report,
+  })
+
+  if (fs.existsSync(README_TEMPLATE)) {
+    const readmeContent = readText(README_TEMPLATE)
+    if (readmeContent != null) {
+      writeFileWithPolicy(
+        path.join(rootDir, 'README.md'),
+        readmeContent.endsWith('\n') ? readmeContent : `${readmeContent}\n`,
+        { force, writeFile, report }
+      )
+    }
+  }
 
   if (fs.existsSync(CLAUDE_SKILL_TEMPLATE)) {
     const skillContent = readText(CLAUDE_SKILL_TEMPLATE)
