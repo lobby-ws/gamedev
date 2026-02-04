@@ -53,6 +53,24 @@ const modeLabels = {
   scale: 'Scale',
 }
 
+const SCRIPT_BLUEPRINT_FIELDS = new Set([
+  'script',
+  'scriptEntry',
+  'scriptFiles',
+  'scriptFormat',
+  'scriptRef',
+])
+
+function hasScriptFields(data) {
+  if (!data || typeof data !== 'object') return false
+  for (const field of SCRIPT_BLUEPRINT_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(data, field)) continue
+    if (field === 'script' && data.script === '') continue
+    return true
+  }
+  return false
+}
+
 /**
  * Builder System
  *
@@ -126,6 +144,64 @@ export class ClientBuilder extends System {
 
   canBuild() {
     return this.world.entities.player?.isBuilder()
+  }
+
+  getAdminGateMessage() {
+    const admin = this.world.admin
+    if (!admin) return 'Admin connection unavailable.'
+    if (admin.requireCode && !admin.code) return 'Admin code required. Use /admin <code>.'
+    if (admin.error === 'invalid_code') return 'Invalid admin code. Use /admin <code>.'
+    if (admin.error === 'connection_error') return 'Admin connection failed.'
+    if (admin.error === 'missing_code') return 'Admin code required. Use /admin <code>.'
+    return 'Admin connection required. Use /admin <code>.'
+  }
+
+  ensureAdminReady(actionLabel) {
+    const admin = this.world.admin
+    if (!admin?.authenticated) {
+      const msg = this.getAdminGateMessage()
+      this.world.emit('toast', actionLabel ? `${actionLabel}: ${msg}` : msg)
+      return false
+    }
+    return true
+  }
+
+  handleAdminError(err, fallbackMessage) {
+    const code = err?.code || err?.error || err?.message
+    if (code === 'builder_required') {
+      this.world.emit('toast', 'Builder access required.')
+      return
+    }
+    if (code === 'deploy_required') {
+      this.world.emit('toast', 'Deploy code required.')
+      return
+    }
+    if (code === 'deploy_lock_required') {
+      this.world.emit('toast', 'Deploy lock required.')
+      return
+    }
+    if (code === 'locked' || code === 'deploy_locked') {
+      const owner = err?.lock?.owner
+      this.world.emit('toast', owner ? `Deploy locked by ${owner}.` : 'Deploy locked by another session.')
+      return
+    }
+    if (code === 'admin_url_missing') {
+      this.world.emit('toast', 'Admin connection unavailable.')
+      return
+    }
+    if (code === 'admin_required' || code === 'admin_code_missing') {
+      this.world.emit('toast', 'Admin code required.')
+      return
+    }
+    if (code === 'upload_failed') {
+      this.world.emit('toast', 'Upload failed.')
+      return
+    }
+    if (fallbackMessage) {
+      this.world.emit('toast', fallbackMessage)
+      return
+    }
+    this.world.emit('toast', 'Action failed.')
   }
 
   updateActions() {
@@ -1098,9 +1174,11 @@ export class ClientBuilder extends System {
   }
 
   async addApp(file, transform) {
+    if (!this.ensureAdminReady('Import')) return
     let lockToken = null
     let blueprint = null
     let app = null
+    let sceneRevert = null
     try {
       const info = await importApp(file)
       const maxUploadSize = Number(this.world.network.maxUploadSize)
@@ -1136,6 +1214,7 @@ export class ClientBuilder extends System {
         })
         if (!confirmed) return
         const scene = this.world.blueprints.getScene()
+        sceneRevert = scene ? cloneDeep(scene) : null
         const importedProps =
           info.blueprint.props && typeof info.blueprint.props === 'object' && !Array.isArray(info.blueprint.props)
             ? info.blueprint.props
@@ -1163,7 +1242,7 @@ export class ClientBuilder extends System {
           scene: info.blueprint.scene,
           disabled: info.blueprint.disabled,
         }
-        if (Object.prototype.hasOwnProperty.call(change, 'script')) {
+        if (hasScriptFields(change)) {
           const result = await this.world.admin.acquireDeployLock({
             owner: this.world.network.id,
             scope: '$scene',
@@ -1172,7 +1251,11 @@ export class ClientBuilder extends System {
         }
         await Promise.all(info.assets.map(asset => this.world.admin.upload(asset.file)))
         this.world.blueprints.modify(change)
-        this.world.admin.blueprintModify(change, { ignoreNetworkId: this.world.network.id, lockToken })
+        await this.world.admin.blueprintModify(change, {
+          ignoreNetworkId: this.world.network.id,
+          lockToken,
+          request: true,
+        })
         this.world.emit('toast', 'Imported app')
         return
       }
@@ -1203,7 +1286,7 @@ export class ClientBuilder extends System {
         scene: info.blueprint.scene,
         disabled: info.blueprint.disabled,
       }
-      if (blueprint.script) {
+      if (hasScriptFields(blueprint)) {
         const result = await this.world.admin.acquireDeployLock({
           owner: this.world.network.id,
           scope: blueprint.id,
@@ -1211,7 +1294,11 @@ export class ClientBuilder extends System {
         lockToken = result?.token || this.world.admin.deployLockToken
       }
       this.world.blueprints.add(blueprint)
-      this.world.admin.blueprintAdd(blueprint, { ignoreNetworkId: this.world.network.id, lockToken })
+      await this.world.admin.blueprintAdd(blueprint, {
+        ignoreNetworkId: this.world.network.id,
+        lockToken,
+        request: true,
+      })
       const data = {
         id: uuid(),
         type: 'app',
@@ -1226,7 +1313,7 @@ export class ClientBuilder extends System {
         state: {},
       }
       app = this.world.entities.add(data)
-      this.world.admin.entityAdd(data, { ignoreNetworkId: this.world.network.id })
+      await this.world.admin.entityAdd(data, { ignoreNetworkId: this.world.network.id, request: true })
       await Promise.all(info.assets.map(asset => this.world.admin.upload(asset.file)))
       app.onUploaded()
       this.world.emit('toast', 'Imported app')
@@ -1240,17 +1327,10 @@ export class ClientBuilder extends System {
           ?.blueprintRemove?.(blueprint.id)
           .catch(removeErr => console.error('failed to remove blueprint', removeErr))
       }
-      const code = err?.code || err?.error || err?.message
-      if (code === 'locked' || code === 'deploy_locked') {
-        this.world.emit('toast', 'Deploy locked')
-        return
+      if (sceneRevert) {
+        this.world.blueprints.modify(sceneRevert)
       }
-      if (code === 'admin_required' || code === 'admin_code_missing' || code === 'deploy_required') {
-        this.world.emit('toast', 'Admin code required')
-        return
-      }
-      console.error(err)
-      this.world.emit('toast', 'Import failed')
+      this.handleAdminError(err, 'Import failed')
     } finally {
       if (lockToken && this.world.admin?.releaseDeployLock) {
         try {
@@ -1263,6 +1343,7 @@ export class ClientBuilder extends System {
   }
 
   async addModel(file, transform) {
+    if (!this.ensureAdminReady('Build')) return
     // immutable hash the file
     const hash = await hashFile(file)
     // use hash as glb filename
@@ -1290,31 +1371,48 @@ export class ClientBuilder extends System {
       scene: false,
       disabled: false,
     }
-    // register blueprint
-    this.world.blueprints.add(blueprint)
-    this.world.admin.blueprintAdd(blueprint, { ignoreNetworkId: this.world.network.id })
-    // spawn the app moving
-    // - mover: follows this clients cursor until placed
-    // - uploader: other clients see a loading indicator until its fully uploaded
-    const data = {
-      id: uuid(),
-      type: 'app',
-      blueprint: blueprint.id,
-      position: transform.position,
-      quaternion: transform.quaternion,
-      scale: [1, 1, 1],
-      mover: null,
-      uploader: this.world.network.id,
-      pinned: false,
-      props: {},
-      state: {},
+    let app = null
+    try {
+      // register blueprint
+      this.world.blueprints.add(blueprint)
+      await this.world.admin.blueprintAdd(blueprint, {
+        ignoreNetworkId: this.world.network.id,
+        request: true,
+      })
+      // spawn the app moving
+      // - mover: follows this clients cursor until placed
+      // - uploader: other clients see a loading indicator until its fully uploaded
+      const data = {
+        id: uuid(),
+        type: 'app',
+        blueprint: blueprint.id,
+        position: transform.position,
+        quaternion: transform.quaternion,
+        scale: [1, 1, 1],
+        mover: null,
+        uploader: this.world.network.id,
+        pinned: false,
+        props: {},
+        state: {},
+      }
+      app = this.world.entities.add(data)
+      await this.world.admin.entityAdd(data, { ignoreNetworkId: this.world.network.id, request: true })
+      // upload the glb
+      await this.world.admin.upload(file)
+      // mark as uploaded so other clients can load it in
+      app.onUploaded()
+    } catch (err) {
+      if (app) {
+        app.destroy(true)
+      }
+      if (blueprint) {
+        this.world.blueprints.remove(blueprint.id)
+        this.world.admin
+          ?.blueprintRemove?.(blueprint.id)
+          .catch(removeErr => console.error('failed to remove blueprint', removeErr))
+      }
+      this.handleAdminError(err, 'Import failed')
     }
-    const app = this.world.entities.add(data)
-    this.world.admin.entityAdd(data, { ignoreNetworkId: this.world.network.id })
-    // upload the glb
-    await this.world.admin.upload(file)
-    // mark as uploaded so other clients can load it in
-    app.onUploaded()
   }
 
   async addAvatar(file, transform, canPlace) {
@@ -1332,6 +1430,7 @@ export class ClientBuilder extends System {
       hash,
       canPlace,
       onPlace: async () => {
+        if (!this.ensureAdminReady('Place')) return
         // close pane
         this.world.emit('avatar', null)
         // make blueprint
@@ -1353,31 +1452,48 @@ export class ClientBuilder extends System {
           scene: false,
           disabled: false,
         }
-        // register blueprint
-        this.world.blueprints.add(blueprint)
-        this.world.admin.blueprintAdd(blueprint, { ignoreNetworkId: this.world.network.id })
-        // spawn the app moving
-        // - mover: follows this clients cursor until placed
-        // - uploader: other clients see a loading indicator until its fully uploaded
-        const data = {
-          id: uuid(),
-          type: 'app',
-          blueprint: blueprint.id,
-          position: transform.position,
-          quaternion: transform.quaternion,
-          scale: [1, 1, 1],
-          mover: null,
-          uploader: this.world.network.id,
-          pinned: false,
-          props: {},
-          state: {},
+        let app = null
+        try {
+          // register blueprint
+          this.world.blueprints.add(blueprint)
+          await this.world.admin.blueprintAdd(blueprint, {
+            ignoreNetworkId: this.world.network.id,
+            request: true,
+          })
+          // spawn the app moving
+          // - mover: follows this clients cursor until placed
+          // - uploader: other clients see a loading indicator until its fully uploaded
+          const data = {
+            id: uuid(),
+            type: 'app',
+            blueprint: blueprint.id,
+            position: transform.position,
+            quaternion: transform.quaternion,
+            scale: [1, 1, 1],
+            mover: null,
+            uploader: this.world.network.id,
+            pinned: false,
+            props: {},
+            state: {},
+          }
+          app = this.world.entities.add(data)
+          await this.world.admin.entityAdd(data, { ignoreNetworkId: this.world.network.id, request: true })
+          // upload the glb
+          await this.world.admin.upload(file)
+          // mark as uploaded so other clients can load it in
+          app.onUploaded()
+        } catch (err) {
+          if (app) {
+            app.destroy(true)
+          }
+          if (blueprint) {
+            this.world.blueprints.remove(blueprint.id)
+            this.world.admin
+              ?.blueprintRemove?.(blueprint.id)
+              .catch(removeErr => console.error('failed to remove blueprint', removeErr))
+          }
+          this.handleAdminError(err, 'Place failed')
         }
-        const app = this.world.entities.add(data)
-        this.world.admin.entityAdd(data, { ignoreNetworkId: this.world.network.id })
-        // upload the glb
-        await this.world.admin.upload(file)
-        // mark as uploaded so other clients can load it in
-        app.onUploaded()
       },
       onEquip: async () => {
         // close pane
@@ -1394,6 +1510,7 @@ export class ClientBuilder extends System {
           console.error(err)
           // revert
           player.modify({ avatar: prevUrl })
+          this.handleAdminError(err, 'Avatar upload failed')
           return
         }
         if (player.data.avatar !== url) {
