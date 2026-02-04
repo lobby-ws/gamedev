@@ -1,5 +1,6 @@
 import { readPacket, writePacket } from '../packets'
 import { storage } from '../storage'
+import { uuid } from '../utils'
 import { hashFile } from '../utils-client'
 import { System } from './System'
 
@@ -31,6 +32,7 @@ export class AdminClient extends System {
     this.authenticated = false
     this.error = null
     this.queue = []
+    this.pending = new Map()
     this.code = null
     this.deployLockToken = null
     this.deployLockScope = null
@@ -88,6 +90,7 @@ export class AdminClient extends System {
     this.ws = null
     this.connected = false
     this.authenticated = false
+    this.failPending('connection_error')
   }
 
   onOpen = () => {
@@ -111,10 +114,29 @@ export class AdminClient extends System {
     }
     if (method === 'onAdminAuthError') {
       this.error = data?.error || 'auth_error'
+      this.failPending(this.error)
       return
     }
-    if (method === 'onAdminResult' && data && data.ok === false) {
-      this.error = data.error || 'error'
+    if (method === 'onAdminResult' && data) {
+      const requestId = data.requestId
+      if (requestId && this.pending.has(requestId)) {
+        const pending = this.pending.get(requestId)
+        this.pending.delete(requestId)
+        if (pending?.timeout) clearTimeout(pending.timeout)
+        if (data.ok === false) {
+          const err = new Error(data.error || 'error')
+          err.code = data.error || 'error'
+          if (data.lock) err.lock = data.lock
+          if (data.current) err.current = data.current
+          pending.reject(err)
+        } else {
+          pending.resolve(data)
+        }
+        return
+      }
+      if (data.ok === false) {
+        this.error = data.error || 'error'
+      }
       return
     }
   }
@@ -123,10 +145,12 @@ export class AdminClient extends System {
     this.connected = false
     this.authenticated = false
     this.ws = null
+    this.failPending('connection_error')
   }
 
   onError = () => {
     this.error = 'connection_error'
+    this.failPending(this.error)
   }
 
   flushQueue() {
@@ -149,6 +173,42 @@ export class AdminClient extends System {
     } else {
       this.queue.push(payload)
       this.connect()
+    }
+  }
+
+  request(payload, { timeoutMs = 10000 } = {}) {
+    if (!this.adminUrl) {
+      const err = new Error('admin_url_missing')
+      err.code = 'admin_url_missing'
+      return Promise.reject(err)
+    }
+    if (this.requireCode && !this.code) {
+      const err = new Error('admin_code_missing')
+      err.code = 'admin_code_missing'
+      return Promise.reject(err)
+    }
+    const requestId = uuid()
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pending.delete(requestId)
+        const err = new Error('timeout')
+        err.code = 'timeout'
+        reject(err)
+      }, timeoutMs)
+      this.pending.set(requestId, { resolve, reject, timeout })
+      this.send({ ...payload, requestId })
+    })
+  }
+
+  failPending(code, extra = {}) {
+    if (!this.pending.size) return
+    for (const [requestId, pending] of this.pending.entries()) {
+      if (pending?.timeout) clearTimeout(pending.timeout)
+      const err = new Error(code || 'error')
+      err.code = code || 'error'
+      Object.assign(err, extra)
+      pending.reject(err)
+      this.pending.delete(requestId)
     }
   }
 
@@ -263,22 +323,26 @@ export class AdminClient extends System {
     }
   }
 
-  blueprintAdd(blueprint, { ignoreNetworkId, lockToken } = {}) {
-    this.send({
+  blueprintAdd(blueprint, { ignoreNetworkId, lockToken, request, timeoutMs } = {}) {
+    const payload = {
       type: 'blueprint_add',
       blueprint,
       networkId: ignoreNetworkId,
       lockToken,
-    })
+    }
+    if (request) return this.request(payload, { timeoutMs })
+    this.send(payload)
   }
 
-  blueprintModify(change, { ignoreNetworkId, lockToken } = {}) {
-    this.send({
+  blueprintModify(change, { ignoreNetworkId, lockToken, request, timeoutMs } = {}) {
+    const payload = {
       type: 'blueprint_modify',
       change,
       networkId: ignoreNetworkId,
       lockToken,
-    })
+    }
+    if (request) return this.request(payload, { timeoutMs })
+    this.send(payload)
   }
 
   async blueprintRemove(id) {
@@ -303,68 +367,84 @@ export class AdminClient extends System {
     }
   }
 
-  entityAdd(entity, { ignoreNetworkId } = {}) {
-    this.send({
+  entityAdd(entity, { ignoreNetworkId, request, timeoutMs } = {}) {
+    const payload = {
       type: 'entity_add',
       entity,
       networkId: ignoreNetworkId,
-    })
+    }
+    if (request) return this.request(payload, { timeoutMs })
+    this.send(payload)
   }
 
-  entityModify(change, { ignoreNetworkId } = {}) {
-    this.send({
+  entityModify(change, { ignoreNetworkId, request, timeoutMs } = {}) {
+    const payload = {
       type: 'entity_modify',
       change,
       networkId: ignoreNetworkId,
-    })
+    }
+    if (request) return this.request(payload, { timeoutMs })
+    this.send(payload)
   }
 
-  entityRemove(id, { ignoreNetworkId } = {}) {
-    this.send({
+  entityRemove(id, { ignoreNetworkId, request, timeoutMs } = {}) {
+    const payload = {
       type: 'entity_remove',
       id,
       networkId: ignoreNetworkId,
-    })
+    }
+    if (request) return this.request(payload, { timeoutMs })
+    this.send(payload)
   }
 
-  settingsModify({ key, value }, { ignoreNetworkId } = {}) {
-    this.send({
+  settingsModify({ key, value }, { ignoreNetworkId, request, timeoutMs } = {}) {
+    const payload = {
       type: 'settings_modify',
       key,
       value,
       networkId: ignoreNetworkId,
-    })
+    }
+    if (request) return this.request(payload, { timeoutMs })
+    this.send(payload)
   }
 
-  spawnModify(op, { networkId } = {}) {
+  spawnModify(op, { networkId, request, timeoutMs } = {}) {
     const targetId = networkId || this.world.network?.id || null
-    this.send({
+    const payload = {
       type: 'spawn_modify',
       op,
       networkId: targetId,
-    })
+    }
+    if (request) return this.request(payload, { timeoutMs })
+    this.send(payload)
   }
 
-  modifyRank(playerId, rank) {
-    this.send({
+  modifyRank(playerId, rank, { request, timeoutMs } = {}) {
+    const payload = {
       type: 'modify_rank',
       playerId,
       rank,
-    })
+    }
+    if (request) return this.request(payload, { timeoutMs })
+    this.send(payload)
   }
 
-  kick(playerId) {
-    this.send({
+  kick(playerId, { request, timeoutMs } = {}) {
+    const payload = {
       type: 'kick',
       playerId,
-    })
+    }
+    if (request) return this.request(payload, { timeoutMs })
+    this.send(payload)
   }
 
-  mute(playerId, muted) {
-    this.send({
+  mute(playerId, muted, { request, timeoutMs } = {}) {
+    const payload = {
       type: 'mute',
       playerId,
       muted,
-    })
+    }
+    if (request) return this.request(payload, { timeoutMs })
+    this.send(payload)
   }
 }

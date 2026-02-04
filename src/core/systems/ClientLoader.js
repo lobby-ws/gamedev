@@ -140,7 +140,11 @@ export class ClientLoader extends System {
   }
 
   loadFile = async url => {
-    url = this.world.resolveURL(url)
+    const rawUrl = url
+    if (this.files.has(rawUrl)) {
+      return this.files.get(rawUrl)
+    }
+    url = this.world.resolveURL(rawUrl)
     if (this.files.has(url)) {
       return this.files.get(url)
     }
