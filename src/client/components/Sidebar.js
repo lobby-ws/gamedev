@@ -1865,9 +1865,7 @@ function App({ world, hidden }) {
             <div
               className={cls('app-toggle', { active: blueprint.unique })}
               onClick={() => toggleKey('unique')}
-              onPointerEnter={() =>
-                setHint('Legacy flag: duplicates no longer fork templates automatically.')
-              }
+              onPointerEnter={() => setHint('When enabled, duplicates fork this template automatically.')}
               onPointerLeave={() => setHint(null)}
             >
               <SparkleIcon size='1.125rem' />

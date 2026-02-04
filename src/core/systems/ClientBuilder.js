@@ -250,6 +250,45 @@ export class ClientBuilder extends System {
     this.control.setActions(actions)
   }
 
+  forkTemplateFromEntity(entity) {
+    const baseProps =
+      entity.blueprint.props && typeof entity.blueprint.props === 'object' && !Array.isArray(entity.blueprint.props)
+        ? entity.blueprint.props
+        : {}
+    const instanceProps =
+      entity.data.props && typeof entity.data.props === 'object' && !Array.isArray(entity.data.props)
+        ? entity.data.props
+        : {}
+    const mergedProps = merge({}, baseProps, instanceProps)
+    const nextBlueprint = getNextBlueprintVariant(this.world, entity.blueprint.id)
+    const blueprint = {
+      id: nextBlueprint.id,
+      version: 0,
+      name: nextBlueprint.name,
+      image: entity.blueprint.image,
+      author: entity.blueprint.author,
+      url: entity.blueprint.url,
+      desc: entity.blueprint.desc,
+      model: entity.blueprint.model,
+      script: entity.blueprint.script,
+      scriptEntry: entity.blueprint.scriptEntry,
+      scriptFiles: entity.blueprint.scriptFiles ? cloneDeep(entity.blueprint.scriptFiles) : entity.blueprint.scriptFiles,
+      scriptFormat: entity.blueprint.scriptFormat,
+      scriptRef: entity.blueprint.scriptRef,
+      props: cloneDeep(mergedProps),
+      preload: entity.blueprint.preload,
+      public: entity.blueprint.public,
+      locked: entity.blueprint.locked,
+      frozen: entity.blueprint.frozen,
+      unique: entity.blueprint.unique,
+      scene: entity.blueprint.scene,
+      disabled: entity.blueprint.disabled,
+    }
+    this.world.blueprints.add(blueprint)
+    this.world.admin.blueprintAdd(blueprint, { ignoreNetworkId: this.world.network.id })
+    return blueprint
+  }
+
   update(delta) {
     const player = this.world.entities.player
     if (!player) return
@@ -358,42 +397,7 @@ export class ClientBuilder extends System {
       const entity = this.selected || this.getEntityAtBeam()
       if (entity?.isApp && !entity.blueprint.scene) {
         this.select(null)
-        const baseProps =
-          entity.blueprint.props && typeof entity.blueprint.props === 'object' && !Array.isArray(entity.blueprint.props)
-            ? entity.blueprint.props
-            : {}
-        const instanceProps =
-          entity.data.props && typeof entity.data.props === 'object' && !Array.isArray(entity.data.props)
-            ? entity.data.props
-            : {}
-        const mergedProps = merge({}, baseProps, instanceProps)
-        // duplicate the blueprint
-        const nextBlueprint = getNextBlueprintVariant(this.world, entity.blueprint.id)
-        const blueprint = {
-          id: nextBlueprint.id,
-          version: 0,
-          name: nextBlueprint.name,
-          image: entity.blueprint.image,
-          author: entity.blueprint.author,
-          url: entity.blueprint.url,
-          desc: entity.blueprint.desc,
-          model: entity.blueprint.model,
-          script: entity.blueprint.script,
-          scriptEntry: entity.blueprint.scriptEntry,
-          scriptFiles: entity.blueprint.scriptFiles ? cloneDeep(entity.blueprint.scriptFiles) : entity.blueprint.scriptFiles,
-          scriptFormat: entity.blueprint.scriptFormat,
-          scriptRef: entity.blueprint.scriptRef,
-          props: cloneDeep(mergedProps),
-          preload: entity.blueprint.preload,
-          public: entity.blueprint.public,
-          locked: entity.blueprint.locked,
-          frozen: entity.blueprint.frozen,
-          unique: entity.blueprint.unique,
-          scene: entity.blueprint.scene,
-          disabled: entity.blueprint.disabled,
-        }
-        this.world.blueprints.add(blueprint)
-        this.world.admin.blueprintAdd(blueprint, { ignoreNetworkId: this.world.network.id })
+        const blueprint = this.forkTemplateFromEntity(entity)
         // assign new blueprint
         entity.modify({ blueprint: blueprint.id, props: {} })
         this.world.admin.entityModify(
@@ -492,11 +496,16 @@ export class ClientBuilder extends System {
     if (duplicate) {
       const entity = this.selected || this.getEntityAtBeam()
       if (entity?.isApp && !entity.blueprint.scene) {
-        const blueprintId = entity.data.blueprint
-        const instanceProps =
+        let blueprintId = entity.data.blueprint
+        let instanceProps =
           entity.data.props && typeof entity.data.props === 'object' && !Array.isArray(entity.data.props)
             ? entity.data.props
             : {}
+        if (entity.blueprint.unique) {
+          const blueprint = this.forkTemplateFromEntity(entity)
+          blueprintId = blueprint.id
+          instanceProps = {}
+        }
         const data = {
           id: uuid(),
           type: 'app',

@@ -605,7 +605,7 @@ const migrations = [
           public: false,
           locked: false,
           frozen: false,
-          unique: false,
+          unique: true,
           scene: false,
           disabled: false,
         }),
@@ -623,5 +623,18 @@ const migrations = [
       table.text('meta')
       table.timestamp('createdAt').notNullable()
     })
+  },
+  // set built-in templates to unique=true
+  async db => {
+    const builtins = ['Model', 'Image', 'Video', 'Text']
+    const rows = await db('blueprints').whereIn('id', builtins)
+    for (const row of rows) {
+      const data = JSON.parse(row.data)
+      if (data?.unique === true) continue
+      data.unique = true
+      await db('blueprints')
+        .where('id', row.id)
+        .update({ data: JSON.stringify(data) })
+    }
   },
 ]

@@ -390,7 +390,7 @@ function MenuAppFlags({ world, app, blueprint, pop, push }) {
       />
       <MenuItemToggle
         label='Unique'
-        hint='Legacy flag: duplicates no longer fork templates automatically.'
+        hint='When enabled, duplicates fork this template automatically.'
         value={blueprint.unique}
         onChange={value => toggle('unique', value)}
       />
