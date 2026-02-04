@@ -90,6 +90,7 @@ function buildPackageJson({ packageName, sdkName, sdkVersion }) {
       build: 'gamedev apps build --all',
       'deploy:fly': 'bash scripts/fly-deploy.sh',
       'deploy:app': 'gamedev apps deploy',
+      update: 'npm i gamedev@latest && gamedev update',
       'update:engine': 'bash scripts/update-engine.sh',
       typecheck: 'tsc --noEmit',
       'hyp:extract': 'node scripts/extract-hyp.mjs',
@@ -483,5 +484,73 @@ export function writeManifest({ rootDir, manifest, force = false, writeFile } = 
     writeFile,
     report,
   })
+  return report
+}
+
+export function updateBuiltins({ rootDir, writeFile } = {}) {
+  const report = { created: [], updated: [], skipped: [], userModified: [] }
+  const appsDir = path.join(rootDir, 'apps')
+  const assetsDir = path.join(rootDir, 'assets')
+  ensureDir(appsDir)
+
+  const templates = [...BUILTIN_APP_TEMPLATES, SCENE_TEMPLATE]
+  const assetFiles = new Set()
+
+  for (const template of templates) {
+    collectAssetFilenames(template.config, assetFiles)
+    const appDir = path.join(appsDir, template.appName)
+    ensureDir(appDir)
+
+    const blueprintPath = path.join(appDir, `${template.fileBase}.json`)
+    const sdkBlueprint = JSON.stringify(toLocalAssetUrls(template.config), null, 2) + '\n'
+    const userBlueprint = readText(blueprintPath)
+    if (userBlueprint === null) {
+      writeFileWithPolicy(blueprintPath, sdkBlueprint, { force: true, writeFile, report })
+    } else if (userBlueprint === sdkBlueprint) {
+      report.skipped.push(blueprintPath)
+    } else {
+      report.userModified.push(blueprintPath)
+    }
+
+    const scriptPath = path.join(appDir, 'index.js')
+    const sdkScript = readBuiltinScript(template)
+    const userScript = readText(scriptPath)
+    if (userScript === null) {
+      writeFileWithPolicy(scriptPath, sdkScript, { force: true, writeFile, report })
+    } else if (userScript === sdkScript) {
+      report.skipped.push(scriptPath)
+    } else {
+      report.userModified.push(scriptPath)
+    }
+  }
+
+  if (assetFiles.size) {
+    ensureDir(assetsDir)
+    for (const filename of assetFiles) {
+      const srcPath = resolveBuiltinAssetPath(filename)
+      if (!srcPath) {
+        throw new Error(`missing_builtin_asset:${filename}`)
+      }
+      const destPath = path.join(assetsDir, filename)
+      const sdkBuffer = fs.readFileSync(srcPath)
+      if (!fs.existsSync(destPath)) {
+        if (writeFile) {
+          writeFile(destPath, sdkBuffer)
+        } else {
+          ensureDir(path.dirname(destPath))
+          fs.writeFileSync(destPath, sdkBuffer)
+        }
+        report.created.push(destPath)
+      } else {
+        const userBuffer = fs.readFileSync(destPath)
+        if (sdkBuffer.equals(userBuffer)) {
+          report.skipped.push(destPath)
+        } else {
+          report.userModified.push(destPath)
+        }
+      }
+    }
+  }
+
   return report
 }
