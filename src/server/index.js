@@ -174,25 +174,16 @@ fastify.register(statics, {
   },
 })
 if (world.assetsDir) {
-  fastify.register(
-    async function (instance) {
-      instance.addHook('onRequest', async (req, reply) => {
-        if (req.url?.match(/\.spz(\?|$)/)) {
-          req.headers['x-no-compression'] = 'true'
-        }
-      })
-      instance.register(statics, {
-        root: world.assetsDir,
-        prefix: '/',
-        decorateReply: false,
-        setHeaders: (res, pathName) => {
-          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
-          res.setHeader('Expires', new Date(Date.now() + 31536000000).toUTCString())
-        },
-      })
+  fastify.register(statics, {
+    root: world.assetsDir,
+    prefix: '/assets/',
+    decorateReply: false,
+    setHeaders: res => {
+      // all assets are hashed & immutable so we can use aggressive caching
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable') // 1 year
+      res.setHeader('Expires', new Date(Date.now() + 31536000000).toUTCString()) // older browsers
     },
-    { prefix: '/assets' }
-  )
+  })
 }
 fastify.register(multipart, {
   limits: {
