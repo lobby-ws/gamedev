@@ -605,7 +605,7 @@ const migrations = [
           public: false,
           locked: false,
           frozen: false,
-          unique: true,
+          unique: false,
           scene: false,
           disabled: false,
         }),

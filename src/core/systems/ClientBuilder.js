@@ -250,7 +250,8 @@ export class ClientBuilder extends System {
     this.control.setActions(actions)
   }
 
-  forkTemplateFromEntity(entity) {
+  async forkTemplateFromEntity(entity, actionLabel = 'Template fork') {
+    if (!this.ensureAdminReady(actionLabel)) return null
     const baseProps =
       entity.blueprint.props && typeof entity.blueprint.props === 'object' && !Array.isArray(entity.blueprint.props)
         ? entity.blueprint.props
@@ -285,8 +286,25 @@ export class ClientBuilder extends System {
       disabled: entity.blueprint.disabled,
     }
     this.world.blueprints.add(blueprint)
-    this.world.admin.blueprintAdd(blueprint, { ignoreNetworkId: this.world.network.id })
-    return blueprint
+    let lockToken
+    try {
+      if (hasScriptFields(blueprint)) {
+        const scope =
+          typeof blueprint.scriptRef === 'string' && blueprint.scriptRef.trim() ? blueprint.scriptRef.trim() : blueprint.id
+        const result = await this.world.admin.acquireDeployLock({ owner: this.world.network.id, scope })
+        lockToken = result?.token || this.world.admin.deployLockToken
+      }
+      await this.world.admin.blueprintAdd(blueprint, {
+        ignoreNetworkId: this.world.network.id,
+        lockToken,
+        request: true,
+      })
+      return blueprint
+    } catch (err) {
+      this.world.blueprints.remove(blueprint.id)
+      this.handleAdminError(err, `${actionLabel} failed.`)
+      return null
+    }
   }
 
   update(delta) {
@@ -396,16 +414,19 @@ export class ClientBuilder extends System {
     if (this.control.keyU.pressed && this.beam.active) {
       const entity = this.selected || this.getEntityAtBeam()
       if (entity?.isApp && !entity.blueprint.scene) {
-        this.select(null)
-        const blueprint = this.forkTemplateFromEntity(entity)
-        // assign new blueprint
-        entity.modify({ blueprint: blueprint.id, props: {} })
-        this.world.admin.entityModify(
-          { id: entity.data.id, blueprint: blueprint.id, props: {} },
-          { ignoreNetworkId: this.world.network.id }
-        )
-        // toast
-        this.world.emit('toast', 'Template forked')
+        void (async () => {
+          const blueprint = await this.forkTemplateFromEntity(entity, 'Template fork')
+          if (!blueprint) return
+          this.select(null)
+          // assign new blueprint
+          entity.modify({ blueprint: blueprint.id, props: {} })
+          this.world.admin.entityModify(
+            { id: entity.data.id, blueprint: blueprint.id, props: {} },
+            { ignoreNetworkId: this.world.network.id }
+          )
+          // toast
+          this.world.emit('toast', 'Template forked')
+        })()
       }
     }
     // pin/unpin
@@ -496,36 +517,57 @@ export class ClientBuilder extends System {
     if (duplicate) {
       const entity = this.selected || this.getEntityAtBeam()
       if (entity?.isApp && !entity.blueprint.scene) {
-        let blueprintId = entity.data.blueprint
-        let instanceProps =
-          entity.data.props && typeof entity.data.props === 'object' && !Array.isArray(entity.data.props)
-            ? entity.data.props
-            : {}
         if (entity.blueprint.unique) {
-          const blueprint = this.forkTemplateFromEntity(entity)
-          blueprintId = blueprint.id
-          instanceProps = {}
+          void (async () => {
+            const blueprint = await this.forkTemplateFromEntity(entity, 'Duplicate')
+            if (!blueprint) return
+            const data = {
+              id: uuid(),
+              type: 'app',
+              blueprint: blueprint.id,
+              position: entity.root.position.toArray(),
+              quaternion: entity.root.quaternion.toArray(),
+              scale: entity.root.scale.toArray(),
+              mover: this.world.network.id,
+              uploader: null,
+              pinned: false,
+              props: {},
+              state: {},
+            }
+            const dup = this.world.entities.add(data)
+            this.world.admin.entityAdd(data, { ignoreNetworkId: this.world.network.id })
+            this.select(dup)
+            this.addUndo({
+              name: 'remove-entity',
+              entityId: data.id,
+            })
+          })()
+        } else {
+          const instanceProps =
+            entity.data.props && typeof entity.data.props === 'object' && !Array.isArray(entity.data.props)
+              ? entity.data.props
+              : {}
+          const data = {
+            id: uuid(),
+            type: 'app',
+            blueprint: entity.data.blueprint,
+            position: entity.root.position.toArray(),
+            quaternion: entity.root.quaternion.toArray(),
+            scale: entity.root.scale.toArray(),
+            mover: this.world.network.id,
+            uploader: null,
+            pinned: false,
+            props: cloneDeep(instanceProps),
+            state: {},
+          }
+          const dup = this.world.entities.add(data)
+          this.world.admin.entityAdd(data, { ignoreNetworkId: this.world.network.id })
+          this.select(dup)
+          this.addUndo({
+            name: 'remove-entity',
+            entityId: data.id,
+          })
         }
-        const data = {
-          id: uuid(),
-          type: 'app',
-          blueprint: blueprintId,
-          position: entity.root.position.toArray(),
-          quaternion: entity.root.quaternion.toArray(),
-          scale: entity.root.scale.toArray(),
-          mover: this.world.network.id,
-          uploader: null,
-          pinned: false,
-          props: cloneDeep(instanceProps),
-          state: {},
-        }
-        const dup = this.world.entities.add(data)
-        this.world.admin.entityAdd(data, { ignoreNetworkId: this.world.network.id })
-        this.select(dup)
-        this.addUndo({
-          name: 'remove-entity',
-          entityId: data.id,
-        })
       }
     }
     // destroy
