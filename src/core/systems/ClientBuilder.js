@@ -250,7 +250,7 @@ export class ClientBuilder extends System {
     this.control.setActions(actions)
   }
 
-  async forkTemplateFromEntity(entity, actionLabel = 'Template fork') {
+  async forkTemplateFromEntity(entity, actionLabel = 'Template fork', overrides) {
     const baseProps =
       entity.blueprint.props && typeof entity.blueprint.props === 'object' && !Array.isArray(entity.blueprint.props)
         ? entity.blueprint.props
@@ -260,10 +260,10 @@ export class ClientBuilder extends System {
         ? entity.data.props
         : {}
     const mergedProps = merge({}, baseProps, instanceProps)
-    return this.forkTemplateFromBlueprint(entity.blueprint, actionLabel, mergedProps)
+    return this.forkTemplateFromBlueprint(entity.blueprint, actionLabel, mergedProps, overrides)
   }
 
-  async forkTemplateFromBlueprint(sourceBlueprint, actionLabel = 'Template fork', mergedProps) {
+  async forkTemplateFromBlueprint(sourceBlueprint, actionLabel = 'Template fork', mergedProps, overrides) {
     if (!this.ensureAdminReady(actionLabel)) return null
     const baseProps =
       sourceBlueprint.props &&
@@ -296,6 +296,10 @@ export class ClientBuilder extends System {
       unique: sourceBlueprint.unique,
       scene: sourceBlueprint.scene,
       disabled: sourceBlueprint.disabled,
+    }
+    if (overrides && typeof overrides === 'object' && !Array.isArray(overrides)) {
+      const { id: _id, version: _version, ...rest } = overrides
+      Object.assign(blueprint, rest)
     }
     this.world.blueprints.add(blueprint)
     let lockToken

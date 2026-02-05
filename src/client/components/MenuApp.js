@@ -25,6 +25,8 @@ export function MenuApp({ world, app, blur }) {
   const [blueprint, setBlueprint] = useState(app.blueprint)
   useEffect(() => {
     window.app = app
+  }, [app])
+  useEffect(() => {
     const onModify = bp => {
       if (bp.id === blueprint.id) setBlueprint(bp)
     }
@@ -32,7 +34,7 @@ export function MenuApp({ world, app, blur }) {
     return () => {
       world.blueprints.off('modify', onModify)
     }
-  }, [])
+  }, [world, blueprint.id])
   const pop = () => {
     const next = pages.slice()
     next.pop()
@@ -50,7 +52,7 @@ export function MenuApp({ world, app, blur }) {
   if (page === 'metadata') Page = MenuAppMetadata
   return (
     <Menu title={blueprint.name} blur={blur}>
-      <Page world={world} app={app} blueprint={blueprint} pop={pop} push={push} />
+      <Page world={world} app={app} blueprint={blueprint} setBlueprint={setBlueprint} pop={pop} push={push} />
     </Menu>
   )
 }
@@ -364,11 +366,28 @@ function MenuItemField({ world, props, field, value, modify, showReset, onReset 
   return null
 }
 
-function MenuAppFlags({ world, app, blueprint, pop, push }) {
+function MenuAppFlags({ world, app, blueprint, setBlueprint, pop, push }) {
   const player = world.entities.player
   const toggle = async (key, value) => {
     value = isBoolean(value) ? value : !blueprint[key]
     if (blueprint[key] === value) return
+    if (key === 'unique' && value && !blueprint.scene) {
+      let count = 0
+      for (const entity of world.entities.items.values()) {
+        if (entity.isApp && entity.data.blueprint === blueprint.id) count += 1
+      }
+      if (count > 1) {
+        const forked = await world.builder.forkTemplateFromEntity(app, 'Unique', { unique: true })
+        if (!forked) return
+        app.modify({ blueprint: forked.id, props: {} })
+        world.admin.entityModify(
+          { id: app.data.id, blueprint: forked.id, props: {} },
+          { ignoreNetworkId: world.network.id }
+        )
+        if (setBlueprint) setBlueprint(forked)
+        return
+      }
+    }
     const version = blueprint.version + 1
     world.blueprints.modify({ id: blueprint.id, version, [key]: value })
     world.admin.blueprintModify({ id: blueprint.id, version, [key]: value }, { ignoreNetworkId: world.network.id })
