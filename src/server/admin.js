@@ -729,6 +729,8 @@ function hasScriptFields(data) {
 
   fastify.post('/admin/deploy-snapshots', async (req, reply) => {
     if (!requireDeploy(req, reply)) return
+    const scope = normalizeHeader(req.body?.scope)
+    const normalizedScope = normalizeLockScope(scope)
     const ids = req.body?.ids
     const scopeSet = new Set()
     if (Array.isArray(ids)) {
@@ -736,10 +738,9 @@ function hasScriptFields(data) {
         scopeSet.add(deriveLockScopeFromBlueprintId(id))
       }
     }
-    if (scopeSet.size > 1) {
+    if (scopeSet.size > 1 && normalizedScope !== 'global') {
       return reply.code(400).send({ error: 'multi_scope_not_supported' })
     }
-    const scope = normalizeHeader(req.body?.scope)
     const lockCheck = ensureDeployLock(req.body?.lockToken, scope)
     if (!lockCheck.ok) {
       return reply.code(409).send({ error: lockCheck.error, lock: lockCheck.lock })

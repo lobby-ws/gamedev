@@ -246,6 +246,19 @@ function getScriptKey(blueprint) {
   return script || null
 }
 
+function deriveLockScopeFromBlueprintId(id) {
+  if (typeof id !== 'string') return 'global'
+  const trimmed = id.trim()
+  if (!trimmed) return 'global'
+  if (trimmed === '$scene') return '$scene'
+  const idx = trimmed.indexOf('__')
+  if (idx !== -1) {
+    const appName = trimmed.slice(0, idx)
+    return appName || 'global'
+  }
+  return trimmed
+}
+
 function toCreatedAtMs(value) {
   if (typeof value === 'number' && Number.isFinite(value)) return value
   if (value instanceof Date) return value.getTime()
@@ -1921,6 +1934,17 @@ export class DirectAppServer {
       .map(item => item.info?.id)
       .filter(Boolean)
     const snapshotNote = note || process.env.DEPLOY_NOTE || null
+    const snapshotScopeSet = new Set(snapshotIds.map(deriveLockScopeFromBlueprintId))
+    let deployScope = appName
+    if (snapshotScopeSet.size === 1) {
+      deployScope = snapshotScopeSet.values().next().value || appName
+    } else if (snapshotScopeSet.size > 1) {
+      const scopes = Array.from(snapshotScopeSet.values())
+      console.warn(
+        `⚠️  Deploy for ${appName} spans multiple blueprint scopes (${formatNameList(scopes)}); using a global deploy lock.`
+      )
+      deployScope = null
+    }
 
     await this._withDeployLock(async lock => {
       await this._createDeploySnapshot(snapshotIds, { note: snapshotNote, lockToken: lock.token, scope: lock.scope })
@@ -1931,7 +1955,7 @@ export class DirectAppServer {
       for (const info of list) {
         await this._deployBlueprint(info, scriptInfo, { lockToken: lock.token })
       }
-    }, { owner: this._getDeployLockOwner(appName), scope: appName })
+    }, { owner: this._getDeployLockOwner(appName), scope: deployScope })
   }
 
   async _uploadScriptForApp(appName, scriptPath = null, { upload = true } = {}) {

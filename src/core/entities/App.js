@@ -279,7 +279,13 @@ export class App extends Entity {
 
   update(delta) {
     // if someone else is moving the app, interpolate updates
-    if (this.data.mover && this.data.mover !== this.world.network.id) {
+    if (
+      this.data.mover &&
+      this.data.mover !== this.world.network.id &&
+      this.networkPos &&
+      this.networkQuat &&
+      this.networkSca
+    ) {
       this.networkPos.update(delta)
       this.networkQuat.update(delta)
       this.networkSca.update(delta)
@@ -344,7 +350,7 @@ export class App extends Entity {
     }
     if (data.hasOwnProperty('position')) {
       this.data.position = data.position
-      if (this.data.mover) {
+      if (this.data.mover && this.networkPos) {
         this.networkPos.pushArray(data.position)
       } else {
         rebuild = true
@@ -352,7 +358,7 @@ export class App extends Entity {
     }
     if (data.hasOwnProperty('quaternion')) {
       this.data.quaternion = data.quaternion
-      if (this.data.mover) {
+      if (this.data.mover && this.networkQuat) {
         this.networkQuat.pushArray(data.quaternion)
       } else {
         rebuild = true
@@ -360,7 +366,7 @@ export class App extends Entity {
     }
     if (data.hasOwnProperty('scale')) {
       this.data.scale = data.scale
-      if (this.data.mover) {
+      if (this.data.mover && this.networkSca) {
         this.networkSca.pushArray(data.scale)
       } else {
         rebuild = true
