@@ -289,9 +289,10 @@ const migrations = [
           public: false,
           locked: false,
           frozen: false,
-          unique: false,
+          unique: true,
           scene: true,
           disabled: false,
+          keep: true,
         }),
         createdAt: now,
         updatedAt: now,
@@ -364,9 +365,10 @@ const migrations = [
           public: false,
           locked: false,
           frozen: false,
-          unique: false,
+          unique: true,
           scene: true,
           disabled: false,
+          keep: true,
         }),
         createdAt: now,
         updatedAt: now,
@@ -605,9 +607,10 @@ const migrations = [
           public: false,
           locked: false,
           frozen: false,
-          unique: false,
+          unique: true,
           scene: false,
           disabled: false,
+          keep: true,
         }),
         createdAt: now,
         updatedAt: now,
@@ -635,6 +638,27 @@ const migrations = [
       await db('blueprints')
         .where('id', row.id)
         .update({ data: JSON.stringify(data) })
+    }
+  },
+  // add blueprint.createdAt + blueprint.keep fields to blueprint JSON
+  async db => {
+    const rows = await db('blueprints')
+    for (const row of rows) {
+      const data = JSON.parse(row.data)
+      let changed = false
+      if (!data.createdAt && row.createdAt) {
+        data.createdAt = row.createdAt
+        changed = true
+      }
+      if (data.keep === undefined) {
+        data.keep = false
+        changed = true
+      }
+      if (changed) {
+        await db('blueprints')
+          .where('id', row.id)
+          .update({ data: JSON.stringify(data) })
+      }
     }
   },
 ]

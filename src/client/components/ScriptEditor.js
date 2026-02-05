@@ -112,21 +112,25 @@ export function ScriptEditor({ app, onHandle }) {
   // Listen for blueprint modifications to update editor content
   useEffect(() => {
     if (!editor) return
-    
+
     const onBlueprintModify = bp => {
-      // Only update if this is the same blueprint as our current app
-      console.log('debug: blueprint modified', {bp, app})
-      if (bp.id !== app.blueprint.id) return
-      console.log('isSelectedBlueprint')
+      const currentBlueprint = app.blueprint
+      const sameId = bp.id === currentBlueprint.id
+      const sameScript =
+        typeof bp.script === 'string' &&
+        typeof currentBlueprint?.script === 'string' &&
+        bp.script === currentBlueprint.script
+      if (!sameId && !sameScript) return
+      const scriptUrl = bp.script || currentBlueprint?.script
       // Load the new script content
       const loadNewScript = async () => {
         try {
-          let newCode = '// …'
-          if (bp.script) {
+          let newCode = '// ...'
+          if (scriptUrl) {
             // Load the script using the world loader
-            let script = app.world.loader.get('script', bp.script)
+            let script = app.world.loader.get('script', scriptUrl)
             if (!script) {
-              script = await app.world.loader.load('script', bp.script)
+              script = await app.world.loader.load('script', scriptUrl)
             }
             if (script?.code) {
               newCode = script.code
@@ -142,12 +146,12 @@ export function ScriptEditor({ app, onHandle }) {
           console.error('Failed to load updated script:', error)
         }
       }
-      
+
       loadNewScript()
     }
-    
+
     app.world.blueprints.on('modify', onBlueprintModify)
-    
+
     return () => {
       app.world.blueprints.off('modify', onBlueprintModify)
     }

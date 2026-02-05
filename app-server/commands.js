@@ -7,7 +7,7 @@ import { parse as acornParse } from 'acorn'
 
 import { DirectAppServer } from './direct.js'
 import { uuid } from './utils.js'
-import { deriveBlueprintId, isBlueprintDenylist } from './blueprintUtils.js'
+import { resolveBlueprintId, isBlueprintDenylist } from './blueprintUtils.js'
 import { applyTargetEnv, parseTargetArgs, resolveTarget } from './targets.js'
 import { buildLegacyBodyModuleSource } from '../src/core/legacyBody.js'
 
@@ -31,6 +31,15 @@ function resolveBuiltinAssetPath(filename) {
   const srcPath = path.join(__dirname, '..', 'src', 'world', 'assets', filename)
   if (fs.existsSync(srcPath)) return srcPath
   return null
+}
+
+function readJson(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return null
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'))
+  } catch {
+    return null
+  }
 }
 
 function parseDeployArgs(args = []) {
@@ -88,8 +97,10 @@ function listLocalBlueprints(appsDir) {
       if (!file.name.endsWith('.json')) continue
       if (isBlueprintDenylist(file.name)) continue
       const fileBase = path.basename(file.name, '.json')
-      const id = deriveBlueprintId(appName, fileBase)
-      results.push({ appName, fileBase, id, configPath: path.join(appPath, file.name) })
+      const configPath = path.join(appPath, file.name)
+      const cfg = readJson(configPath)
+      const id = resolveBlueprintId(appName, fileBase, cfg)
+      results.push({ appName, fileBase, id, configPath })
     }
   }
 
@@ -309,6 +320,7 @@ export class HyperfyCLI {
 
     const blueprintPath = path.join(appDir, `${appName}.json`)
     const blueprint = {
+      id: appName,
       model: 'assets/Model.glb',
       scriptFormat: 'module',
       image: {

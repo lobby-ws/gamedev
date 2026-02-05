@@ -10,6 +10,12 @@ export function deriveBlueprintId(appName, fileBase) {
   return `${appName}__${fileBase}`
 }
 
+export function resolveBlueprintId(appName, fileBase, config = null) {
+  const explicit = typeof config?.id === 'string' ? config.id.trim() : ''
+  if (explicit) return explicit
+  return deriveBlueprintId(appName, fileBase)
+}
+
 export function parseBlueprintId(id) {
   if (id === '$scene') {
     return { appName: '$scene', fileBase: '$scene' }

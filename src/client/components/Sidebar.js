@@ -53,6 +53,7 @@ import { useFullscreen } from './useFullscreen'
 import { downloadFile } from '../../core/extras/downloadFile'
 import { exportApp } from '../../core/extras/appTools'
 import { hashFile } from '../../core/utils-client'
+import { areBlueprintsTwinUnique, buildScriptGroups, getScriptGroupMain } from '../../core/extras/blueprintGroups'
 import { cloneDeep, isArray, isBoolean, isEqual, merge, sortBy } from 'lodash-es'
 import { storage } from '../../core/storage'
 import { ScriptEditor } from './ScriptEditor'
@@ -920,6 +921,7 @@ function Add({ world, hidden }) {
   const span = 4
   const gap = '0.5rem'
   const [trashMode, setTrashMode] = useState(false)
+  const [tab, setTab] = useState('templates')
   const [createOpen, setCreateOpen] = useState(false)
   const [createPrompt, setCreatePrompt] = useState('')
   const [createError, setCreateError] = useState(null)
@@ -931,19 +933,50 @@ function Add({ world, hidden }) {
   const createPromptRef = useRef(null)
   const buildTemplates = () => {
     const items = Array.from(world.blueprints.items.values()).filter(bp => !bp.scene)
+    const groups = buildScriptGroups(world.blueprints.items)
+    const mainIds = new Set()
+    for (const group of groups.groups.values()) {
+      if (group?.main?.id) mainIds.add(group.main.id)
+    }
+    const mainsOnly = items.filter(bp => {
+      const scriptKey = typeof bp.script === 'string' ? bp.script.trim() : ''
+      if (!scriptKey) return true
+      return mainIds.has(bp.id)
+    })
+    return sortBy(mainsOnly, bp => (bp.name || bp.id || '').toLowerCase())
+  }
+  const buildOrphans = () => {
+    const used = new Set()
+    for (const entity of world.entities.items.values()) {
+      if (entity?.isApp) {
+        used.add(entity.data.blueprint)
+      }
+    }
+    const items = Array.from(world.blueprints.items.values()).filter(
+      bp => !bp.scene && !used.has(bp.id) && bp.keep !== true
+    )
     return sortBy(items, bp => (bp.name || bp.id || '').toLowerCase())
   }
   const [templates, setTemplates] = useState(() => buildTemplates())
+  const [orphans, setOrphans] = useState(() => buildOrphans())
+  const [cleaning, setCleaning] = useState(false)
 
   useEffect(() => {
-    const refresh = () => setTemplates(buildTemplates())
+    const refresh = () => {
+      setTemplates(buildTemplates())
+      setOrphans(buildOrphans())
+    }
     world.blueprints.on('add', refresh)
     world.blueprints.on('modify', refresh)
     world.blueprints.on('remove', refresh)
+    world.entities.on('added', refresh)
+    world.entities.on('removed', refresh)
     return () => {
       world.blueprints.off('add', refresh)
       world.blueprints.off('modify', refresh)
       world.blueprints.off('remove', refresh)
+      world.entities.off('added', refresh)
+      world.entities.off('removed', refresh)
     }
   }, [])
 
@@ -1272,7 +1305,34 @@ function Add({ world, hidden }) {
     }
   }
 
+  const toggleKeep = blueprint => {
+    const nextKeep = !blueprint.keep
+    const version = blueprint.version + 1
+    world.blueprints.modify({ id: blueprint.id, version, keep: nextKeep })
+    world.admin.blueprintModify({ id: blueprint.id, version, keep: nextKeep }, { ignoreNetworkId: world.network.id })
+  }
+
+  const runClean = async () => {
+    if (cleaning) return
+    if (world.builder?.ensureAdminReady && !world.builder.ensureAdminReady('Clean now')) return
+    if (!world.admin?.runClean) {
+      world.emit('toast', 'Clean endpoint unavailable')
+      return
+    }
+    setCleaning(true)
+    try {
+      await world.admin.runClean()
+      world.emit('toast', 'Cleanup complete')
+    } catch (err) {
+      console.error(err)
+      world.emit('toast', 'Cleanup failed')
+    } finally {
+      setCleaning(false)
+    }
+  }
+
   const openCreate = () => {
+    if (tab !== 'templates') return
     if (createOpen) {
       setCreateOpen(false)
       return
@@ -1282,6 +1342,19 @@ function Add({ world, hidden }) {
     setCreateAttachments([])
     setCreateMention(null)
     setCreateOpen(true)
+  }
+
+  const switchTab = next => {
+    setTab(next)
+    if (next !== 'templates') {
+      setTrashMode(false)
+      setCreateOpen(false)
+      setCreateError(null)
+      setCreatePrompt('')
+      setCreateAttachments([])
+      setCreateMention(null)
+      setCreateScriptRoot(null)
+    }
   }
 
   return (
@@ -1294,7 +1367,8 @@ function Add({ world, hidden }) {
           border-radius: 1.375rem;
           display: flex;
           flex-direction: column;
-          min-height: 17rem;
+          min-height: 22rem;
+          max-height: 22rem;
           position: relative;
           .add-head {
             height: 3.125rem;
@@ -1308,6 +1382,29 @@ function Add({ world, hidden }) {
             font-weight: 500;
             font-size: 1rem;
             line-height: 1;
+          }
+          .add-tabs {
+            display: inline-flex;
+            gap: 0.35rem;
+            margin-right: 0.5rem;
+          }
+          .add-tab {
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: transparent;
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 0.75rem;
+            padding: 0.25rem 0.65rem;
+            border-radius: 999px;
+            &:hover {
+              cursor: pointer;
+              color: white;
+              border-color: rgba(255, 255, 255, 0.35);
+            }
+            &.active {
+              color: white;
+              border-color: rgba(76, 224, 161, 0.65);
+              background: rgba(76, 224, 161, 0.12);
+            }
           }
           .add-action,
           .add-toggle {
@@ -1360,6 +1457,89 @@ function Add({ world, hidden }) {
           .add-item-name {
             text-align: center;
             font-size: 0.875rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          .add-orphans {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+          }
+          .add-orphans-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+          }
+          .add-orphans-title {
+            font-weight: 500;
+            font-size: 0.9rem;
+          }
+          .add-orphans-clean {
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            padding: 0.35rem 0.85rem;
+            font-size: 0.75rem;
+            background: rgba(255, 255, 255, 0.06);
+            color: rgba(255, 255, 255, 0.75);
+            &:hover:not(:disabled) {
+              cursor: pointer;
+              color: white;
+              border-color: rgba(255, 255, 255, 0.35);
+            }
+            &:disabled {
+              opacity: 0.5;
+              cursor: default;
+            }
+          }
+          .add-orphans-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+          }
+          .add-orphan-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            padding: 0.5rem 0.75rem;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 0.65rem;
+            background: rgba(255, 255, 255, 0.03);
+          }
+          .add-orphan-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 0.85rem;
+          }
+          .add-orphan-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: transparent;
+            color: rgba(255, 255, 255, 0.65);
+            padding: 0.25rem 0.5rem;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            &:hover {
+              cursor: pointer;
+              color: white;
+              border-color: rgba(255, 255, 255, 0.35);
+            }
+            &.active {
+              color: white;
+              border-color: rgba(76, 224, 161, 0.65);
+              background: rgba(76, 224, 161, 0.12);
+            }
+          }
+          .add-orphans-empty {
+            font-size: 0.8rem;
+            color: rgba(255, 255, 255, 0.5);
+            padding: 0.5rem 0.25rem;
           }
           .add-create-overlay {
             position: absolute;
@@ -1534,34 +1714,89 @@ function Add({ world, hidden }) {
       >
         <div className='add-head'>
           <div className='add-title'>Add</div>
-          <div className={cls('add-action', { active: createOpen })} onClick={openCreate} title='AI Create'>
-            <CirclePlusIcon size='1.125rem' />
+          <div className='add-tabs'>
+            <button
+              type='button'
+              className={cls('add-tab', { active: tab === 'templates' })}
+              onClick={() => switchTab('templates')}
+            >
+              Templates
+            </button>
+            <button
+              type='button'
+              className={cls('add-tab', { active: tab === 'orphans' })}
+              onClick={() => switchTab('orphans')}
+            >
+              Recycle Bin
+            </button>
           </div>
-          <div className={cls('add-toggle', { active: trashMode })} onClick={() => setTrashMode(!trashMode)}>
-            <Trash2Icon size='1.125rem' />
-          </div>
+          {tab === 'templates' && (
+            <>
+              <div className={cls('add-action', { active: createOpen })} onClick={openCreate} title='AI Create'>
+                <CirclePlusIcon size='1.125rem' />
+              </div>
+              <div className={cls('add-toggle', { active: trashMode })} onClick={() => setTrashMode(!trashMode)}>
+                <Trash2Icon size='1.125rem' />
+              </div>
+            </>
+          )}
         </div>
         <div className='add-content noscrollbar'>
-          <div className='add-items'>
-            {templates.map(blueprint => {
-              const imageUrl = blueprint.image?.url || (typeof blueprint.image === 'string' ? blueprint.image : null)
-              return (
-                <div
-                  className={cls('add-item', { trash: trashMode })}
-                  key={blueprint.id}
-                  onClick={() => handleClick(blueprint)}
-                >
+          {tab === 'templates' ? (
+            <div className='add-items'>
+              {templates.map(blueprint => {
+                const imageUrl = blueprint.image?.url || (typeof blueprint.image === 'string' ? blueprint.image : null)
+                return (
                   <div
-                    className='add-item-image'
-                    css={css`
-                      ${imageUrl ? `background-image: url(${world.resolveURL(imageUrl)});` : ''}
-                    `}
-                  ></div>
-                  <div className='add-item-name'>{blueprint.name || blueprint.id}</div>
+                    className={cls('add-item', { trash: trashMode })}
+                    key={blueprint.id}
+                    onClick={() => handleClick(blueprint)}
+                  >
+                    <div
+                      className='add-item-image'
+                      css={css`
+                        ${imageUrl ? `background-image: url(${world.resolveURL(imageUrl)});` : ''}
+                      `}
+                    ></div>
+                    <div className='add-item-name' title={blueprint.name || blueprint.id}>{blueprint.name || blueprint.id}</div>
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <div className='add-orphans'>
+              <div className='add-orphans-head'>
+                <div className='add-orphans-title'>Recycle Bin ({orphans.length})</div>
+                <button
+                  type='button'
+                  className='add-orphans-clean'
+                  onClick={runClean}
+                  disabled={!orphans.length || cleaning}
+                >
+                  {cleaning ? 'Cleaning...' : 'Clean now'}
+                </button>
+              </div>
+              {orphans.length ? (
+                <div className='add-orphans-list'>
+                  {orphans.map(blueprint => (
+                    <div className='add-orphan-row' key={blueprint.id}>
+                      <div className='add-orphan-name'>{blueprint.name || blueprint.id}</div>
+                      <button
+                        type='button'
+                        className={cls('add-orphan-toggle', { active: blueprint.keep })}
+                        onClick={() => toggleKeep(blueprint)}
+                      >
+                        {blueprint.keep ? <SquareCheckBigIcon size='0.85rem' /> : <SquareIcon size='0.85rem' />}
+                        <span>Keep</span>
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              )
-            })}
-          </div>
+              ) : (
+                <div className='add-orphans-empty'>Recycle bin is empty.</div>
+              )}
+            </div>
+          )}
         </div>
         {createOpen && (
           <div className='add-create-overlay' onMouseDown={e => e.stopPropagation()}>
@@ -1675,6 +1910,11 @@ function App({ world, hidden }) {
   const [pinned, setPinned] = useState(app.data.pinned)
   const [transforms, setTransforms] = useState(showTransforms)
   const [blueprint, setBlueprint] = useState(app.blueprint)
+  const [appTab, setAppTab] = useState('settings')
+  const [mergingId, setMergingId] = useState(null)
+  const [addingId, setAddingId] = useState(null)
+  const [entityTick, setEntityTick] = useState(0)
+  const [variantTick, setVariantTick] = useState(0)
   useEffect(() => {
     showTransforms = transforms
   }, [transforms])
@@ -1691,11 +1931,66 @@ function App({ world, hidden }) {
       world.blueprints.off('modify', onModify)
     }
   }, [world, blueprint.id])
+  useEffect(() => {
+    const refresh = () => setVariantTick(tick => tick + 1)
+    world.blueprints.on('add', refresh)
+    world.blueprints.on('modify', refresh)
+    world.blueprints.on('remove', refresh)
+    return () => {
+      world.blueprints.off('add', refresh)
+      world.blueprints.off('modify', refresh)
+      world.blueprints.off('remove', refresh)
+    }
+  }, [world])
+  useEffect(() => {
+    const refresh = () => setEntityTick(tick => tick + 1)
+    world.entities.on('added', refresh)
+    world.entities.on('removed', refresh)
+    return () => {
+      world.entities.off('added', refresh)
+      world.entities.off('removed', refresh)
+    }
+  }, [world])
+  const usedBlueprintIds = useMemo(() => {
+    const used = new Set()
+    for (const entity of world.entities.items.values()) {
+      if (entity?.isApp) {
+        used.add(entity.data.blueprint)
+      }
+    }
+    return used
+  }, [world, entityTick])
+  const scriptGroups = useMemo(() => buildScriptGroups(world.blueprints.items), [world, variantTick])
+  const scriptGroup = scriptGroups.byId.get(blueprint.id) || null
+  const variantMain = scriptGroup?.main || blueprint
+  const variants = scriptGroup?.items?.length ? scriptGroup.items : [blueprint]
+  const isVariantOrphan = variant =>
+    !variant?.scene && !usedBlueprintIds.has(variant.id) && variant.keep !== true
+  const visibleVariants = variants.filter(variant => !isVariantOrphan(variant))
   const frozen = blueprint.frozen
+  const resolveModelUpdateMode = async () => {
+    if (blueprint.unique || !world.ui?.confirm) return 'all'
+    let count = 0
+    for (const entity of world.entities.items.values()) {
+      if (entity.isApp && entity.data.blueprint === blueprint.id) count += 1
+    }
+    const message =
+      count > 1
+        ? `This model is shared by ${count} instances. Apply to all or fork this app?`
+        : 'This model is shared by this template. Apply to all or fork this app?'
+    const applyAll = await world.ui.confirm({
+      title: 'Apply model change?',
+      message,
+      confirmText: 'Apply to all',
+      cancelText: 'Fork',
+    })
+    return applyAll ? 'all' : 'fork'
+  }
   const changeModel = async file => {
     if (!file) return
     const ext = file.name.split('.').pop().toLowerCase()
     if (!allowedModels.includes(ext)) return
+    const updateMode = await resolveModelUpdateMode()
     // immutable hash the file
     const hash = await hashFile(file)
     // use hash as glb filename
@@ -1705,11 +2000,27 @@ function App({ world, hidden }) {
     // cache file locally so this client can insta-load it
     const type = extToType[ext]
     world.loader.insert(type, url, file)
+    // upload model
+    await world.admin.upload(file)
+    if (updateMode === 'fork') {
+      if (!world.builder?.forkTemplateFromBlueprint) {
+        world.emit('toast', 'Builder access required.')
+        return
+      }
+      const forked = await world.builder.forkTemplateFromBlueprint(blueprint, 'Model fork', null, { model: url })
+      if (!forked) return
+      app.modify({ blueprint: forked.id })
+      world.admin.entityModify(
+        { id: app.data.id, blueprint: forked.id },
+        { ignoreNetworkId: world.network.id }
+      )
+      setBlueprint(forked)
+      world.emit('toast', 'Model forked')
+      return
+    }
     // update blueprint locally (also rebuilds apps)
     const version = blueprint.version + 1
     world.blueprints.modify({ id: blueprint.id, version, model: url })
-    // upload model
-    await world.admin.upload(file)
     // broadcast blueprint change to server + other clients
     world.admin.blueprintModify({ id: blueprint.id, version, model: url }, { ignoreNetworkId: world.network.id })
   }
@@ -1743,6 +2054,75 @@ function App({ world, hidden }) {
     world.admin.entityModify({ id: app.data.id, pinned }, { ignoreNetworkId: world.network.id })
     setPinned(pinned)
   }
+  const mergeVariant = async variant => {
+    if (!variant || variant.id === variantMain.id) return
+    if (!areBlueprintsTwinUnique(variantMain, variant)) return
+    const targets = []
+    for (const entity of world.entities.items.values()) {
+      if (entity?.isApp && entity.data.blueprint === variant.id) {
+        targets.push(entity)
+      }
+    }
+    const ok = await world.ui.confirm({
+      title: 'Merge duplicate',
+      message: `Merge "${variant.name || variant.id}" into "${variantMain.name || variantMain.id}"? ${targets.length} instance(s) will be repointed and the duplicate blueprint deleted.`,
+      confirmText: 'Merge',
+      cancelText: 'Cancel',
+    })
+    if (!ok) return
+    if (world.builder?.ensureAdminReady && !world.builder.ensureAdminReady('Merge')) return
+    setMergingId(variant.id)
+    try {
+      for (const entity of targets) {
+        entity.modify({ blueprint: variantMain.id })
+        world.admin.entityModify(
+          { id: entity.data.id, blueprint: variantMain.id },
+          { ignoreNetworkId: world.network.id }
+        )
+      }
+      await world.admin.blueprintRemove(variant.id)
+      world.emit('toast', 'Merged duplicate blueprint')
+    } catch (err) {
+      console.error(err)
+      world.emit('toast', 'Merge failed')
+    } finally {
+      setMergingId(null)
+    }
+  }
+  const addVariant = async variant => {
+    if (!variant) return
+    setAddingId(variant.id)
+    const transform = world.builder.getSpawnTransform(true)
+    world.builder.toggle(true)
+    world.builder.control.pointer.lock()
+    let spawnBlueprint = variant
+    if (variant.unique) {
+      spawnBlueprint = await world.builder.forkTemplateFromBlueprint(variant, 'Add')
+      if (!spawnBlueprint) {
+        setAddingId(null)
+        return
+      }
+    }
+    setTimeout(() => {
+      const data = {
+        id: uuid(),
+        type: 'app',
+        blueprint: spawnBlueprint.id,
+        position: transform.position,
+        quaternion: transform.quaternion,
+        scale: [1, 1, 1],
+        mover: world.network.id,
+        uploader: null,
+        pinned: false,
+        props: {},
+        state: {},
+      }
+      const nextApp = world.entities.add(data)
+      world.admin.entityAdd(data, { ignoreNetworkId: world.network.id })
+      world.builder.select(nextApp)
+      setAddingId(null)
+    }, 100)
+  }
 
   return (
     <Pane hidden={hidden}>
@@ -1761,6 +2141,30 @@ function App({ world, hidden }) {
             border-bottom: 1px solid rgba(255, 255, 255, 0.05);
             display: flex;
             align-items: center;
+          }
+          .app-tabs {
+            padding: 0.45rem 1rem;
+            display: flex;
+            gap: 0.5rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+          }
+          .app-tab {
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: transparent;
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 0.75rem;
+            padding: 0.25rem 0.7rem;
+            border-radius: 999px;
+            &:hover {
+              cursor: pointer;
+              color: white;
+              border-color: rgba(255, 255, 255, 0.35);
+            }
+            &.active {
+              color: white;
+              border-color: rgba(76, 224, 161, 0.65);
+              background: rgba(76, 224, 161, 0.12);
+            }
           }
           .app-title {
             flex: 1;
@@ -1830,6 +2234,73 @@ function App({ world, hidden }) {
             flex: 1;
             overflow-y: auto;
           }
+          .app-variants {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            padding: 0.75rem 1rem;
+          }
+          .app-variant-row {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.45rem 0.6rem;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 0.6rem;
+            background: rgba(255, 255, 255, 0.03);
+          }
+          .app-variant-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 0.85rem;
+          }
+          .app-variant-main {
+            font-size: 0.7rem;
+            color: rgba(255, 255, 255, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 0.1rem 0.4rem;
+            border-radius: 999px;
+          }
+          .app-variant-merge {
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: transparent;
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 0.7rem;
+            padding: 0.2rem 0.55rem;
+            border-radius: 999px;
+            &:hover:not(:disabled) {
+              cursor: pointer;
+              color: white;
+              border-color: rgba(255, 255, 255, 0.35);
+            }
+            &:disabled {
+              opacity: 0.45;
+              cursor: default;
+            }
+          }
+          .app-variant-add {
+            border: 1px solid rgba(76, 224, 161, 0.45);
+            background: rgba(76, 224, 161, 0.1);
+            color: rgba(255, 255, 255, 0.85);
+            font-size: 0.7rem;
+            padding: 0.2rem 0.55rem;
+            border-radius: 999px;
+            &:hover:not(:disabled) {
+              cursor: pointer;
+              color: white;
+              border-color: rgba(76, 224, 161, 0.75);
+            }
+            &:disabled {
+              opacity: 0.45;
+              cursor: default;
+            }
+          }
+          .app-variant-empty {
+            font-size: 0.8rem;
+            color: rgba(255, 255, 255, 0.5);
+          }
         `}
       >
         <div className='app-head'>
@@ -1859,7 +2330,23 @@ function App({ world, hidden }) {
             </div>
           )}
         </div>
-        {!blueprint.scene && (
+        <div className='app-tabs'>
+          <button
+            type='button'
+            className={cls('app-tab', { active: appTab === 'settings' })}
+            onClick={() => setAppTab('settings')}
+          >
+            Settings
+          </button>
+          <button
+            type='button'
+            className={cls('app-tab', { active: appTab === 'variants' })}
+            onClick={() => setAppTab('variants')}
+          >
+            Variants
+          </button>
+        </div>
+        {appTab === 'settings' && !blueprint.scene && (
           <div className='app-toggles'>
             <div
               className={cls('app-toggle', { active: blueprint.disabled })}
@@ -1897,15 +2384,55 @@ function App({ world, hidden }) {
           </div>
         )}
         <div className='app-content noscrollbar'>
-          {!blueprint.scene && (
-            <div className='app-transforms'>
-              <div className='app-transforms-btn' onClick={() => setTransforms(!transforms)}>
-                <ChevronsUpDownIcon size='1rem' />
-              </div>
-              {transforms && <AppTransformFields app={app} />}
+          {appTab === 'settings' ? (
+            <>
+              {!blueprint.scene && (
+                <div className='app-transforms'>
+                  <div className='app-transforms-btn' onClick={() => setTransforms(!transforms)}>
+                    <ChevronsUpDownIcon size='1rem' />
+                  </div>
+                  {transforms && <AppTransformFields app={app} />}
+                </div>
+              )}
+              <AppFields world={world} app={app} blueprint={blueprint} />
+            </>
+          ) : (
+            <div className='app-variants'>
+              {visibleVariants.length ? (
+                visibleVariants.map(variant => {
+                  const isMain = variant.id === variantMain.id
+                  const canMerge = !isMain && areBlueprintsTwinUnique(variantMain, variant)
+                  const isMerging = mergingId === variant.id
+                  return (
+                    <div className='app-variant-row' key={variant.id}>
+                      <div className='app-variant-name'>{variant.name || variant.id}</div>
+                      {isMain && <div className='app-variant-main'>Main</div>}
+                      <button
+                        type='button'
+                        className='app-variant-add'
+                        onClick={() => addVariant(variant)}
+                        disabled={addingId && addingId !== variant.id}
+                      >
+                        {addingId === variant.id ? 'Adding...' : 'Add'}
+                      </button>
+                      {!isMain && canMerge && (
+                        <button
+                          type='button'
+                          className='app-variant-merge'
+                          onClick={() => mergeVariant(variant)}
+                          disabled={mergingId && !isMerging}
+                        >
+                          {isMerging ? 'Merging...' : 'Merge'}
+                        </button>
+                      )}
+                    </div>
+                  )
+                })
+              ) : (
+                <div className='app-variant-empty'>No variants found.</div>
+              )}
             </div>
           )}
-          <AppFields world={world} app={app} blueprint={blueprint} />
         </div>
       </div>
     </Pane>
@@ -3415,6 +3942,8 @@ function resolveScriptRootBlueprint(blueprint, world) {
     const baseBlueprint = world.blueprints.get(appName)
     if (hasScriptFiles(baseBlueprint)) return baseBlueprint
   }
+  const groupMain = getScriptGroupMain(buildScriptGroups(world.blueprints.items), blueprint)
+  if (groupMain && hasScriptFiles(groupMain)) return groupMain
   return null
 }
 
