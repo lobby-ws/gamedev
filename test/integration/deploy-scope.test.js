@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import net from 'node:net'
+import path from 'node:path'
 import { test } from 'node:test'
 
 import { DirectAppServer } from '../../app-server/direct.js'
@@ -39,6 +41,7 @@ test('deploy snapshots require global scope for multi-scope id batches', async t
     await admin.request('blueprint_add', {
       blueprint: {
         id: 'ScopeA',
+        scope: 'scope-a',
         version: 0,
         name: 'ScopeA',
         props: {},
@@ -47,6 +50,7 @@ test('deploy snapshots require global scope for multi-scope id batches', async t
     await admin.request('blueprint_add', {
       blueprint: {
         id: 'ScopeB',
+        scope: 'scope-b',
         version: 0,
         name: 'ScopeB',
         props: {},
@@ -57,7 +61,7 @@ test('deploy snapshots require global scope for multi-scope id batches', async t
     const scopedLock = await fetchJson(`${world.worldUrl}/admin/deploy-lock`, {
       adminCode: world.adminCode,
       method: 'POST',
-      body: { owner: 'scope-lock', scope: 'ScopeA' },
+      body: { owner: 'scope-lock', scope: 'scope-a' },
     })
     assert.equal(scopedLock.res.status, 200)
     const scopedSnapshot = await fetchJson(`${world.worldUrl}/admin/deploy-snapshots`, {
@@ -66,7 +70,7 @@ test('deploy snapshots require global scope for multi-scope id batches', async t
       body: {
         ids: ['ScopeA', 'ScopeB'],
         lockToken: scopedLock.data.token,
-        scope: 'ScopeA',
+        scope: 'scope-a',
       },
     })
     assert.equal(scopedSnapshot.res.status, 400)
@@ -74,7 +78,7 @@ test('deploy snapshots require global scope for multi-scope id batches', async t
     await fetchJson(`${world.worldUrl}/admin/deploy-lock`, {
       adminCode: world.adminCode,
       method: 'DELETE',
-      body: { token: scopedLock.data.token, scope: 'ScopeA' },
+      body: { token: scopedLock.data.token, scope: 'scope-a' },
     })
 
     const globalLock = await fetchJson(`${world.worldUrl}/admin/deploy-lock`, {
@@ -99,6 +103,52 @@ test('deploy snapshots require global scope for multi-scope id batches', async t
       method: 'DELETE',
       body: { token: globalLock.data.token },
     })
+  })
+})
+
+test('script blueprint operations reject missing scope metadata', async t => {
+  if (!(await canListenOnLoopback())) {
+    t.skip('loopback sockets are unavailable in this environment')
+    return
+  }
+
+  await withWorldServer(async world => {
+    const admin = new AdminWsClient({
+      worldUrl: world.worldUrl,
+      adminCode: world.adminCode,
+    })
+    await admin.connect()
+
+    const lock = await fetchJson(`${world.worldUrl}/admin/deploy-lock`, {
+      adminCode: world.adminCode,
+      method: 'POST',
+      body: { owner: 'scope-metadata' },
+    })
+    assert.equal(lock.res.status, 200)
+
+    try {
+      await assert.rejects(
+        () =>
+          admin.request('blueprint_add', {
+            blueprint: {
+              id: 'MissingScopeScript',
+              version: 0,
+              name: 'Missing Scope Script',
+              script: 'asset://entry.js',
+              props: {},
+            },
+            lockToken: lock.data.token,
+          }),
+        err => err?.code === 'scope_unknown'
+      )
+    } finally {
+      await fetchJson(`${world.worldUrl}/admin/deploy-lock`, {
+        adminCode: world.adminCode,
+        method: 'DELETE',
+        body: { token: lock.data.token },
+      })
+      admin.close()
+    }
   })
 })
 
@@ -129,10 +179,10 @@ test('direct app-server falls back to global deploy scope for mixed blueprint sc
   server._logTarget = () => {}
   server._buildDeployPlan = async (_appName, list) => ({
     scriptInfo: null,
-    changes: list.map(info => ({
+    changes: list.map((info, idx) => ({
       info,
-      desired: {},
-      current: {},
+      desired: { id: info.id, scope: idx === 0 ? 'scope-a' : 'scope-b' },
+      current: { id: info.id, scope: idx === 0 ? 'scope-a' : 'scope-b' },
       type: 'update',
       scriptChanged: true,
       otherChanged: false,
@@ -159,8 +209,59 @@ test('direct app-server falls back to global deploy scope for mixed blueprint sc
   await server._deployBlueprintsForAppInternal('Mixed', infos, index)
 
   assert.equal(lockScopes.length, 1)
-  assert.equal(lockScopes[0], null)
+  assert.equal(lockScopes[0], 'global')
   assert.equal(snapshotCalls.length, 1)
   assert.deepEqual(snapshotCalls[0].ids.sort(), ['Mixed', 'Mixed_2'])
-  assert.equal(snapshotCalls[0].scope, null)
+  assert.equal(snapshotCalls[0].scope, 'global')
+})
+
+test('direct app-server includes explicit scope in deploy add payloads', async () => {
+  const rootDir = await createTempDir('hyperfy-deploy-payload-scope-')
+  const server = new DirectAppServer({ worldUrl: 'http://example.com', rootDir })
+
+  const appDir = path.join(rootDir, 'apps', 'ScopeApp')
+  fs.mkdirSync(appDir, { recursive: true })
+  const configPath = path.join(appDir, 'main.json')
+  fs.writeFileSync(configPath, JSON.stringify({ props: { text: 'hello' } }, null, 2), 'utf8')
+
+  server.snapshot = {
+    worldId: 'test',
+    assetsUrl: 'http://example.com/assets',
+    settings: {},
+    spawn: { position: [0, 0, 0], quaternion: [0, 0, 0, 1] },
+    blueprints: new Map(),
+    entities: new Map(),
+  }
+  server._resolveLocalBlueprintToAssetUrls = async payload => payload
+
+  const calls = []
+  server.client = {
+    request: async (type, payload) => {
+      calls.push({ type, payload })
+      return { ok: true }
+    },
+    getBlueprint: async id => ({ id, version: 0, scope: 'ScopeApp' }),
+  }
+
+  const info = {
+    id: 'ScopeApp',
+    appName: 'ScopeApp',
+    fileBase: 'main',
+    configPath,
+    scriptPath: path.join(appDir, 'index.js'),
+  }
+  const scriptInfo = {
+    mode: 'module',
+    scriptUrl: 'asset://entry.js',
+    scriptEntry: 'index.js',
+    scriptFiles: { 'index.js': 'asset://entry.js' },
+    scriptFormat: 'module',
+    scriptRootId: 'ScopeApp',
+  }
+
+  await server._deployBlueprint(info, scriptInfo, { lockToken: 'lock-token' })
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].type, 'blueprint_add')
+  assert.equal(calls[0].payload?.blueprint?.scope, 'ScopeApp')
 })

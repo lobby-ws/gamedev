@@ -140,11 +140,14 @@ export class ServerNetwork extends System {
     const entities = await this.db('entities')
     for (const entity of entities) {
       const data = JSON.parse(entity.data)
+      const blueprintScope =
+        typeof data.blueprint === 'string' ? this.world.blueprints.get(data.blueprint)?.scope : null
       ensureEntitySyncMetadata(data, {
         touch: false,
         now: entity.updatedAt || moment().toISOString(),
         updatedBy: 'runtime',
         updateSource: 'runtime',
+        blueprintScope,
       })
       data.state = {}
       this.world.entities.add(data, true)
@@ -290,11 +293,14 @@ export class ServerNetwork extends System {
           continue // ignore while uploading or moving
         }
         try {
+          const blueprintScope =
+            typeof entity.data.blueprint === 'string' ? this.world.blueprints.get(entity.data.blueprint)?.scope : null
           ensureEntitySyncMetadata(entity.data, {
             touch: true,
             now,
             updatedBy: normalizeMetadataString(entity.data.updatedBy, 'runtime'),
             updateSource: normalizeMetadataString(entity.data.updateSource, 'runtime'),
+            blueprintScope,
           })
           const record = {
             id: entity.data.id,
@@ -688,12 +694,15 @@ export class ServerNetwork extends System {
     const operation =
       nextData?.type === 'app' ? this.createOperationMetadata({ actor, source, lastOpId }, moment().toISOString()) : null
     if (nextData?.type === 'app') {
+      const blueprintScope =
+        typeof nextData.blueprint === 'string' ? this.world.blueprints.get(nextData.blueprint)?.scope : null
       ensureEntitySyncMetadata(nextData, {
         touch: true,
         now: moment().toISOString(),
         updatedBy: normalizeMetadataString(actor, 'runtime'),
         updateSource: normalizeMetadataString(source, 'runtime'),
         lastOpId: operation?.opId,
+        blueprintScope,
       })
     }
     const entity = this.world.entities.add(nextData)
@@ -726,12 +735,20 @@ export class ServerNetwork extends System {
     const operation = entity.isApp ? this.createOperationMetadata({ actor, source, lastOpId }, moment().toISOString()) : null
     if (entity.isApp) {
       const merged = { ...entity.data, ...data }
+      const blueprintId =
+        typeof merged.blueprint === 'string'
+          ? merged.blueprint
+          : typeof entity.data.blueprint === 'string'
+            ? entity.data.blueprint
+            : null
+      const blueprintScope = blueprintId ? this.world.blueprints.get(blueprintId)?.scope : null
       ensureEntitySyncMetadata(merged, {
         touch: true,
         now: moment().toISOString(),
         updatedBy: normalizeMetadataString(actor, 'runtime'),
         updateSource: normalizeMetadataString(source, 'runtime'),
         lastOpId: operation?.opId,
+        blueprintScope,
       })
       nextData = { ...data }
       applySyncMetadata(nextData, merged)

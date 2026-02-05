@@ -27,6 +27,7 @@ const BLUEPRINT_FIELDS = [
   'author',
   'url',
   'desc',
+  'scope',
 ]
 
 const SCRIPT_EXTENSIONS = new Set(['.js', '.ts'])
@@ -279,17 +280,15 @@ function getScriptKey(blueprint) {
   return script || null
 }
 
-function deriveLockScopeFromBlueprintId(id) {
-  if (typeof id !== 'string') return 'global'
-  const trimmed = id.trim()
-  if (!trimmed) return 'global'
-  if (trimmed === '$scene') return '$scene'
-  const idx = trimmed.indexOf('__')
-  if (idx !== -1) {
-    const appName = trimmed.slice(0, idx)
-    return appName || 'global'
-  }
-  return trimmed
+function normalizeScopeValue(value) {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed || null
+}
+
+function getBlueprintScopeValue(blueprint) {
+  if (!blueprint || typeof blueprint !== 'object') return null
+  return normalizeScopeValue(blueprint.scope)
 }
 
 function toCreatedAtMs(value) {
@@ -1969,6 +1968,7 @@ export class DirectAppServer {
     if (!cfg || typeof cfg !== 'object') {
       throw new Error(`invalid_blueprint_config:${info.configPath}`)
     }
+    const current = this.snapshot?.blueprints?.get(info.id) || null
     const payload = {
       id: info.id,
       name: info.fileBase,
@@ -1976,10 +1976,23 @@ export class DirectAppServer {
       ...this._buildScriptPayload(info, scriptInfo),
       ...pickBlueprintFields(cfg),
     }
+    const resolvedScope = this._resolveBlueprintPayloadScope(info, cfg, current)
+    if (resolvedScope) {
+      payload.scope = resolvedScope
+    }
     if (typeof cfg.createdAt === 'string' && cfg.createdAt.trim()) {
       payload.createdAt = cfg.createdAt.trim()
     }
     return this._resolveLocalBlueprintToAssetUrls(payload, { upload: uploadAssets })
+  }
+
+  _resolveBlueprintPayloadScope(info, cfg, current = null) {
+    const configuredScope = normalizeScopeValue(cfg?.scope)
+    const currentScope = getBlueprintScopeValue(current)
+    const fallbackScope =
+      normalizeScopeValue(info?.appName) ||
+      (info?.id === '$scene' ? '$scene' : normalizeScopeValue(info?.id))
+    return configuredScope || currentScope || fallbackScope
   }
 
   async _buildDeployPlan(
@@ -2121,20 +2134,35 @@ export class DirectAppServer {
     if (!summary.totalChanges) return
     if (options.dryRun) return
 
-    const snapshotIds = [...summary.adds, ...summary.updates]
-      .map(item => item.info?.id)
-      .filter(Boolean)
+    const snapshotItems = [...summary.adds, ...summary.updates]
+    const snapshotIds = snapshotItems.map(item => item.info?.id).filter(Boolean)
     const snapshotNote = note || process.env.DEPLOY_NOTE || null
-    const snapshotScopeSet = new Set(snapshotIds.map(deriveLockScopeFromBlueprintId))
-    let deployScope = appName
+    const snapshotScopeSet = new Set()
+    for (const item of snapshotItems) {
+      const id = item.info?.id || item.desired?.id || item.current?.id || 'unknown'
+      if (item.current) {
+        const currentScope = getBlueprintScopeValue(item.current)
+        if (!currentScope) {
+          throw new Error(`missing_blueprint_scope:${id}`)
+        }
+        snapshotScopeSet.add(currentScope)
+        continue
+      }
+      const desiredScope = getBlueprintScopeValue(item.desired)
+      if (!desiredScope) {
+        throw new Error(`missing_blueprint_scope:${id}`)
+      }
+      snapshotScopeSet.add(desiredScope)
+    }
+
+    let deployScope = 'global'
     if (snapshotScopeSet.size === 1) {
-      deployScope = snapshotScopeSet.values().next().value || appName
+      deployScope = snapshotScopeSet.values().next().value || 'global'
     } else if (snapshotScopeSet.size > 1) {
       const scopes = Array.from(snapshotScopeSet.values())
       console.warn(
         `⚠️  Deploy for ${appName} spans multiple blueprint scopes (${formatNameList(scopes)}); using a global deploy lock.`
       )
-      deployScope = null
     }
 
     await this._withDeployLock(async lock => {
@@ -2247,6 +2275,7 @@ export class DirectAppServer {
       console.error(`❌ Invalid blueprint config: ${info.configPath}`)
       return
     }
+    const current = this.snapshot?.blueprints?.get(info.id) || null
 
     const payload = {
       id: info.id,
@@ -2255,10 +2284,16 @@ export class DirectAppServer {
       ...this._buildScriptPayload(info, scriptInfo),
       ...pickBlueprintFields(cfg),
     }
+    const resolvedScope = this._resolveBlueprintPayloadScope(info, cfg, current)
+    if (resolvedScope) {
+      payload.scope = resolvedScope
+    }
+    if (typeof cfg.createdAt === 'string' && cfg.createdAt.trim()) {
+      payload.createdAt = cfg.createdAt.trim()
+    }
 
     const resolved = await this._resolveLocalBlueprintToAssetUrls(payload)
 
-    const current = this.snapshot?.blueprints?.get(info.id) || null
     if (!current) {
       resolved.version = 0
       await this.client.request('blueprint_add', { blueprint: resolved, lockToken })
@@ -2721,6 +2756,8 @@ export class DirectAppServer {
     const existingCreatedAt = typeof existing?.createdAt === 'string' ? existing.createdAt : null
     const createdAt = typeof blueprint.createdAt === 'string' ? blueprint.createdAt : existingCreatedAt
     if (typeof blueprint.id === 'string' && blueprint.id) output.id = blueprint.id
+    const scope = getBlueprintScopeValue(blueprint) || normalizeScopeValue(existing?.scope)
+    if (scope) output.scope = scope
     const scriptKey = typeof blueprint.script === 'string' ? blueprint.script.trim() : ''
     if (scriptKey) output.script = blueprint.script
     if (createdAt) output.createdAt = createdAt

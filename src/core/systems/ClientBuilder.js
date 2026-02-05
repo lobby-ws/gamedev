@@ -85,6 +85,12 @@ function hasScriptFields(data) {
   return false
 }
 
+function normalizeScope(value) {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed || null
+}
+
 /**
  * Builder System
  *
@@ -194,6 +200,14 @@ export class ClientBuilder extends System {
       this.world.emit('toast', 'Deploy lock required.')
       return
     }
+    if (code === 'scope_unknown') {
+      this.world.emit('toast', 'Scope metadata missing for deploy operation.')
+      return
+    }
+    if (code === 'scope_mismatch' || code === 'multi_scope_not_supported') {
+      this.world.emit('toast', 'Scope metadata mismatch for deploy operation.')
+      return
+    }
     if (code === 'locked' || code === 'deploy_locked') {
       const owner = err?.lock?.owner
       this.world.emit('toast', owner ? `Deploy locked by ${owner}.` : 'Deploy locked by another session.')
@@ -279,6 +293,7 @@ export class ClientBuilder extends System {
 
   async forkTemplateFromBlueprint(sourceBlueprint, actionLabel = 'Template fork', mergedProps, overrides) {
     if (!this.ensureAdminReady(actionLabel)) return null
+    const sourceScope = normalizeScope(sourceBlueprint.scope)
     const baseProps =
       sourceBlueprint.props &&
       typeof sourceBlueprint.props === 'object' &&
@@ -302,6 +317,7 @@ export class ClientBuilder extends System {
       scriptFiles: sourceBlueprint.scriptFiles ? cloneDeep(sourceBlueprint.scriptFiles) : sourceBlueprint.scriptFiles,
       scriptFormat: sourceBlueprint.scriptFormat,
       scriptRef: sourceBlueprint.scriptRef,
+      scope: sourceScope,
       props: cloneDeep(props),
       preload: sourceBlueprint.preload,
       public: sourceBlueprint.public,
@@ -315,16 +331,19 @@ export class ClientBuilder extends System {
       const { id: _id, version: _version, ...rest } = overrides
       Object.assign(blueprint, rest)
     }
+    if (hasScriptFields(blueprint) && !normalizeScope(blueprint.scope)) {
+      blueprint.scope = blueprint.id
+    }
     this.world.blueprints.add(blueprint)
     let lockToken
     let lockScope = null
     let releaseLock = false
     try {
       if (hasScriptFields(blueprint)) {
-        lockScope =
-          typeof blueprint.scriptRef === 'string' && blueprint.scriptRef.trim()
-            ? blueprint.scriptRef.trim()
-            : blueprint.id
+        lockScope = normalizeScope(blueprint.scope)
+        if (!lockScope) {
+          throw new Error('scope_unknown')
+        }
         const admin = this.world.admin
         const currentScope = admin?.deployLockScope || 'global'
         if (admin?.deployLockToken && (currentScope === 'global' || currentScope === lockScope)) {
@@ -1326,6 +1345,7 @@ export class ClientBuilder extends System {
         const change = {
           id: scene.id,
           version: scene.version + 1,
+          scope: normalizeScope(scene?.scope) || '$scene',
           name: info.blueprint.name,
           image: info.blueprint.image,
           author: info.blueprint.author,
@@ -1349,7 +1369,7 @@ export class ClientBuilder extends System {
         if (hasScriptFields(change)) {
           const result = await this.world.admin.acquireDeployLock({
             owner: this.world.network.id,
-            scope: '$scene',
+            scope: change.scope,
           })
           lockToken = result?.token || this.world.admin.deployLockToken
         }
@@ -1370,6 +1390,7 @@ export class ClientBuilder extends System {
       blueprint = {
         id: uuid(),
         version: 0,
+        scope: normalizeScope(info.blueprint.scope),
         name: info.blueprint.name,
         image: info.blueprint.image,
         author: info.blueprint.author,
@@ -1391,9 +1412,12 @@ export class ClientBuilder extends System {
         disabled: info.blueprint.disabled,
       }
       if (hasScriptFields(blueprint)) {
+        if (!normalizeScope(blueprint.scope)) {
+          blueprint.scope = blueprint.id
+        }
         const result = await this.world.admin.acquireDeployLock({
           owner: this.world.network.id,
-          scope: blueprint.id,
+          scope: blueprint.scope,
         })
         lockToken = result?.token || this.world.admin.deployLockToken
       }

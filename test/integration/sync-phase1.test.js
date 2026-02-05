@@ -83,6 +83,7 @@ test('phase 1 runtime metadata is present and stable across blueprint/entity upd
       await admin.request('blueprint_add', {
         blueprint: {
           id: blueprintId,
+          scope: 'phase1app',
           version: 0,
           name: 'Phase1 App',
           model: 'asset://Model.glb',
@@ -204,6 +205,7 @@ test('phase 1 app-server writes .lobby/sync-state.json baselines', async () => {
         await admin.request('blueprint_add', {
           blueprint: {
             id: blueprintId,
+            scope: 'phase1sync',
             version: 0,
             name: 'Phase1 Sync Blueprint',
             model: null,

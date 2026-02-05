@@ -381,15 +381,22 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
     return { ok: true }
   }
 
-  function deriveLockScopeFromBlueprintId(id) {
-    if (typeof id !== 'string' || !id.trim()) return 'global'
-    if (id === '$scene') return '$scene'
-    const idx = id.indexOf('__')
-    if (idx !== -1) {
-      const appName = id.slice(0, idx)
-      return appName ? appName : 'global'
-    }
-    return id
+  function normalizeMetadataScope(scope) {
+    if (typeof scope !== 'string') return null
+    const trimmed = scope.trim()
+    return trimmed || null
+  }
+
+  function getBlueprintMetadataScope(blueprint) {
+    if (!blueprint || typeof blueprint !== 'object') return null
+    return normalizeMetadataScope(blueprint.scope)
+  }
+
+  function resolveBlueprintScopeById(id) {
+    const normalizedId = normalizeOperationValue(id)
+    if (!normalizedId) return null
+    const blueprint = world.blueprints.get(normalizedId)
+    return getBlueprintMetadataScope(blueprint)
   }
 
   function hasScriptFields(data) {
@@ -402,10 +409,116 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
     return false
   }
 
-  function deriveScriptLockScope(data) {
-    const refId =
-      data && typeof data.scriptRef === 'string' && data.scriptRef.trim() ? data.scriptRef : data?.id
-    return deriveLockScopeFromBlueprintId(refId)
+  function resolveScriptOperationScope(data, currentBlueprint = null) {
+    if (!data || typeof data !== 'object') {
+      return { ok: false, error: 'scope_unknown' }
+    }
+    const explicitScope = getBlueprintMetadataScope(data)
+    const currentScope = getBlueprintMetadataScope(currentBlueprint)
+    const scriptRef = normalizeOperationValue(data.scriptRef)
+    const refScope = scriptRef ? resolveBlueprintScopeById(scriptRef) : null
+
+    if (explicitScope && currentScope && explicitScope !== currentScope) {
+      return {
+        ok: false,
+        error: 'scope_mismatch',
+        details: { requestedScope: explicitScope, currentScope },
+      }
+    }
+    if (explicitScope && refScope && explicitScope !== refScope) {
+      return {
+        ok: false,
+        error: 'scope_mismatch',
+        details: { requestedScope: explicitScope, refScope, refId: scriptRef },
+      }
+    }
+    if (currentScope && refScope && currentScope !== refScope) {
+      return {
+        ok: false,
+        error: 'scope_mismatch',
+        details: { currentScope, refScope, refId: scriptRef },
+      }
+    }
+
+    const resolvedScope = explicitScope || currentScope || refScope
+    if (!resolvedScope) {
+      const details = scriptRef ? { refId: scriptRef } : undefined
+      return { ok: false, error: 'scope_unknown', details }
+    }
+    return { ok: true, scope: resolvedScope }
+  }
+
+  function collectScopeSetFromBlueprintIds(ids) {
+    const list = Array.isArray(ids) ? ids : []
+    const scopeSet = new Set()
+    const unknown = []
+    const missing = []
+    for (const rawId of list) {
+      const id = normalizeOperationValue(rawId)
+      if (!id) continue
+      const blueprint = world.blueprints.get(id)
+      if (!blueprint) {
+        missing.push(id)
+        continue
+      }
+      const scope = getBlueprintMetadataScope(blueprint)
+      if (!scope) {
+        unknown.push(id)
+        continue
+      }
+      scopeSet.add(scope)
+    }
+    return { scopeSet, unknown, missing }
+  }
+
+  function collectScopeSetFromBlueprintList(blueprints) {
+    const list = Array.isArray(blueprints) ? blueprints : []
+    const scopeSet = new Set()
+    const unknown = []
+    for (const blueprint of list) {
+      const id = normalizeOperationValue(blueprint?.id) || 'unknown'
+      const scope = getBlueprintMetadataScope(blueprint)
+      if (!scope) {
+        unknown.push(id)
+        continue
+      }
+      scopeSet.add(scope)
+    }
+    return { scopeSet, unknown }
+  }
+
+  function validateScopedOperation(scopeSet, requestedScope) {
+    if (!(scopeSet instanceof Set) || scopeSet.size === 0) {
+      return { ok: true }
+    }
+    if (requestedScope === 'global') {
+      return { ok: true }
+    }
+    if (scopeSet.size > 1) {
+      return {
+        ok: false,
+        error: 'multi_scope_not_supported',
+        scopes: Array.from(scopeSet.values()),
+      }
+    }
+    const [scope] = Array.from(scopeSet.values())
+    if (scope !== requestedScope) {
+      return {
+        ok: false,
+        error: 'scope_mismatch',
+        scope: requestedScope,
+        scopes: [scope],
+      }
+    }
+    return { ok: true }
+  }
+
+  function resolveSnapshotScope(scopeSet, { hasExplicitScope, requestedScope } = {}) {
+    if (hasExplicitScope) return requestedScope
+    if (scopeSet instanceof Set && scopeSet.size === 1) {
+      return Array.from(scopeSet.values())[0]
+    }
+    return null
   }
 
   async function createDeploySnapshot({ ids, target, note, scope } = {}) {
@@ -605,8 +718,17 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
               return
             }
             if (hasScriptFields(data.blueprint)) {
-              const scope = deriveScriptLockScope(data.blueprint)
-              const lockCheck = ensureDeployLock(data?.lockToken, scope)
+              const scopeResult = resolveScriptOperationScope(data.blueprint)
+              if (!scopeResult.ok) {
+                sendPacket(ws, 'adminResult', {
+                  ok: false,
+                  error: scopeResult.error,
+                  details: scopeResult.details,
+                  requestId,
+                })
+                return
+              }
+              const lockCheck = ensureDeployLock(data?.lockToken, scopeResult.scope)
               if (!lockCheck.ok) {
                 sendPacket(ws, 'adminResult', {
                   ok: false,
@@ -650,8 +772,22 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
               return
             }
             if (hasScriptChange) {
-              const scope = deriveScriptLockScope(change)
-              const lockCheck = ensureDeployLock(data?.lockToken, scope)
+              const currentBlueprint = world.blueprints.get(change.id)
+              if (!currentBlueprint) {
+                sendPacket(ws, 'adminResult', { ok: false, error: 'not_found', requestId })
+                return
+              }
+              const scopeResult = resolveScriptOperationScope(change, currentBlueprint)
+              if (!scopeResult.ok) {
+                sendPacket(ws, 'adminResult', {
+                  ok: false,
+                  error: scopeResult.error,
+                  details: scopeResult.details,
+                  requestId,
+                })
+                return
+              }
+              const lockCheck = ensureDeployLock(data?.lockToken, scopeResult.scope)
               if (!lockCheck.ok) {
                 sendPacket(ws, 'adminResult', {
                   ok: false,
@@ -1005,19 +1141,23 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
 
   fastify.post('/admin/deploy-snapshots', async (req, reply) => {
     if (!requireDeploy(req, reply)) return
-    const scope = normalizeHeader(req.body?.scope)
-    const normalizedScope = normalizeLockScope(scope)
+    const rawScope = normalizeHeader(req.body?.scope)
+    const hasExplicitScope = typeof rawScope === 'string' && rawScope.trim()
+    const normalizedScope = normalizeLockScope(rawScope)
     const ids = req.body?.ids
-    const scopeSet = new Set()
-    if (Array.isArray(ids)) {
-      for (const id of ids) {
-        scopeSet.add(deriveLockScopeFromBlueprintId(id))
-      }
+    const { scopeSet, unknown } = collectScopeSetFromBlueprintIds(ids)
+    if (unknown.length > 0) {
+      return reply.code(400).send({ error: 'scope_unknown', ids: unknown })
     }
-    if (scopeSet.size > 1 && normalizedScope !== 'global') {
-      return reply.code(400).send({ error: 'multi_scope_not_supported' })
+    const scopeValidation = validateScopedOperation(scopeSet, normalizedScope)
+    if (!scopeValidation.ok) {
+      return reply.code(400).send(scopeValidation)
     }
-    const lockCheck = ensureDeployLock(req.body?.lockToken, scope)
+    const effectiveScope = resolveSnapshotScope(scopeSet, {
+      hasExplicitScope,
+      requestedScope: normalizedScope,
+    })
+    const lockCheck = ensureDeployLock(req.body?.lockToken, effectiveScope)
     if (!lockCheck.ok) {
       return reply.code(409).send({ error: lockCheck.error, lock: lockCheck.lock })
     }
@@ -1026,7 +1166,7 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
         ids,
         target: req.body?.target,
         note: req.body?.note,
-        scope,
+        scope: effectiveScope,
       })
       return { ok: true, ...result }
     } catch (err) {
@@ -1037,11 +1177,9 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
 
   fastify.post('/admin/deploy-snapshots/rollback', async (req, reply) => {
     if (!requireDeploy(req, reply)) return
-    const scope = normalizeHeader(req.body?.scope)
-    const lockCheck = ensureDeployLock(req.body?.lockToken, scope)
-    if (!lockCheck.ok) {
-      return reply.code(409).send({ error: lockCheck.error, lock: lockCheck.lock })
-    }
+    const rawScope = normalizeHeader(req.body?.scope)
+    const hasExplicitScope = typeof rawScope === 'string' && rawScope.trim()
+    const normalizedScope = normalizeLockScope(rawScope)
     try {
       const snapshotId = req.body?.id
       const row = snapshotId ? await getDeploySnapshotById(snapshotId) : await getLatestDeploySnapshot()
@@ -1049,6 +1187,26 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
         return reply.code(404).send({ error: 'not_found' })
       }
       const blueprints = JSON.parse(row.data || '[]')
+      const meta = row.meta ? JSON.parse(row.meta) : null
+      const { scopeSet, unknown } = collectScopeSetFromBlueprintList(blueprints)
+      if (unknown.length > 0) {
+        return reply.code(400).send({ error: 'scope_unknown', ids: unknown })
+      }
+      const scopeValidation = validateScopedOperation(scopeSet, normalizedScope)
+      if (!scopeValidation.ok) {
+        return reply.code(400).send(scopeValidation)
+      }
+      const metaScope = normalizeMetadataScope(meta?.scope)
+      const effectiveScope =
+        resolveSnapshotScope(scopeSet, {
+          hasExplicitScope,
+          requestedScope: normalizedScope,
+        }) || (!hasExplicitScope ? metaScope : null)
+      const lockCheck = ensureDeployLock(req.body?.lockToken, effectiveScope)
+      if (!lockCheck.ok) {
+        return reply.code(409).send({ error: lockCheck.error, lock: lockCheck.lock })
+      }
+
       const restored = []
       const failed = []
       for (const blueprint of blueprints) {

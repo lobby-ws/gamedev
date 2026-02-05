@@ -43,23 +43,13 @@ function createUid() {
   return `${uuid()}-${uuid()}-${uuid()}-${uuid()}`
 }
 
-export function deriveScopeFromBlueprintId(id) {
-  const normalized = normalizeString(id)
-  if (!normalized) return 'global'
-  if (normalized === '$scene') return '$scene'
-  const idx = normalized.indexOf('__')
-  if (idx === -1) return normalized
-  const appName = normalized.slice(0, idx).trim()
-  return appName || 'global'
-}
-
-function deriveScopeFromEntityData(entity, explicitScope) {
+function deriveScopeFromEntityData(entity, explicitScope, blueprintScope) {
   const normalizedScope = normalizeScope(explicitScope)
   if (normalizedScope) return normalizedScope
-  const blueprintId = normalizeString(entity?.blueprint)
-  if (blueprintId) return deriveScopeFromBlueprintId(blueprintId)
-  const entityId = normalizeString(entity?.id)
-  if (entityId) return deriveScopeFromBlueprintId(entityId)
+  const normalizedBlueprintScope = normalizeScope(blueprintScope)
+  if (normalizedBlueprintScope) return normalizedBlueprintScope
+  const entityScope = normalizeScope(entity?.scope)
+  if (entityScope) return entityScope
   return 'global'
 }
 
@@ -114,12 +104,12 @@ function normalizeMetadata(
 
 export function ensureBlueprintSyncMetadata(blueprint, options = {}) {
   if (!blueprint || typeof blueprint !== 'object') return blueprint
-  const scope = normalizeScope(options.scope) || deriveScopeFromBlueprintId(blueprint.id)
+  const scope = normalizeScope(options.scope) || normalizeScope(blueprint.scope) || 'global'
   return normalizeMetadata(blueprint, { ...options, defaultScope: scope })
 }
 
 export function ensureEntitySyncMetadata(entity, options = {}) {
   if (!entity || typeof entity !== 'object') return entity
-  const scope = deriveScopeFromEntityData(entity, options.scope || options.blueprintScope)
+  const scope = deriveScopeFromEntityData(entity, options.scope, options.blueprintScope)
   return normalizeMetadata(entity, { ...options, defaultScope: scope })
 }

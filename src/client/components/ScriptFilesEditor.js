@@ -86,15 +86,10 @@ function getLanguageForPath(path) {
   return languageByExt[ext] || 'javascript'
 }
 
-function deriveLockScopeFromBlueprintId(id) {
-  if (typeof id !== 'string' || !id.trim()) return 'global'
-  if (id === '$scene') return '$scene'
-  const idx = id.indexOf('__')
-  if (idx !== -1) {
-    const appName = id.slice(0, idx)
-    return appName ? appName : 'global'
-  }
-  return id
+function normalizeScope(value) {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed || null
 }
 
 function buildFileTree(paths) {
@@ -513,7 +508,11 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
           setError('Admin connection required.')
           return
         }
-        const scope = deriveLockScopeFromBlueprintId(scriptRoot.id)
+        const scope = normalizeScope(scriptRoot.scope)
+        if (!scope) {
+          setError('Script scope metadata is missing.')
+          return
+        }
         const result = await world.admin.acquireDeployLock({
           owner: world.network.id,
           scope,
@@ -1107,7 +1106,11 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         setError('Admin connection required.')
         return
       }
-      const scope = deriveLockScopeFromBlueprintId(scriptRoot.id)
+      const scope = normalizeScope(scriptRoot.scope)
+      if (!scope) {
+        setError('Script scope metadata is missing.')
+        return
+      }
       const result = await world.admin.acquireDeployLock({
         owner: world.network.id,
         scope,
@@ -1278,7 +1281,11 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
           setError('Admin connection required.')
           return false
         }
-        const scope = deriveLockScopeFromBlueprintId(scriptRoot.id)
+        const scope = normalizeScope(scriptRoot.scope)
+        if (!scope) {
+          setError('Script scope metadata is missing.')
+          return false
+        }
         const result = await world.admin.acquireDeployLock({
           owner: world.network.id,
           scope,

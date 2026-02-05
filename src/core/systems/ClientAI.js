@@ -14,17 +14,6 @@ const PLACEHOLDER_SCRIPT = `export default (world, app, fetch, props, setTimeout
 `
 const DEFAULT_ENTRY = 'index.js'
 
-function deriveLockScopeFromBlueprintId(id) {
-  if (typeof id !== 'string' || !id.trim()) return 'global'
-  if (id === '$scene') return '$scene'
-  const idx = id.indexOf('__')
-  if (idx !== -1) {
-    const appName = id.slice(0, idx)
-    return appName ? appName : 'global'
-  }
-  return id
-}
-
 function normalizePrompt(value) {
   if (typeof value !== 'string') return ''
   return value.trim()
@@ -102,7 +91,7 @@ export class ClientAI extends System {
     let app = null
     try {
       const blueprintId = uuid()
-      const scope = deriveLockScopeFromBlueprintId(blueprintId)
+      const scope = blueprintId
       const lockResult = await this.world.admin.acquireDeployLock({
         owner: this.world.network.id,
         scope,
@@ -122,6 +111,7 @@ export class ClientAI extends System {
       const scriptFiles = { [entryPath]: scriptUrl }
       blueprint = {
         id: blueprintId,
+        scope,
         version: 0,
         name: 'AI Draft',
         image: null,
