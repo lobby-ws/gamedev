@@ -251,7 +251,6 @@ export class ClientBuilder extends System {
   }
 
   async forkTemplateFromEntity(entity, actionLabel = 'Template fork') {
-    if (!this.ensureAdminReady(actionLabel)) return null
     const baseProps =
       entity.blueprint.props && typeof entity.blueprint.props === 'object' && !Array.isArray(entity.blueprint.props)
         ? entity.blueprint.props
@@ -261,29 +260,42 @@ export class ClientBuilder extends System {
         ? entity.data.props
         : {}
     const mergedProps = merge({}, baseProps, instanceProps)
-    const nextBlueprint = getNextBlueprintVariant(this.world, entity.blueprint.id)
+    return this.forkTemplateFromBlueprint(entity.blueprint, actionLabel, mergedProps)
+  }
+
+  async forkTemplateFromBlueprint(sourceBlueprint, actionLabel = 'Template fork', mergedProps) {
+    if (!this.ensureAdminReady(actionLabel)) return null
+    const baseProps =
+      sourceBlueprint.props &&
+      typeof sourceBlueprint.props === 'object' &&
+      !Array.isArray(sourceBlueprint.props)
+        ? sourceBlueprint.props
+        : {}
+    const props =
+      mergedProps && typeof mergedProps === 'object' && !Array.isArray(mergedProps) ? mergedProps : baseProps
+    const nextBlueprint = getNextBlueprintVariant(this.world, sourceBlueprint.id)
     const blueprint = {
       id: nextBlueprint.id,
       version: 0,
       name: nextBlueprint.name,
-      image: entity.blueprint.image,
-      author: entity.blueprint.author,
-      url: entity.blueprint.url,
-      desc: entity.blueprint.desc,
-      model: entity.blueprint.model,
-      script: entity.blueprint.script,
-      scriptEntry: entity.blueprint.scriptEntry,
-      scriptFiles: entity.blueprint.scriptFiles ? cloneDeep(entity.blueprint.scriptFiles) : entity.blueprint.scriptFiles,
-      scriptFormat: entity.blueprint.scriptFormat,
-      scriptRef: entity.blueprint.scriptRef,
-      props: cloneDeep(mergedProps),
-      preload: entity.blueprint.preload,
-      public: entity.blueprint.public,
-      locked: entity.blueprint.locked,
-      frozen: entity.blueprint.frozen,
-      unique: entity.blueprint.unique,
-      scene: entity.blueprint.scene,
-      disabled: entity.blueprint.disabled,
+      image: sourceBlueprint.image,
+      author: sourceBlueprint.author,
+      url: sourceBlueprint.url,
+      desc: sourceBlueprint.desc,
+      model: sourceBlueprint.model,
+      script: sourceBlueprint.script,
+      scriptEntry: sourceBlueprint.scriptEntry,
+      scriptFiles: sourceBlueprint.scriptFiles ? cloneDeep(sourceBlueprint.scriptFiles) : sourceBlueprint.scriptFiles,
+      scriptFormat: sourceBlueprint.scriptFormat,
+      scriptRef: sourceBlueprint.scriptRef,
+      props: cloneDeep(props),
+      preload: sourceBlueprint.preload,
+      public: sourceBlueprint.public,
+      locked: sourceBlueprint.locked,
+      frozen: sourceBlueprint.frozen,
+      unique: sourceBlueprint.unique,
+      scene: sourceBlueprint.scene,
+      disabled: sourceBlueprint.disabled,
     }
     this.world.blueprints.add(blueprint)
     let lockToken

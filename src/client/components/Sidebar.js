@@ -1211,15 +1211,20 @@ function Add({ world, hidden }) {
     [updateCreateMention]
   )
 
-  const add = blueprint => {
+  const add = async blueprint => {
     const transform = world.builder.getSpawnTransform(true)
     world.builder.toggle(true)
     world.builder.control.pointer.lock()
+    let spawnBlueprint = blueprint
+    if (blueprint.unique) {
+      spawnBlueprint = await world.builder.forkTemplateFromBlueprint(blueprint, 'Add')
+      if (!spawnBlueprint) return
+    }
     setTimeout(() => {
       const data = {
         id: uuid(),
         type: 'app',
-        blueprint: blueprint.id,
+        blueprint: spawnBlueprint.id,
         position: transform.position,
         quaternion: transform.quaternion,
         scale: [1, 1, 1],
@@ -1263,7 +1268,7 @@ function Add({ world, hidden }) {
     if (trashMode) {
       remove(blueprint)
     } else {
-      add(blueprint)
+      void add(blueprint)
     }
   }
 
