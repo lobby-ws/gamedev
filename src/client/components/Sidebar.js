@@ -1367,7 +1367,8 @@ function Add({ world, hidden }) {
           border-radius: 1.375rem;
           display: flex;
           flex-direction: column;
-          min-height: 17rem;
+          min-height: 22rem;
+          max-height: 22rem;
           position: relative;
           .add-head {
             height: 3.125rem;
@@ -1456,6 +1457,9 @@ function Add({ world, hidden }) {
           .add-item-name {
             text-align: center;
             font-size: 0.875rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
           }
           .add-orphans {
             display: flex;
@@ -1723,7 +1727,7 @@ function Add({ world, hidden }) {
               className={cls('add-tab', { active: tab === 'orphans' })}
               onClick={() => switchTab('orphans')}
             >
-              Orphans
+              Recycle Bin
             </button>
           </div>
           {tab === 'templates' && (
@@ -1754,7 +1758,7 @@ function Add({ world, hidden }) {
                         ${imageUrl ? `background-image: url(${world.resolveURL(imageUrl)});` : ''}
                       `}
                     ></div>
-                    <div className='add-item-name'>{blueprint.name || blueprint.id}</div>
+                    <div className='add-item-name' title={blueprint.name || blueprint.id}>{blueprint.name || blueprint.id}</div>
                   </div>
                 )
               })}
@@ -1762,7 +1766,7 @@ function Add({ world, hidden }) {
           ) : (
             <div className='add-orphans'>
               <div className='add-orphans-head'>
-                <div className='add-orphans-title'>Orphans ({orphans.length})</div>
+                <div className='add-orphans-title'>Recycle Bin ({orphans.length})</div>
                 <button
                   type='button'
                   className='add-orphans-clean'
@@ -1789,7 +1793,7 @@ function Add({ world, hidden }) {
                   ))}
                 </div>
               ) : (
-                <div className='add-orphans-empty'>No orphaned blueprints.</div>
+                <div className='add-orphans-empty'>Recycle bin is empty.</div>
               )}
             </div>
           )}
