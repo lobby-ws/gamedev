@@ -34,6 +34,8 @@ const SCRIPT_DIR_SKIP = new Set(['.git', 'node_modules'])
 const SHARED_DIR_NAME = 'shared'
 const SHARED_IMPORT_PREFIX = '@shared/'
 const SHARED_IMPORT_ALIAS = 'shared/'
+const CHANGEFEED_PAGE_LIMIT = 500
+const CHANGEFEED_MAX_PAGES = 20
 
 function sha256(buffer) {
   return crypto.createHash('sha256').update(buffer).digest('hex')
@@ -756,6 +758,24 @@ class WorldAdminClient extends EventEmitter {
     return res.json()
   }
 
+  async getChanges({ cursor, limit } = {}) {
+    const params = new URLSearchParams()
+    if (cursor !== undefined && cursor !== null && cursor !== '') {
+      params.set('cursor', String(cursor))
+    }
+    if (typeof limit === 'number' && Number.isFinite(limit) && limit > 0) {
+      params.set('limit', String(Math.floor(limit)))
+    }
+    const suffix = params.size > 0 ? `?${params.toString()}` : ''
+    const res = await fetch(joinUrl(this.httpBase, `/admin/changes${suffix}`), {
+      headers: this.adminHeaders(),
+    })
+    if (!res.ok) {
+      throw new Error(`changes_failed:${res.status}`)
+    }
+    return res.json()
+  }
+
   async getBlueprint(id) {
     const res = await fetch(joinUrl(this.httpBase, `/admin/blueprints/${encodeURIComponent(id)}`), {
       headers: this.adminHeaders(),
@@ -952,6 +972,7 @@ export class DirectAppServer {
     this.snapshot = null
     this.syncState = this._readSyncState()
     this.loggedTarget = false
+    this.loggedChangefeedWarning = false
     this.scriptFormatWarnings = new Set()
   }
 
@@ -961,6 +982,18 @@ export class DirectAppServer {
     this.assetsUrl = snapshot.assetsUrl
     this._validateWorldId(snapshot.worldId)
     this._initSnapshot(snapshot)
+    try {
+      await this._syncCursorFromChangefeed()
+    } catch (err) {
+      const message = err?.message || ''
+      if (!message.startsWith('changes_failed:')) {
+        throw err
+      }
+      if (!this.loggedChangefeedWarning) {
+        console.warn(`⚠️  Changefeed unavailable (${message}); continuing without cursor sync.`)
+        this.loggedChangefeedWarning = true
+      }
+    }
     return snapshot
   }
 
@@ -1075,6 +1108,50 @@ export class DirectAppServer {
     next.updatedAt = nowIso
     this.syncState = next
     this._writeFileAtomic(this.syncStateFile, JSON.stringify(next, null, 2) + '\n')
+  }
+
+  _setSyncCursor(cursor) {
+    const normalized = normalizeSyncCursor(cursor)
+    if (!this.syncState || typeof this.syncState !== 'object') return
+    if (isEqual(this.syncState.cursor, normalized)) return
+    const nowIso = new Date().toISOString()
+    const next = {
+      ...this.syncState,
+      cursor: normalized,
+      updatedAt: nowIso,
+    }
+    this.syncState = next
+    this._writeFileAtomic(this.syncStateFile, JSON.stringify(next, null, 2) + '\n')
+  }
+
+  async _syncCursorFromChangefeed({ limit = CHANGEFEED_PAGE_LIMIT, maxPages = CHANGEFEED_MAX_PAGES } = {}) {
+    if (!this.snapshot?.worldId) return
+    const initialCursor = normalizeSyncCursor(this.syncState?.cursor)
+    let cursor = initialCursor
+    let pages = 0
+    let sawOperation = false
+
+    while (pages < maxPages) {
+      const response = await this.client.getChanges({ cursor, limit })
+      const operations = Array.isArray(response?.operations) ? response.operations : []
+      if (operations.length > 0) sawOperation = true
+      const nextCursor = normalizeSyncCursor(response?.cursor)
+      if (nextCursor !== null) {
+        if (nextCursor === cursor && operations.length >= limit) {
+          break
+        }
+        cursor = nextCursor
+      }
+      pages += 1
+      if (operations.length < limit) break
+    }
+
+    if (!sawOperation && initialCursor == null && cursor === 0) {
+      this._setSyncCursor(null)
+      return
+    }
+
+    this._setSyncCursor(cursor)
   }
 
   async start() {
@@ -1321,7 +1398,7 @@ export class DirectAppServer {
 
   _getScriptPath(appName) {
     const appPath = path.join(this.appsDir, appName)
-    const tsPath = path.join(appPath, 'index.js')
+    const tsPath = path.join(appPath, 'index.ts')
     const jsPath = path.join(appPath, 'index.js')
     if (fs.existsSync(tsPath)) return tsPath
     if (fs.existsSync(jsPath)) return jsPath

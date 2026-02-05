@@ -714,4 +714,26 @@ const migrations = [
       }
     }
   },
+  // add durable sync changefeed table
+  async db => {
+    const exists = await db.schema.hasTable('sync_changes')
+    if (exists) return
+    await db.schema.createTable('sync_changes', table => {
+      table.bigIncrements('cursor').primary()
+      table.string('opId').notNullable().unique()
+      table.timestamp('ts').notNullable()
+      table.string('actor').notNullable()
+      table.string('source').notNullable()
+      table.string('kind').notNullable()
+      table.string('objectUid').notNullable()
+      table.text('patch')
+      table.text('snapshot')
+      table.timestamp('createdAt').notNullable()
+    })
+    await db.schema.alterTable('sync_changes', table => {
+      table.index(['ts'])
+      table.index(['kind'])
+      table.index(['objectUid'])
+    })
+  },
 ]

@@ -1278,7 +1278,7 @@ export class ClientBuilder extends System {
   }
 
   async addApp(file, transform) {
-    if (!this.ensureAdminReady('Import')) return
+    if (typeof this.ensureAdminReady === 'function' && !this.ensureAdminReady('Import')) return
     let lockToken = null
     let blueprint = null
     let app = null

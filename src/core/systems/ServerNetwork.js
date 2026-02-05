@@ -59,6 +59,26 @@ function applySyncMetadata(target, source) {
   target.lastOpId = source.lastOpId
 }
 
+function normalizeIsoTimestamp(value, fallback) {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (trimmed) {
+      const parsed = Date.parse(trimmed)
+      if (Number.isFinite(parsed)) return new Date(parsed).toISOString()
+    }
+  }
+  return fallback
+}
+
+function cloneOperationPayload(value) {
+  if (value === undefined) return undefined
+  try {
+    return JSON.parse(JSON.stringify(value))
+  } catch {
+    return null
+  }
+}
+
 /**
  * Server Network System
  *
@@ -194,6 +214,36 @@ export class ServerNetwork extends System {
 
   getTime() {
     return performance.now() / 1000 // seconds
+  }
+
+  createOperationMetadata({ actor, source, lastOpId } = {}, now = moment().toISOString()) {
+    return {
+      opId: normalizeMetadataString(lastOpId, uuid()),
+      ts: normalizeIsoTimestamp(now, moment().toISOString()),
+      actor: normalizeMetadataString(actor, 'runtime'),
+      source: normalizeMetadataString(source, 'runtime'),
+    }
+  }
+
+  emitOperation({ kind, objectUid, patch, snapshot, opId, actor, source, ts } = {}) {
+    const normalizedKind = normalizeMetadataString(kind, null)
+    const normalizedObjectUid = normalizeMetadataString(objectUid, null)
+    if (!normalizedKind || !normalizedObjectUid) return
+    const payload = {
+      opId: normalizeMetadataString(opId, uuid()),
+      ts: normalizeIsoTimestamp(ts, moment().toISOString()),
+      actor: normalizeMetadataString(actor, 'runtime'),
+      source: normalizeMetadataString(source, 'runtime'),
+      kind: normalizedKind,
+      objectUid: normalizedObjectUid,
+    }
+    if (patch !== undefined) {
+      payload.patch = cloneOperationPayload(patch)
+    }
+    if (snapshot !== undefined) {
+      payload.snapshot = cloneOperationPayload(snapshot)
+    }
+    this.emit('operation', payload)
   }
 
   save = async () => {
@@ -529,6 +579,7 @@ export class ServerNetwork extends System {
 
   applyBlueprintAdded(blueprint, { ignoreNetworkId, actor, source, lastOpId } = {}) {
     const now = moment().toISOString()
+    const operation = this.createOperationMetadata({ actor, source, lastOpId }, now)
     if (!blueprint.createdAt) {
       blueprint.createdAt = now
     }
@@ -540,14 +591,21 @@ export class ServerNetwork extends System {
       now,
       updatedBy: normalizeMetadataString(actor, 'runtime'),
       updateSource: normalizeMetadataString(source, 'runtime'),
-      lastOpId,
+      lastOpId: operation.opId,
     })
     const validation = validateBlueprintScriptFields(blueprint)
     if (!validation.ok) return validation
     this.world.blueprints.add(blueprint)
     this.send('blueprintAdded', blueprint, ignoreNetworkId)
     this.dirtyBlueprints.add(blueprint.id)
-    this.emit('blueprintAdded', blueprint)
+    const added = this.world.blueprints.get(blueprint.id) || blueprint
+    this.emit('blueprintAdded', added)
+    this.emitOperation({
+      ...operation,
+      kind: 'blueprint.add',
+      objectUid: added?.uid || added?.id || blueprint.id,
+      snapshot: added,
+    })
     return { ok: true }
   }
 
@@ -561,6 +619,7 @@ export class ServerNetwork extends System {
     // if new version is greater than current version, allow it
     if (change.version > blueprint.version) {
       const now = moment().toISOString()
+      const operation = this.createOperationMetadata({ actor, source, lastOpId }, now)
       const createdAt = blueprint.createdAt || change.createdAt || moment().toISOString()
       const nextChange = { ...change, createdAt }
       if (blueprint.keep === undefined && nextChange.keep === undefined) {
@@ -572,7 +631,7 @@ export class ServerNetwork extends System {
         now,
         updatedBy: normalizeMetadataString(actor, 'runtime'),
         updateSource: normalizeMetadataString(source, 'runtime'),
-        lastOpId,
+        lastOpId: operation.opId,
       })
       const nextChangeWithSync = { ...nextChange }
       applySyncMetadata(nextChangeWithSync, merged)
@@ -582,6 +641,13 @@ export class ServerNetwork extends System {
       const updated = this.world.blueprints.get(change.id)
       if (updated) {
         this.emit('blueprintModified', updated)
+        this.emitOperation({
+          ...operation,
+          kind: 'blueprint.update',
+          objectUid: updated.uid || updated.id || change.id,
+          patch: nextChangeWithSync,
+          snapshot: updated,
+        })
       }
       return { ok: true }
     }
@@ -592,7 +658,7 @@ export class ServerNetwork extends System {
     return { ok: false, error: 'version_mismatch', current: blueprint }
   }
 
-  applyBlueprintRemoved = async ({ id }, { ignoreNetworkId } = {}) => {
+  applyBlueprintRemoved = async ({ id }, { ignoreNetworkId, actor, source, lastOpId } = {}) => {
     if (!id) return { ok: false, error: 'invalid_payload' }
     const blueprint = this.world.blueprints.get(id)
     if (!blueprint) return { ok: false, error: 'not_found' }
@@ -601,28 +667,45 @@ export class ServerNetwork extends System {
         return { ok: false, error: 'in_use' }
       }
     }
+    const operation = this.createOperationMetadata({ actor, source, lastOpId })
     this.world.blueprints.remove(id)
     this.send('blueprintRemoved', { id }, ignoreNetworkId)
     this.dirtyBlueprints.delete(id)
     await this.db('blueprints').where('id', id).delete()
+    this.emit('blueprintRemoved', { id })
+    this.emitOperation({
+      ...operation,
+      kind: 'blueprint.remove',
+      objectUid: blueprint.uid || blueprint.id || id,
+      patch: { id },
+      snapshot: blueprint,
+    })
     return { ok: true }
   }
 
   applyEntityAdded(data, { ignoreNetworkId, actor, source, lastOpId } = {}) {
     const nextData = data && typeof data === 'object' ? { ...data } : data
+    const operation =
+      nextData?.type === 'app' ? this.createOperationMetadata({ actor, source, lastOpId }, moment().toISOString()) : null
     if (nextData?.type === 'app') {
       ensureEntitySyncMetadata(nextData, {
         touch: true,
         now: moment().toISOString(),
         updatedBy: normalizeMetadataString(actor, 'runtime'),
         updateSource: normalizeMetadataString(source, 'runtime'),
-        lastOpId,
+        lastOpId: operation?.opId,
       })
     }
     const entity = this.world.entities.add(nextData)
     this.send('entityAdded', nextData, ignoreNetworkId)
     if (entity?.isApp) {
       this.dirtyApps.add(entity.data.id)
+      this.emitOperation({
+        ...operation,
+        kind: 'entity.add',
+        objectUid: entity.data.uid || entity.data.id,
+        snapshot: entity.data,
+      })
     }
     if (entity) {
       this.emit('entityAdded', entity.data)
@@ -640,6 +723,7 @@ export class ServerNetwork extends System {
       }
     }
     let nextData = data
+    const operation = entity.isApp ? this.createOperationMetadata({ actor, source, lastOpId }, moment().toISOString()) : null
     if (entity.isApp) {
       const merged = { ...entity.data, ...data }
       ensureEntitySyncMetadata(merged, {
@@ -647,7 +731,7 @@ export class ServerNetwork extends System {
         now: moment().toISOString(),
         updatedBy: normalizeMetadataString(actor, 'runtime'),
         updateSource: normalizeMetadataString(source, 'runtime'),
-        lastOpId,
+        lastOpId: operation?.opId,
       })
       nextData = { ...data }
       applySyncMetadata(nextData, merged)
@@ -661,6 +745,13 @@ export class ServerNetwork extends System {
     this.send('entityModified', nextData, ignoreNetworkId)
     if (entity.isApp) {
       this.dirtyApps.add(entity.data.id)
+      this.emitOperation({
+        ...operation,
+        kind: 'entity.update',
+        objectUid: entity.data.uid || entity.data.id,
+        patch: nextData,
+        snapshot: entity.data,
+      })
     }
     if (entity.isPlayer) {
       const changes = {}
@@ -705,25 +796,40 @@ export class ServerNetwork extends System {
     return { ok: true }
   }
 
-  applyEntityRemoved(id, { ignoreNetworkId } = {}) {
+  applyEntityRemoved(id, { ignoreNetworkId, actor, source, lastOpId } = {}) {
     const entity = this.world.entities.get(id)
+    const operation = entity?.isApp ? this.createOperationMetadata({ actor, source, lastOpId }) : null
     this.world.entities.remove(id)
     this.send('entityRemoved', id, ignoreNetworkId)
     if (entity?.isApp) {
       this.dirtyApps.add(id)
+      this.emitOperation({
+        ...operation,
+        kind: 'entity.remove',
+        objectUid: entity.data.uid || entity.data.id || id,
+        patch: { id },
+        snapshot: entity.data,
+      })
     }
     this.emit('entityRemoved', id)
     return { ok: true }
   }
 
-  applySettingsModified(data, { ignoreNetworkId } = {}) {
+  applySettingsModified(data, { ignoreNetworkId, actor, source, lastOpId } = {}) {
     this.world.settings.set(data.key, data.value)
     this.send('settingsModified', data, ignoreNetworkId)
     this.emit('settingsModified', data)
+    const operation = this.createOperationMetadata({ actor, source, lastOpId })
+    this.emitOperation({
+      ...operation,
+      kind: 'settings.update',
+      objectUid: `world:settings:${data.key}`,
+      patch: data,
+    })
     return { ok: true }
   }
 
-  applySpawnSet = async ({ position, quaternion }) => {
+  applySpawnSet = async ({ position, quaternion }, { actor, source, lastOpId } = {}) => {
     if (!isNumberArray(position, 3) || !isNumberArray(quaternion, 4)) {
       return { ok: false, error: 'invalid_payload' }
     }
@@ -739,10 +845,17 @@ export class ServerNetwork extends System {
         value,
       })
     this.send('spawnModified', this.spawn)
+    const operation = this.createOperationMetadata({ actor, source, lastOpId })
+    this.emitOperation({
+      ...operation,
+      kind: 'spawn.update',
+      objectUid: 'world:spawn',
+      snapshot: this.spawn,
+    })
     return { ok: true, spawn: this.spawn }
   }
 
-  applySpawnModified = async ({ op, networkId }) => {
+  applySpawnModified = async ({ op, networkId }, { actor, source, lastOpId } = {}) => {
     if (op === 'set') {
       const player = this.world.entities.get(networkId)
       if (!player || !player.isPlayer) return { ok: false, error: 'player_not_found' }
@@ -764,6 +877,14 @@ export class ServerNetwork extends System {
       })
     this.send('spawnModified', this.spawn)
     this.emit('spawnModified', this.spawn)
+    const operation = this.createOperationMetadata({ actor, source, lastOpId })
+    this.emitOperation({
+      ...operation,
+      kind: 'spawn.update',
+      objectUid: 'world:spawn',
+      patch: { op },
+      snapshot: this.spawn,
+    })
     return { ok: true }
   }
 

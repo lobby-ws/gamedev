@@ -11,6 +11,9 @@ const SCRIPT_BLUEPRINT_FIELDS = new Set([
   'scriptFormat',
   'scriptRef',
 ])
+const CHANGEFEED_TABLE = 'sync_changes'
+const CHANGEFEED_DEFAULT_LIMIT = 200
+const CHANGEFEED_MAX_LIMIT = 1000
 
 function normalizeHeader(value) {
   if (Array.isArray(value)) return value[0]
@@ -21,6 +24,151 @@ function normalizeOperationValue(value) {
   if (typeof value !== 'string') return null
   const trimmed = value.trim()
   return trimmed || null
+}
+
+function normalizeIsoTimestamp(value) {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const parsed = Date.parse(trimmed)
+  if (!Number.isFinite(parsed)) return null
+  return new Date(parsed).toISOString()
+}
+
+function toCursorNumber(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.max(0, Math.floor(value))
+  }
+  if (typeof value === 'bigint') {
+    const asNumber = Number(value)
+    if (Number.isFinite(asNumber)) {
+      return Math.max(0, Math.floor(asNumber))
+    }
+    return 0
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return 0
+    if (!/^\d+$/.test(trimmed)) return 0
+    const parsed = Number.parseInt(trimmed, 10)
+    return Number.isFinite(parsed) ? Math.max(0, parsed) : 0
+  }
+  return 0
+}
+
+function parseChangefeedCursor(value) {
+  if (value === undefined || value === null) {
+    return { ok: true, mode: 'head', cursor: null }
+  }
+  const normalized = typeof value === 'string' ? value.trim() : value
+  if (normalized === '') {
+    return { ok: true, mode: 'head', cursor: null }
+  }
+  if (typeof normalized === 'string' && normalized.toLowerCase() === 'latest') {
+    return { ok: true, mode: 'head', cursor: null }
+  }
+  if (typeof normalized === 'number' && Number.isFinite(normalized) && Number.isInteger(normalized) && normalized >= 0) {
+    return { ok: true, mode: 'after', cursor: normalized }
+  }
+  if (typeof normalized === 'string' && /^\d+$/.test(normalized)) {
+    const cursor = Number.parseInt(normalized, 10)
+    return { ok: true, mode: 'after', cursor }
+  }
+  return { ok: false, error: 'invalid_cursor' }
+}
+
+function parseChangefeedLimit(value) {
+  if (value === undefined || value === null || value === '') {
+    return { ok: true, limit: CHANGEFEED_DEFAULT_LIMIT }
+  }
+  const normalized = typeof value === 'string' ? value.trim() : value
+  if (typeof normalized === 'number' && Number.isFinite(normalized) && Number.isInteger(normalized)) {
+    if (normalized < 1 || normalized > CHANGEFEED_MAX_LIMIT) {
+      return { ok: false, error: 'invalid_limit' }
+    }
+    return { ok: true, limit: normalized }
+  }
+  if (typeof normalized === 'string' && /^\d+$/.test(normalized)) {
+    const parsed = Number.parseInt(normalized, 10)
+    if (parsed < 1 || parsed > CHANGEFEED_MAX_LIMIT) {
+      return { ok: false, error: 'invalid_limit' }
+    }
+    return { ok: true, limit: parsed }
+  }
+  return { ok: false, error: 'invalid_limit' }
+}
+
+function parseChangePayload(value) {
+  if (typeof value !== 'string') return null
+  try {
+    return JSON.parse(value)
+  } catch {
+    return null
+  }
+}
+
+function serializeChangePayload(value) {
+  if (value === undefined) return null
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return null
+  }
+}
+
+function serializeChangeRow(operation) {
+  if (!operation || typeof operation !== 'object') return null
+  const opId = normalizeOperationValue(operation.opId)
+  const kind = normalizeOperationValue(operation.kind)
+  const objectUid = normalizeOperationValue(operation.objectUid)
+  if (!opId || !kind || !objectUid) return null
+  const ts = normalizeIsoTimestamp(operation.ts) || new Date().toISOString()
+  const actor = normalizeOperationValue(operation.actor) || 'runtime'
+  const source = normalizeOperationValue(operation.source) || 'runtime'
+  return {
+    opId,
+    ts,
+    actor,
+    source,
+    kind,
+    objectUid,
+    patch: serializeChangePayload(operation.patch),
+    snapshot: serializeChangePayload(operation.snapshot),
+    createdAt: ts,
+  }
+}
+
+function deserializeChangeRow(row) {
+  if (!row || typeof row !== 'object') return null
+  const opId = normalizeOperationValue(row.opId)
+  const kind = normalizeOperationValue(row.kind)
+  const objectUid = normalizeOperationValue(row.objectUid)
+  if (!opId || !kind || !objectUid) return null
+  const op = {
+    cursor: toCursorNumber(row.cursor),
+    opId,
+    ts: normalizeIsoTimestamp(typeof row.ts === 'string' ? row.ts : row.ts?.toISOString?.()) || new Date().toISOString(),
+    actor: normalizeOperationValue(row.actor) || 'runtime',
+    source: normalizeOperationValue(row.source) || 'runtime',
+    kind,
+    objectUid,
+  }
+  if (row.patch !== null && row.patch !== undefined) {
+    op.patch = parseChangePayload(row.patch)
+  }
+  if (row.snapshot !== null && row.snapshot !== undefined) {
+    op.snapshot = parseChangePayload(row.snapshot)
+  }
+  return op
+}
+
+function isUniqueConstraintError(err) {
+  const code = normalizeOperationValue(err?.code)
+  if (code === '23505' || code === 'SQLITE_CONSTRAINT' || code === 'SQLITE_CONSTRAINT_UNIQUE') {
+    return true
+  }
+  const message = (err?.message || '').toString()
+  return /unique|constraint/i.test(message)
 }
 
 function isCodeValid(expected, code) {
@@ -76,6 +224,7 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
   const playerSubscribers = new Set()
   const runtimeSubscribers = new Set()
   const db = world?.network?.db
+  let changefeedWriteQueue = Promise.resolve()
   const deployLocks = new Map()
   const lockTtlSeconds = Number.parseInt(process.env.DEPLOY_LOCK_TTL || '120', 10)
   const lockTtlMs = Number.isFinite(lockTtlSeconds) && lockTtlSeconds > 0 ? lockTtlSeconds * 1000 : 120000
@@ -90,6 +239,37 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
     for (const ws of playerSubscribers) {
       sendPacket(ws, name, payload)
     }
+  }
+
+  function broadcastRuntime(name, payload) {
+    for (const ws of runtimeSubscribers) {
+      sendPacket(ws, name, payload)
+    }
+  }
+
+  function queueChangefeedOperation(operation) {
+    if (!db) return
+    const row = serializeChangeRow(operation)
+    if (!row) return
+    changefeedWriteQueue = changefeedWriteQueue
+      .then(async () => {
+        try {
+          await db(CHANGEFEED_TABLE).insert(row).onConflict('opId').ignore()
+        } catch (err) {
+          if (!isUniqueConstraintError(err)) {
+            throw err
+          }
+        }
+      })
+      .catch(err => {
+        console.error('[admin] changefeed insert failed', err)
+      })
+  }
+
+  async function getChangefeedHeadCursor() {
+    if (!db) return 0
+    const row = await db(CHANGEFEED_TABLE).max({ cursor: 'cursor' }).first()
+    return toCursorNumber(row?.cursor)
   }
 
   function requireAdmin(req, reply) {
@@ -212,15 +392,15 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
     return id
   }
 
-function hasScriptFields(data) {
-  if (!data || typeof data !== 'object') return false
-  for (const field of SCRIPT_BLUEPRINT_FIELDS) {
-    if (!Object.prototype.hasOwnProperty.call(data, field)) continue
-    if (field === 'script' && data.script === '') continue
-    return true
+  function hasScriptFields(data) {
+    if (!data || typeof data !== 'object') return false
+    for (const field of SCRIPT_BLUEPRINT_FIELDS) {
+      if (!Object.prototype.hasOwnProperty.call(data, field)) continue
+      if (field === 'script' && data.script === '') continue
+      return true
+    }
+    return false
   }
-  return false
-}
 
   function deriveScriptLockScope(data) {
     const refId =
@@ -304,6 +484,9 @@ function hasScriptFields(data) {
   world.network.on('blueprintModified', data => {
     broadcast('blueprintModified', data)
   })
+  world.network.on('blueprintRemoved', data => {
+    broadcast('blueprintRemoved', data)
+  })
   world.network.on('settingsModified', data => {
     broadcast('settingsModified', data)
   })
@@ -318,6 +501,10 @@ function hasScriptFields(data) {
   })
   world.network.on('playerLeft', data => {
     broadcastPlayers('playerLeft', data)
+  })
+  world.network.on('operation', operation => {
+    queueChangefeedOperation(operation)
+    broadcastRuntime('runtimeOperation', operation)
   })
 
   fastify.route({
@@ -552,7 +739,12 @@ function hasScriptFields(data) {
               sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
               return
             }
-            const result = network.applyEntityRemoved(data.id, { ignoreNetworkId })
+            const result = network.applyEntityRemoved(data.id, {
+              ignoreNetworkId,
+              actor,
+              source,
+              lastOpId,
+            })
             if (!result.ok) {
               sendPacket(ws, 'adminResult', { ok: false, error: result.error, requestId })
               return
@@ -570,7 +762,15 @@ function hasScriptFields(data) {
               sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
               return
             }
-            const result = network.applySettingsModified({ key: data.key, value: data.value }, { ignoreNetworkId })
+            const result = network.applySettingsModified(
+              { key: data.key, value: data.value },
+              {
+                ignoreNetworkId,
+                actor,
+                source,
+                lastOpId,
+              }
+            )
             if (!result.ok) {
               sendPacket(ws, 'adminResult', { ok: false, error: result.error, requestId })
               return
@@ -591,6 +791,10 @@ function hasScriptFields(data) {
             const result = await network.applySpawnModified({
               op: data.op,
               networkId: data.networkId || defaultNetworkId,
+            }, {
+              actor,
+              source,
+              lastOpId,
             })
             if (!result.ok) {
               sendPacket(ws, 'adminResult', { ok: false, error: result.error, requestId })
@@ -677,6 +881,49 @@ function hasScriptFields(data) {
       players: serializePlayersForAdmin(world),
       hasAdminCode: !!process.env.ADMIN_CODE,
       adminUrl: process.env.PUBLIC_ADMIN_URL,
+    }
+  })
+
+  fastify.get('/admin/changes', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    if (!db) {
+      return reply.code(500).send({ error: 'db_unavailable' })
+    }
+
+    const cursorInput = normalizeHeader(req.query?.cursor)
+    const limitInput = normalizeHeader(req.query?.limit)
+    const cursorResult = parseChangefeedCursor(cursorInput)
+    if (!cursorResult.ok) {
+      return reply.code(400).send({ error: cursorResult.error })
+    }
+    const limitResult = parseChangefeedLimit(limitInput)
+    if (!limitResult.ok) {
+      return reply.code(400).send({ error: limitResult.error })
+    }
+
+    await changefeedWriteQueue
+    const headCursor = await getChangefeedHeadCursor()
+    if (cursorResult.mode === 'head') {
+      return {
+        cursor: headCursor,
+        headCursor,
+        operations: [],
+        hasMore: false,
+      }
+    }
+
+    const rows = await db(CHANGEFEED_TABLE)
+      .where('cursor', '>', cursorResult.cursor)
+      .orderBy('cursor', 'asc')
+      .limit(limitResult.limit)
+    const operations = rows.map(deserializeChangeRow).filter(Boolean)
+    const nextCursor = operations.length > 0 ? operations[operations.length - 1].cursor : cursorResult.cursor
+
+    return {
+      cursor: nextCursor,
+      headCursor,
+      operations,
+      hasMore: nextCursor < headCursor,
     }
   })
 
@@ -848,7 +1095,13 @@ function hasScriptFields(data) {
 
   fastify.delete('/admin/blueprints/:id', async (req, reply) => {
     if (!requireAdmin(req, reply)) return
-    const result = await world.network.applyBlueprintRemoved({ id: req.params.id })
+    const result = await world.network.applyBlueprintRemoved(
+      { id: req.params.id },
+      {
+        actor: 'admin',
+        source: 'admin.http',
+      }
+    )
     if (!result.ok) {
       if (result.error === 'not_found') {
         return reply.code(404).send({ error: result.error })
@@ -858,7 +1111,6 @@ function hasScriptFields(data) {
       }
       return reply.code(400).send({ error: result.error })
     }
-    broadcast('blueprintRemoved', { id: req.params.id })
     return { ok: true }
   })
 
@@ -881,7 +1133,13 @@ function hasScriptFields(data) {
   fastify.put('/admin/spawn', async (req, reply) => {
     if (!requireAdmin(req, reply)) return
     const { position, quaternion } = req.body || {}
-    const result = await world.network.applySpawnSet({ position, quaternion })
+    const result = await world.network.applySpawnSet(
+      { position, quaternion },
+      {
+        actor: 'admin',
+        source: 'admin.http',
+      }
+    )
     if (!result.ok) {
       return reply.code(400).send({ error: result.error })
     }
