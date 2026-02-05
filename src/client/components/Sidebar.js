@@ -1211,15 +1211,20 @@ function Add({ world, hidden }) {
     [updateCreateMention]
   )
 
-  const add = blueprint => {
+  const add = async blueprint => {
     const transform = world.builder.getSpawnTransform(true)
     world.builder.toggle(true)
     world.builder.control.pointer.lock()
+    let spawnBlueprint = blueprint
+    if (blueprint.unique) {
+      spawnBlueprint = await world.builder.forkTemplateFromBlueprint(blueprint, 'Add')
+      if (!spawnBlueprint) return
+    }
     setTimeout(() => {
       const data = {
         id: uuid(),
         type: 'app',
-        blueprint: blueprint.id,
+        blueprint: spawnBlueprint.id,
         position: transform.position,
         quaternion: transform.quaternion,
         scale: [1, 1, 1],
@@ -1263,7 +1268,7 @@ function Add({ world, hidden }) {
     if (trashMode) {
       remove(blueprint)
     } else {
-      add(blueprint)
+      void add(blueprint)
     }
   }
 
@@ -1675,6 +1680,8 @@ function App({ world, hidden }) {
   }, [transforms])
   useEffect(() => {
     window.app = app
+  }, [app])
+  useEffect(() => {
     const onModify = bp => {
       if (bp.id === blueprint.id) setBlueprint(bp)
     }
@@ -1683,7 +1690,7 @@ function App({ world, hidden }) {
     return () => {
       world.blueprints.off('modify', onModify)
     }
-  }, [])
+  }, [world, blueprint.id])
   const frozen = blueprint.frozen
   const changeModel = async file => {
     if (!file) return
@@ -1709,6 +1716,23 @@ function App({ world, hidden }) {
   const toggleKey = async (key, value) => {
     value = isBoolean(value) ? value : !blueprint[key]
     if (blueprint[key] === value) return
+    if (key === 'unique' && value && !blueprint.scene) {
+      let count = 0
+      for (const entity of world.entities.items.values()) {
+        if (entity.isApp && entity.data.blueprint === blueprint.id) count += 1
+      }
+      if (count > 1) {
+        const forked = await world.builder.forkTemplateFromEntity(app, 'Unique', { unique: true })
+        if (!forked) return
+        app.modify({ blueprint: forked.id, props: {} })
+        world.admin.entityModify(
+          { id: app.data.id, blueprint: forked.id, props: {} },
+          { ignoreNetworkId: world.network.id }
+        )
+        setBlueprint(forked)
+        return
+      }
+    }
     const version = blueprint.version + 1
     world.blueprints.modify({ id: blueprint.id, version, [key]: value })
     world.admin.blueprintModify({ id: blueprint.id, version, [key]: value }, { ignoreNetworkId: world.network.id })
