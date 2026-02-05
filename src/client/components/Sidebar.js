@@ -1908,6 +1908,7 @@ function App({ world, hidden }) {
   const [blueprint, setBlueprint] = useState(app.blueprint)
   const [appTab, setAppTab] = useState('settings')
   const [mergingId, setMergingId] = useState(null)
+  const [addingId, setAddingId] = useState(null)
   useEffect(() => {
     showTransforms = transforms
   }, [transforms])
@@ -2049,6 +2050,40 @@ function App({ world, hidden }) {
     } finally {
       setMergingId(null)
     }
+  }
+  const addVariant = async variant => {
+    if (!variant) return
+    setAddingId(variant.id)
+    const transform = world.builder.getSpawnTransform(true)
+    world.builder.toggle(true)
+    world.builder.control.pointer.lock()
+    let spawnBlueprint = variant
+    if (variant.unique) {
+      spawnBlueprint = await world.builder.forkTemplateFromBlueprint(variant, 'Add')
+      if (!spawnBlueprint) {
+        setAddingId(null)
+        return
+      }
+    }
+    setTimeout(() => {
+      const data = {
+        id: uuid(),
+        type: 'app',
+        blueprint: spawnBlueprint.id,
+        position: transform.position,
+        quaternion: transform.quaternion,
+        scale: [1, 1, 1],
+        mover: world.network.id,
+        uploader: null,
+        pinned: false,
+        props: {},
+        state: {},
+      }
+      const nextApp = world.entities.add(data)
+      world.admin.entityAdd(data, { ignoreNetworkId: world.network.id })
+      world.builder.select(nextApp)
+      setAddingId(null)
+    }, 100)
   }
 
   return (
@@ -2207,6 +2242,23 @@ function App({ world, hidden }) {
               cursor: default;
             }
           }
+          .app-variant-add {
+            border: 1px solid rgba(76, 224, 161, 0.45);
+            background: rgba(76, 224, 161, 0.1);
+            color: rgba(255, 255, 255, 0.85);
+            font-size: 0.7rem;
+            padding: 0.2rem 0.55rem;
+            border-radius: 999px;
+            &:hover:not(:disabled) {
+              cursor: pointer;
+              color: white;
+              border-color: rgba(76, 224, 161, 0.75);
+            }
+            &:disabled {
+              opacity: 0.45;
+              cursor: default;
+            }
+          }
           .app-variant-empty {
             font-size: 0.8rem;
             color: rgba(255, 255, 255, 0.5);
@@ -2317,6 +2369,14 @@ function App({ world, hidden }) {
                     <div className='app-variant-row' key={variant.id}>
                       <div className='app-variant-name'>{variant.name || variant.id}</div>
                       {isMain && <div className='app-variant-main'>Main</div>}
+                      <button
+                        type='button'
+                        className='app-variant-add'
+                        onClick={() => addVariant(variant)}
+                        disabled={addingId && addingId !== variant.id}
+                      >
+                        {addingId === variant.id ? 'Adding...' : 'Add'}
+                      </button>
                       {!isMain && canMerge && (
                         <button
                           type='button'
