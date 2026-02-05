@@ -1,9 +1,7 @@
 import { css } from '@firebolt-dev/css'
-import { MenuIcon, MicIcon, MicOffIcon, VRIcon } from './Icons'
 import {
   DownloadIcon,
   EarthIcon,
-  UsersIcon,
   InfoIcon,
   LayersIcon,
   ListTreeIcon,
@@ -11,17 +9,13 @@ import {
   Move3DIcon,
   SquareMenuIcon,
   TagIcon,
-  ShieldBanIcon,
 } from 'lucide-react'
 import { cls } from './cls'
-import { useEffect, useState } from 'react'
 import { HintProvider } from './Hint'
 import { exportApp } from '../../core/extras/appTools'
 import { downloadFile } from '../../core/extras/downloadFile'
-import { storage } from '../../core/storage'
 import { useRank } from './useRank'
 
-import { Prefs } from './sidebar/Prefs'
 import { World } from './sidebar/World'
 import { Apps } from './sidebar/Apps'
 import { Add } from './sidebar/Add'
@@ -29,31 +23,13 @@ import { App } from './sidebar/App'
 import { Script } from './sidebar/Script'
 import { Nodes } from './sidebar/Nodes'
 import { Meta } from './sidebar/Meta'
-import { Players } from './sidebar/Players'
 
-const mainSectionPanes = ['prefs']
 const worldSectionPanes = ['world', 'docs', 'apps', 'add']
 const appSectionPanes = ['app', 'script', 'nodes', 'meta']
 
-export function Sidebar({ world, ui }) {
+export function Sidebar({ world, ui, onOpenMenu }) {
   const player = world.entities.player
-  const { isAdmin, isBuilder } = useRank(world, player)
-  const [livePlayers, setLivePlayers] = useState(() => storage.get('admin-live', false))
-  const [livekit, setLiveKit] = useState(() => world.livekit.status)
-  useEffect(() => {
-    const onLiveKitStatus = status => {
-      setLiveKit({ ...status })
-    }
-    world.livekit.on('status', onLiveKitStatus)
-    return () => {
-      world.livekit.off('status', onLiveKitStatus)
-    }
-  }, [])
-  useEffect(() => {
-    if (!world.isAdminClient || !world.network?.setSubscriptions) return
-    world.network.setSubscriptions({ snapshot: true, players: livePlayers, runtime: false })
-    storage.set('admin-live', livePlayers)
-  }, [livePlayers])
+  const { isBuilder } = useRank(world, player)
   const activePane = ui.active ? ui.pane : null
   const downloadApp = async () => {
     const app = ui.app
@@ -81,11 +57,21 @@ export function Sidebar({ world, ui }) {
           gap: 0.625rem;
           justify-content: flex-start;
           overflow: hidden;
+          .sidebar-topbar {
+            position: absolute;
+            top: 0;
+            left: 0;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            pointer-events: auto;
+          }
           .sidebar-left {
             align-self: flex-start;
             display: flex;
             flex-direction: column;
             gap: 0.625rem;
+            margin-top: 3.5rem;
           }
           &.touch {
             font-size: 0.875rem;
@@ -100,27 +86,10 @@ export function Sidebar({ world, ui }) {
           }
         `}
       >
+        <div className='sidebar-topbar'>
+          <LogoBtn onClick={onOpenMenu} />
+        </div>
         <div className='sidebar-left'>
-          <Section active={mainSectionPanes.includes(activePane) || activePane === 'players'} top>
-            <Btn active={activePane === 'prefs'} onClick={() => world.ui.togglePane('prefs')}>
-              <MenuIcon size='1.25rem' />
-            </Btn>
-            {isAdmin && (
-              <Btn active={activePane === 'players'} onClick={() => world.ui.togglePane('players')}>
-                <UsersIcon size='1.25rem' />
-              </Btn>
-            )}
-            {livekit.enabled && (
-              <Btn muted={livekit.muted} onClick={() => world.livekit.toggleMuted()}>
-                {livekit.muted ? <MicOffIcon size='1.25rem' /> : <MicIcon size='1.25rem' />}
-              </Btn>
-            )}
-            {world.xr.isSupported && (
-              <Btn onClick={() => world.xr.start()}>
-                <VRIcon size='1.5rem' />
-              </Btn>
-            )}
-          </Section>
           {isBuilder && (
             <Section active={worldSectionPanes.includes(activePane)}>
               <Btn
@@ -170,7 +139,6 @@ export function Sidebar({ world, ui }) {
             </Section>
           )}
         </div>
-        {ui.pane === 'prefs' && <Prefs world={world} hidden={!ui.active} />}
         {ui.pane === 'world' && <World world={world} hidden={!ui.active} />}
         {ui.pane === 'apps' && <Apps world={world} hidden={!ui.active} />}
         {ui.pane === 'add' && <Add world={world} hidden={!ui.active} />}
@@ -178,9 +146,6 @@ export function Sidebar({ world, ui }) {
         {ui.pane === 'script' && <Script key={ui.app.data.id} world={world} hidden={!ui.active} />}
         {ui.pane === 'nodes' && <Nodes key={ui.app.data.id} world={world} hidden={!ui.active} />}
         {ui.pane === 'meta' && <Meta key={ui.app.data.id} world={world} hidden={!ui.active} />}
-        {ui.pane === 'players' && (
-          <Players world={world} hidden={!ui.active} livePlayers={livePlayers} setLivePlayers={setLivePlayers} />
-        )}
       </div>
     </HintProvider>
   )
@@ -203,6 +168,36 @@ function Section({ active, top, bottom, children }) {
       `}
     >
       {children}
+    </div>
+  )
+}
+
+function LogoBtn({ onClick }) {
+  return (
+    <div
+      className='sidebar-logo'
+      css={css`
+        width: 2.75rem;
+        height: 2.75rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(11, 10, 21, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 50%;
+        cursor: pointer;
+        &:hover {
+          background: rgba(11, 10, 21, 0.9);
+        }
+        img {
+          width: 1.75rem;
+          height: 1.75rem;
+          object-fit: contain;
+        }
+      `}
+      onClick={onClick}
+    >
+      <img src='/logo.png' />
     </div>
   )
 }
