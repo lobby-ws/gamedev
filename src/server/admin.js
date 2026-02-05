@@ -876,6 +876,13 @@ function hasScriptFields(data) {
       return reply.code(500).send({ error: 'db_unavailable' })
     }
     try {
+      if (world?.network?.save) {
+        if (world.network.saveTimerId) {
+          clearTimeout(world.network.saveTimerId)
+          world.network.saveTimerId = null
+        }
+        await world.network.save()
+      }
       const dryrun = req.body?.dryrun === true || req.body?.dryRun === true
       const result = await cleaner.run({ db, dryrun, world, broadcast })
       return result
