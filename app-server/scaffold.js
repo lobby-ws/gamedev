@@ -9,6 +9,8 @@ import { uuid } from './utils.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const TEMPLATES_DIR = path.join(__dirname, 'templates')
 const DOCS_TEMPLATE_DIR = path.join(__dirname, '..', 'docs')
+const SCRIPTS_TEMPLATE_DIR = path.join(TEMPLATES_DIR, 'scripts')
+const README_TEMPLATE = path.join(TEMPLATES_DIR, 'README.md')
 const CLAUDE_MD_TEMPLATE = path.join(TEMPLATES_DIR, 'claude', 'CLAUDE.md')
 const CLAUDE_SKILL_TEMPLATE = path.join(TEMPLATES_DIR, 'claude', 'skills', 'hyperfy-app-scripting', 'SKILL.md')
 const AGENTS_MD_TEMPLATE = path.join(TEMPLATES_DIR, 'openai', 'AGENTS.md')
@@ -90,6 +92,7 @@ function buildPackageJson({ packageName, sdkName, sdkVersion }) {
       build: 'gamedev apps build --all',
       'deploy:fly': 'bash scripts/fly-deploy.sh',
       'deploy:app': 'gamedev apps deploy',
+      update: 'npm i gamedev@latest && gamedev update',
       'update:engine': 'bash scripts/update-engine.sh',
       typecheck: 'tsc --noEmit',
       'hyp:extract': 'node scripts/extract-hyp.mjs',
@@ -350,6 +353,29 @@ export function scaffoldBaseProject({
     report,
   })
 
+  copyDirWithPolicy(SCRIPTS_TEMPLATE_DIR, path.join(rootDir, 'scripts'), {
+    force,
+    writeFile,
+    report,
+  })
+
+  writeFileWithPolicy(path.join(rootDir, 'hyp', '.gitkeep'), '', {
+    force,
+    writeFile,
+    report,
+  })
+
+  if (fs.existsSync(README_TEMPLATE)) {
+    const readmeContent = readText(README_TEMPLATE)
+    if (readmeContent != null) {
+      writeFileWithPolicy(
+        path.join(rootDir, 'README.md'),
+        readmeContent.endsWith('\n') ? readmeContent : `${readmeContent}\n`,
+        { force, writeFile, report }
+      )
+    }
+  }
+
   if (fs.existsSync(CLAUDE_SKILL_TEMPLATE)) {
     const skillContent = readText(CLAUDE_SKILL_TEMPLATE)
     if (skillContent != null) {
@@ -483,5 +509,73 @@ export function writeManifest({ rootDir, manifest, force = false, writeFile } = 
     writeFile,
     report,
   })
+  return report
+}
+
+export function updateBuiltins({ rootDir, writeFile } = {}) {
+  const report = { created: [], updated: [], skipped: [], userModified: [] }
+  const appsDir = path.join(rootDir, 'apps')
+  const assetsDir = path.join(rootDir, 'assets')
+  ensureDir(appsDir)
+
+  const templates = [...BUILTIN_APP_TEMPLATES, SCENE_TEMPLATE]
+  const assetFiles = new Set()
+
+  for (const template of templates) {
+    collectAssetFilenames(template.config, assetFiles)
+    const appDir = path.join(appsDir, template.appName)
+    ensureDir(appDir)
+
+    const blueprintPath = path.join(appDir, `${template.fileBase}.json`)
+    const sdkBlueprint = JSON.stringify(toLocalAssetUrls(template.config), null, 2) + '\n'
+    const userBlueprint = readText(blueprintPath)
+    if (userBlueprint === null) {
+      writeFileWithPolicy(blueprintPath, sdkBlueprint, { force: true, writeFile, report })
+    } else if (userBlueprint === sdkBlueprint) {
+      report.skipped.push(blueprintPath)
+    } else {
+      report.userModified.push(blueprintPath)
+    }
+
+    const scriptPath = path.join(appDir, 'index.js')
+    const sdkScript = readBuiltinScript(template)
+    const userScript = readText(scriptPath)
+    if (userScript === null) {
+      writeFileWithPolicy(scriptPath, sdkScript, { force: true, writeFile, report })
+    } else if (userScript === sdkScript) {
+      report.skipped.push(scriptPath)
+    } else {
+      report.userModified.push(scriptPath)
+    }
+  }
+
+  if (assetFiles.size) {
+    ensureDir(assetsDir)
+    for (const filename of assetFiles) {
+      const srcPath = resolveBuiltinAssetPath(filename)
+      if (!srcPath) {
+        throw new Error(`missing_builtin_asset:${filename}`)
+      }
+      const destPath = path.join(assetsDir, filename)
+      const sdkBuffer = fs.readFileSync(srcPath)
+      if (!fs.existsSync(destPath)) {
+        if (writeFile) {
+          writeFile(destPath, sdkBuffer)
+        } else {
+          ensureDir(path.dirname(destPath))
+          fs.writeFileSync(destPath, sdkBuffer)
+        }
+        report.created.push(destPath)
+      } else {
+        const userBuffer = fs.readFileSync(destPath)
+        if (sdkBuffer.equals(userBuffer)) {
+          report.skipped.push(destPath)
+        } else {
+          report.userModified.push(destPath)
+        }
+      }
+    }
+  }
+
   return report
 }

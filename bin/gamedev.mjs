@@ -9,7 +9,7 @@ import { customAlphabet } from 'nanoid'
 
 import { runAppCommand, runScriptCommand } from '../app-server/commands.js'
 import { DirectAppServer } from '../app-server/direct.js'
-import { scaffoldBaseProject, scaffoldBuiltins, writeManifest } from '../app-server/scaffold.js'
+import { scaffoldBaseProject, scaffoldBuiltins, updateBuiltins, writeManifest } from '../app-server/scaffold.js'
 import { applyTargetEnv, parseTargetArgs, resolveTarget } from '../app-server/targets.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -722,6 +722,46 @@ async function initCommand(args = []) {
   return 0
 }
 
+async function updateCommand() {
+  let baseReport
+  let builtinsReport
+  try {
+    baseReport = scaffoldBaseProject({
+      rootDir: projectDir,
+      force: true,
+    })
+    builtinsReport = updateBuiltins({
+      rootDir: projectDir,
+    })
+  } catch (err) {
+    console.error(`Error: Update failed: ${err?.message || err}`)
+    return 1
+  }
+
+  const created = [...baseReport.created, ...builtinsReport.created]
+  const updated = [...baseReport.updated, ...builtinsReport.updated]
+  const skipped = [...baseReport.skipped, ...builtinsReport.skipped]
+  const userModified = builtinsReport.userModified || []
+
+  if (created.length) {
+    console.log(`\u2705 Created ${created.length} file(s)`)
+  }
+  if (updated.length) {
+    console.log(`\u270f\ufe0f  Updated ${updated.length} file(s)`)
+  }
+  if (!created.length && !updated.length) {
+    console.log('\u2139\ufe0f  All files are up to date')
+  }
+  if (userModified.length) {
+    console.log(`\u26a0\ufe0f  Skipped ${userModified.length} user-modified builtin(s):`)
+    for (const filePath of userModified) {
+      console.log(`   - ${path.relative(projectDir, filePath)}`)
+    }
+  }
+
+  return 0
+}
+
 async function appsCommand(args) {
   if (!args.length || ['help', '--help', '-h'].includes(args[0])) {
     await runAppCommand({ command: 'help', args: [], rootDir: projectDir, helpPrefix: 'gamedev apps' })
@@ -836,6 +876,7 @@ Usage:
 
 Commands:
   init                      Scaffold a new world project in the current folder
+  update                    Update SDK boilerplate files (preserves user modifications)
   dev                       Start the world (local or remote) + app-server sync
   app-server                Start app-server sync only (no world server)
   apps <command>            Manage apps (create, list, deploy, update, rollback, status)
@@ -857,6 +898,9 @@ async function main() {
   switch (command) {
     case 'init':
       result = await initCommand(args)
+      break
+    case 'update':
+      result = await updateCommand()
       break
     case 'dev':
       result = await startCommand(args)
