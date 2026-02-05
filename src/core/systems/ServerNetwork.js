@@ -4,10 +4,11 @@ import { Socket } from '../Socket'
 import { uuid } from '../utils'
 import { System } from './System'
 import { createJWT, readJWT } from '../utils-server'
-import { cloneDeep, isNumber } from 'lodash-es'
+import { isNumber } from 'lodash-es'
 import * as THREE from '../extras/three'
 import { Ranks } from '../extras/ranks'
 import { validateBlueprintScriptFields } from '../blueprintValidation'
+import { ensureBlueprintSyncMetadata, ensureEntitySyncMetadata } from '../../server/syncMetadata.js'
 
 const SAVE_INTERVAL = parseInt(process.env.SAVE_INTERVAL || '60') // seconds
 const PING_RATE = 10 // seconds
@@ -37,6 +38,25 @@ function serializePlayerForAdmin(player) {
     rank: player.data.rank,
     enteredAt: player.data.enteredAt,
   }
+}
+
+function normalizeMetadataString(value, fallback) {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (trimmed) return trimmed
+  }
+  return fallback
+}
+
+function applySyncMetadata(target, source) {
+  if (!target || !source) return
+  target.uid = source.uid
+  target.scope = source.scope
+  target.managedBy = source.managedBy
+  target.updatedAt = source.updatedAt
+  target.updatedBy = source.updatedBy
+  target.updateSource = source.updateSource
+  target.lastOpId = source.lastOpId
 }
 
 /**
@@ -88,12 +108,24 @@ export class ServerNetwork extends System {
       const data = JSON.parse(blueprint.data)
       if (blueprint?.createdAt) data.createdAt = blueprint.createdAt
       if (data.keep === undefined) data.keep = false
+      ensureBlueprintSyncMetadata(data, {
+        touch: false,
+        now: blueprint.updatedAt || moment().toISOString(),
+        updatedBy: 'runtime',
+        updateSource: 'runtime',
+      })
       this.world.blueprints.add(data, true)
     }
     // hydrate entities
     const entities = await this.db('entities')
     for (const entity of entities) {
       const data = JSON.parse(entity.data)
+      ensureEntitySyncMetadata(data, {
+        touch: false,
+        now: entity.updatedAt || moment().toISOString(),
+        updatedBy: 'runtime',
+        updateSource: 'runtime',
+      })
       data.state = {}
       this.world.entities.add(data, true)
     }
@@ -178,6 +210,12 @@ export class ServerNetwork extends System {
         const createdAt = blueprint.createdAt || now
         if (!blueprint.createdAt) blueprint.createdAt = createdAt
         if (blueprint.keep === undefined) blueprint.keep = false
+        ensureBlueprintSyncMetadata(blueprint, {
+          touch: true,
+          now,
+          updatedBy: normalizeMetadataString(blueprint.updatedBy, 'runtime'),
+          updateSource: normalizeMetadataString(blueprint.updateSource, 'runtime'),
+        })
         const record = {
           id: blueprint.id,
           data: JSON.stringify(blueprint),
@@ -202,8 +240,12 @@ export class ServerNetwork extends System {
           continue // ignore while uploading or moving
         }
         try {
-          const data = cloneDeep(entity.data)
-          data.state = null
+          ensureEntitySyncMetadata(entity.data, {
+            touch: true,
+            now,
+            updatedBy: normalizeMetadataString(entity.data.updatedBy, 'runtime'),
+            updateSource: normalizeMetadataString(entity.data.updateSource, 'runtime'),
+          })
           const record = {
             id: entity.data.id,
             data: JSON.stringify(entity.data),
@@ -485,13 +527,21 @@ export class ServerNetwork extends System {
     return { ok: true }
   }
 
-  applyBlueprintAdded(blueprint, { ignoreNetworkId } = {}) {
+  applyBlueprintAdded(blueprint, { ignoreNetworkId, actor, source, lastOpId } = {}) {
+    const now = moment().toISOString()
     if (!blueprint.createdAt) {
-      blueprint.createdAt = moment().toISOString()
+      blueprint.createdAt = now
     }
     if (blueprint.keep === undefined) {
       blueprint.keep = false
     }
+    ensureBlueprintSyncMetadata(blueprint, {
+      touch: true,
+      now,
+      updatedBy: normalizeMetadataString(actor, 'runtime'),
+      updateSource: normalizeMetadataString(source, 'runtime'),
+      lastOpId,
+    })
     const validation = validateBlueprintScriptFields(blueprint)
     if (!validation.ok) return validation
     this.world.blueprints.add(blueprint)
@@ -501,7 +551,7 @@ export class ServerNetwork extends System {
     return { ok: true }
   }
 
-  applyBlueprintModified(change, { ignoreNetworkId } = {}) {
+  applyBlueprintModified(change, { ignoreNetworkId, actor, source, lastOpId } = {}) {
     const validation = validateBlueprintScriptFields(change)
     if (!validation.ok) return validation
     const blueprint = this.world.blueprints.get(change.id)
@@ -510,13 +560,24 @@ export class ServerNetwork extends System {
     }
     // if new version is greater than current version, allow it
     if (change.version > blueprint.version) {
+      const now = moment().toISOString()
       const createdAt = blueprint.createdAt || change.createdAt || moment().toISOString()
       const nextChange = { ...change, createdAt }
       if (blueprint.keep === undefined && nextChange.keep === undefined) {
         nextChange.keep = false
       }
-      this.world.blueprints.modify(nextChange)
-      this.send('blueprintModified', nextChange, ignoreNetworkId)
+      const merged = { ...blueprint, ...nextChange }
+      ensureBlueprintSyncMetadata(merged, {
+        touch: true,
+        now,
+        updatedBy: normalizeMetadataString(actor, 'runtime'),
+        updateSource: normalizeMetadataString(source, 'runtime'),
+        lastOpId,
+      })
+      const nextChangeWithSync = { ...nextChange }
+      applySyncMetadata(nextChangeWithSync, merged)
+      this.world.blueprints.modify(nextChangeWithSync)
+      this.send('blueprintModified', nextChangeWithSync, ignoreNetworkId)
       this.dirtyBlueprints.add(change.id)
       const updated = this.world.blueprints.get(change.id)
       if (updated) {
@@ -547,9 +608,19 @@ export class ServerNetwork extends System {
     return { ok: true }
   }
 
-  applyEntityAdded(data, { ignoreNetworkId } = {}) {
-    const entity = this.world.entities.add(data)
-    this.send('entityAdded', data, ignoreNetworkId)
+  applyEntityAdded(data, { ignoreNetworkId, actor, source, lastOpId } = {}) {
+    const nextData = data && typeof data === 'object' ? { ...data } : data
+    if (nextData?.type === 'app') {
+      ensureEntitySyncMetadata(nextData, {
+        touch: true,
+        now: moment().toISOString(),
+        updatedBy: normalizeMetadataString(actor, 'runtime'),
+        updateSource: normalizeMetadataString(source, 'runtime'),
+        lastOpId,
+      })
+    }
+    const entity = this.world.entities.add(nextData)
+    this.send('entityAdded', nextData, ignoreNetworkId)
     if (entity?.isApp) {
       this.dirtyApps.add(entity.data.id)
     }
@@ -559,7 +630,7 @@ export class ServerNetwork extends System {
     return { ok: true }
   }
 
-  applyEntityModified = async (data, { ignoreNetworkId } = {}) => {
+  applyEntityModified = async (data, { ignoreNetworkId, actor, source, lastOpId } = {}) => {
     const entity = this.world.entities.get(data.id)
     if (!entity) return { ok: false, error: 'not_found' }
     if (data.hasOwnProperty('props')) {
@@ -568,20 +639,38 @@ export class ServerNetwork extends System {
         return { ok: false, error: 'invalid_payload' }
       }
     }
-    entity.modify(data)
-    this.send('entityModified', data, ignoreNetworkId)
+    let nextData = data
+    if (entity.isApp) {
+      const merged = { ...entity.data, ...data }
+      ensureEntitySyncMetadata(merged, {
+        touch: true,
+        now: moment().toISOString(),
+        updatedBy: normalizeMetadataString(actor, 'runtime'),
+        updateSource: normalizeMetadataString(source, 'runtime'),
+        lastOpId,
+      })
+      nextData = { ...data }
+      applySyncMetadata(nextData, merged)
+    }
+
+    entity.modify(nextData)
+    if (entity.isApp) {
+      applySyncMetadata(entity.data, nextData)
+    }
+
+    this.send('entityModified', nextData, ignoreNetworkId)
     if (entity.isApp) {
       this.dirtyApps.add(entity.data.id)
     }
     if (entity.isPlayer) {
       const changes = {}
       let changed
-      if (data.hasOwnProperty('name')) {
-        changes.name = data.name
+      if (nextData.hasOwnProperty('name')) {
+        changes.name = nextData.name
         changed = true
       }
-      if (data.hasOwnProperty('avatar')) {
-        changes.avatar = data.avatar
+      if (nextData.hasOwnProperty('avatar')) {
+        changes.avatar = nextData.avatar
         changed = true
       }
       if (changed) {
@@ -591,19 +680,19 @@ export class ServerNetwork extends System {
         id: entity.data.id,
       }
       let hasPlayerUpdate
-      if (data.hasOwnProperty('p')) {
+      if (nextData.hasOwnProperty('p')) {
         playerUpdate.position = entity.data.position
         hasPlayerUpdate = true
       }
-      if (data.hasOwnProperty('q')) {
+      if (nextData.hasOwnProperty('q')) {
         playerUpdate.quaternion = entity.data.quaternion
         hasPlayerUpdate = true
       }
-      if (data.hasOwnProperty('name')) {
+      if (nextData.hasOwnProperty('name')) {
         playerUpdate.name = entity.data.name
         hasPlayerUpdate = true
       }
-      if (data.hasOwnProperty('avatar') || data.hasOwnProperty('sessionAvatar')) {
+      if (nextData.hasOwnProperty('avatar') || nextData.hasOwnProperty('sessionAvatar')) {
         playerUpdate.avatar = entity.data.avatar
         playerUpdate.sessionAvatar = entity.data.sessionAvatar
         hasPlayerUpdate = true

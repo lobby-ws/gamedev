@@ -110,6 +110,37 @@ function readJson(filePath) {
   }
 }
 
+function sortObjectKeysDeep(value) {
+  if (Array.isArray(value)) {
+    return value.map(item => sortObjectKeysDeep(item))
+  }
+  if (value && typeof value === 'object') {
+    const out = {}
+    const keys = Object.keys(value).sort()
+    for (const key of keys) {
+      out[key] = sortObjectKeysDeep(value[key])
+    }
+    return out
+  }
+  return value
+}
+
+function stableStringify(value) {
+  return JSON.stringify(sortObjectKeysDeep(value))
+}
+
+function normalizeSyncString(value) {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed || null
+}
+
+function normalizeSyncCursor(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  const normalized = normalizeSyncString(value)
+  return normalized || null
+}
+
 function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true })
 }
@@ -702,7 +733,13 @@ class WorldAdminClient extends EventEmitter {
       return Promise.reject(new Error('not_connected'))
     }
     const requestId = uuid()
-    const message = { type, requestId, ...payload }
+    const message = {
+      type,
+      requestId,
+      source: 'app-server',
+      actor: 'app-server',
+      ...payload,
+    }
     return new Promise((resolve, reject) => {
       this.pending.set(requestId, { resolve, reject })
       this.ws.send(writePacket('adminCommand', message))
@@ -890,10 +927,12 @@ export class DirectAppServer {
     this.rootDir = rootDir
     this.worldUrl = normalizeBaseUrl(worldUrl)
     this.adminCode = adminCode || null
+    this.lobbyDir = path.join(this.rootDir, '.lobby')
     this.appsDir = path.join(this.rootDir, 'apps')
     this.assetsDir = path.join(this.rootDir, 'assets')
     this.sharedDir = path.join(this.rootDir, SHARED_DIR_NAME)
     this.worldFile = path.join(this.rootDir, 'world.json')
+    this.syncStateFile = path.join(this.lobbyDir, 'sync-state.json')
     this.manifest = new WorldManifest(this.worldFile)
 
     this.client = new WorldAdminClient({
@@ -911,6 +950,7 @@ export class DirectAppServer {
 
     this.assetsUrl = null
     this.snapshot = null
+    this.syncState = this._readSyncState()
     this.loggedTarget = false
     this.scriptFormatWarnings = new Set()
   }
@@ -961,6 +1001,80 @@ export class DirectAppServer {
       blueprints,
       entities,
     }
+    this._refreshSyncState()
+  }
+
+  _readSyncState() {
+    const state = readJson(this.syncStateFile)
+    if (!state || typeof state !== 'object') return null
+    return state
+  }
+
+  _extractSyncRevision(item) {
+    if (!item || typeof item !== 'object') return null
+    if (typeof item.version === 'number' && Number.isFinite(item.version)) {
+      return item.version
+    }
+    return normalizeSyncString(item.updatedAt) || null
+  }
+
+  _buildSyncObjectIndex(items, previousIndex = {}, nowIso) {
+    const entries = {}
+    const previous = previousIndex && typeof previousIndex === 'object' ? previousIndex : {}
+    const values = Array.isArray(items) ? items : Array.from(items?.values ? items.values() : [])
+    for (const item of values) {
+      if (!item || typeof item !== 'object') continue
+      const id = normalizeSyncString(item.id)
+      const uid = normalizeSyncString(item.uid)
+      const key = uid || id
+      if (!key) continue
+      const hash = sha256(Buffer.from(stableStringify(item), 'utf8'))
+      const lastSyncedRevision = this._extractSyncRevision(item)
+      const existing = previous[key]
+      const unchanged = existing?.hash === hash && isEqual(existing?.lastSyncedRevision, lastSyncedRevision)
+      entries[key] = {
+        id: id || null,
+        uid: uid || null,
+        hash,
+        lastSyncedRevision,
+        lastSyncedAt: unchanged && normalizeSyncString(existing?.lastSyncedAt) ? existing.lastSyncedAt : nowIso,
+        lastOpId: normalizeSyncString(item.lastOpId) || null,
+      }
+    }
+    return entries
+  }
+
+  _refreshSyncState() {
+    if (!this.snapshot?.worldId) return
+
+    const previous = this.syncState && typeof this.syncState === 'object' ? this.syncState : {}
+    const previousWorldId = normalizeSyncString(previous.worldId)
+    const worldChanged = !!previousWorldId && previousWorldId !== this.snapshot.worldId
+    const previousObjects = !worldChanged && previous.objects && typeof previous.objects === 'object' ? previous.objects : {}
+    const nowIso = new Date().toISOString()
+
+    const baseState = {
+      formatVersion: 1,
+      worldId: this.snapshot.worldId,
+      cursor: worldChanged ? null : normalizeSyncCursor(previous.cursor),
+      objects: {
+        blueprints: this._buildSyncObjectIndex(this.snapshot.blueprints, previousObjects.blueprints, nowIso),
+        entities: this._buildSyncObjectIndex(this.snapshot.entities, previousObjects.entities, nowIso),
+      },
+      lastConflictSnapshots:
+        !worldChanged && Array.isArray(previous.lastConflictSnapshots) ? previous.lastConflictSnapshots : [],
+    }
+
+    const next = {
+      ...baseState,
+      updatedAt: normalizeSyncString(previous.updatedAt) || nowIso,
+    }
+
+    if (isEqual(previous, next)) return
+
+    next.updatedAt = nowIso
+    this.syncState = next
+    this._writeFileAtomic(this.syncStateFile, JSON.stringify(next, null, 2) + '\n')
   }
 
   async start() {
@@ -997,7 +1111,7 @@ export class DirectAppServer {
     this.client.on('disconnect', () => {
       this._startReconnectLoop()
     })
-    console.log(`✅ Connected to ${this.worldUrl} (/admin)`) 
+    console.log(`✅ Connected to ${this.worldUrl} (/admin)`)
   }
 
   async _bootstrapEmptyProject(snapshot) {
@@ -2091,6 +2205,7 @@ export class DirectAppServer {
     const updated = await this.client.getBlueprint(info.id)
     if (updated?.id) {
       this.snapshot.blueprints.set(updated.id, updated)
+      this._refreshSyncState()
     }
   }
 
@@ -2236,6 +2351,8 @@ export class DirectAppServer {
         this.snapshot.entities.delete(id)
       }
     }
+
+    this._refreshSyncState()
   }
 
   _attachRemoteHandlers() {
@@ -2252,15 +2369,18 @@ export class DirectAppServer {
       }
       if (msg.type === 'entityAdded' && msg.entity?.id) {
         this.snapshot.entities.set(msg.entity.id, msg.entity)
+        this._refreshSyncState()
         this._scheduleManifestWrite()
       }
       if (msg.type === 'entityModified' && msg.entity?.id) {
         const existing = this.snapshot.entities.get(msg.entity.id)
         this.snapshot.entities.set(msg.entity.id, { ...existing, ...msg.entity })
+        this._refreshSyncState()
         this._scheduleManifestWrite()
       }
       if (msg.type === 'entityRemoved' && msg.id) {
         this.snapshot.entities.delete(msg.id)
+        this._refreshSyncState()
         this._scheduleManifestWrite()
       }
       if (msg.type === 'settingsModified' && msg.data?.key) {
@@ -2279,6 +2399,7 @@ export class DirectAppServer {
 
   async _onRemoteBlueprint(blueprint) {
     this.snapshot.blueprints.set(blueprint.id, blueprint)
+    this._refreshSyncState()
     const result = await this._writeBlueprintToDisk({
       blueprint,
       force: true,
@@ -2299,6 +2420,7 @@ export class DirectAppServer {
     const existingConfig = readJson(configPath)
     const keep = info?.keep === true || existingConfig?.keep === true
     this.snapshot.blueprints.delete(id)
+    this._refreshSyncState()
     if (keep) return
     if (fs.existsSync(configPath)) {
       try {

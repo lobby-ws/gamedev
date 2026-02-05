@@ -174,6 +174,7 @@ export class HyperfyCLI {
     this.appsDir = path.join(this.rootDir, 'apps')
     this.assetsDir = path.join(this.rootDir, 'assets')
     this.worldFile = path.join(this.rootDir, 'world.json')
+    this.syncStateFile = path.join(this.rootDir, '.lobby', 'sync-state.json')
 
     this.worldUrl = overrides.worldUrl || process.env.WORLD_URL || null
     this.adminCode =
@@ -467,6 +468,7 @@ export class HyperfyCLI {
       console.log(`   • Local apps in ${this.appsDir}`)
       console.log(`   • Local assets in ${this.assetsDir}`)
       console.log(`   • ${this.worldFile}`)
+      console.log(`   • ${this.syncStateFile}`)
       console.log(``)
 
       const rl = readline.createInterface({
@@ -494,6 +496,9 @@ export class HyperfyCLI {
       }
       if (fs.existsSync(this.worldFile)) {
         fs.rmSync(this.worldFile, { force: true })
+      }
+      if (fs.existsSync(this.syncStateFile)) {
+        fs.rmSync(this.syncStateFile, { force: true })
       }
       console.log(`✅ Reset complete!`)
     } catch (error) {

@@ -17,6 +17,12 @@ function normalizeHeader(value) {
   return value
 }
 
+function normalizeOperationValue(value) {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed || null
+}
+
 function isCodeValid(expected, code) {
   if (!expected) return true
   if (typeof code !== 'string') return false
@@ -397,6 +403,9 @@ function hasScriptFields(data) {
         const requestId = data?.requestId
         const ignoreNetworkId = data?.networkId || defaultNetworkId || undefined
         const network = world.network
+        const actor = normalizeOperationValue(data?.actor) || ignoreNetworkId || 'admin'
+        const source = normalizeOperationValue(data?.source) || 'admin'
+        const lastOpId = normalizeOperationValue(data?.lastOpId) || undefined
 
         try {
           if (data.type === 'blueprint_add') {
@@ -421,7 +430,12 @@ function hasScriptFields(data) {
                 return
               }
             }
-            const result = network.applyBlueprintAdded(data.blueprint, { ignoreNetworkId })
+            const result = network.applyBlueprintAdded(data.blueprint, {
+              ignoreNetworkId,
+              actor,
+              source,
+              lastOpId,
+            })
             if (!result.ok) {
               sendPacket(ws, 'adminResult', { ok: false, error: result.error, requestId })
               return
@@ -461,7 +475,12 @@ function hasScriptFields(data) {
                 return
               }
             }
-            const result = network.applyBlueprintModified(data.change, { ignoreNetworkId })
+            const result = network.applyBlueprintModified(data.change, {
+              ignoreNetworkId,
+              actor,
+              source,
+              lastOpId,
+            })
             if (!result.ok) {
               sendPacket(ws, 'adminResult', {
                 ok: false,
@@ -487,7 +506,12 @@ function hasScriptFields(data) {
               sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
               return
             }
-            const result = network.applyEntityAdded(data.entity, { ignoreNetworkId })
+            const result = network.applyEntityAdded(data.entity, {
+              ignoreNetworkId,
+              actor,
+              source,
+              lastOpId,
+            })
             if (!result.ok) {
               sendPacket(ws, 'adminResult', { ok: false, error: result.error, requestId })
               return
@@ -505,7 +529,12 @@ function hasScriptFields(data) {
               sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
               return
             }
-            const result = await network.applyEntityModified(data.change, { ignoreNetworkId })
+            const result = await network.applyEntityModified(data.change, {
+              ignoreNetworkId,
+              actor,
+              source,
+              lastOpId,
+            })
             if (!result.ok) {
               sendPacket(ws, 'adminResult', { ok: false, error: result.error, requestId })
               return
@@ -779,7 +808,10 @@ function hasScriptFields(data) {
         if (!blueprint?.id) continue
         const current = world.blueprints.get(blueprint.id)
         if (!current) {
-          const result = world.network.applyBlueprintAdded(blueprint)
+          const result = world.network.applyBlueprintAdded(blueprint, {
+            actor: 'admin',
+            source: 'admin.rollback',
+          })
           if (result.ok) {
             restored.push(blueprint.id)
           } else {
@@ -788,7 +820,10 @@ function hasScriptFields(data) {
           continue
         }
         const change = { ...blueprint, version: (current.version || 0) + 1 }
-        const result = world.network.applyBlueprintModified(change)
+        const result = world.network.applyBlueprintModified(change, {
+          actor: 'admin',
+          source: 'admin.rollback',
+        })
         if (result.ok) {
           restored.push(blueprint.id)
         } else {

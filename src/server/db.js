@@ -6,6 +6,7 @@ import { uuid } from '../core/utils'
 import { defaults } from 'lodash-es'
 import { Ranks } from '../core/extras/ranks'
 import { assets } from './assets'
+import { ensureBlueprintSyncMetadata, ensureEntitySyncMetadata } from './syncMetadata'
 
 let db
 
@@ -658,6 +659,58 @@ const migrations = [
         await db('blueprints')
           .where('id', row.id)
           .update({ data: JSON.stringify(data) })
+      }
+    }
+  },
+  // add bidirectional sync metadata to blueprint/entity JSON records
+  async db => {
+    const now = moment().toISOString()
+    const blueprintScopes = new Map()
+
+    const blueprintRows = await db('blueprints')
+    for (const row of blueprintRows) {
+      const data = JSON.parse(row.data)
+      const rowNow = row.updatedAt || now
+      const previous = JSON.stringify(data)
+      ensureBlueprintSyncMetadata(data, {
+        now: rowNow,
+        touch: false,
+        updatedBy: 'system:migration',
+        updateSource: 'migration',
+      })
+      blueprintScopes.set(row.id, data.scope)
+      const next = JSON.stringify(data)
+      if (next !== previous) {
+        await db('blueprints')
+          .where('id', row.id)
+          .update({
+            data: next,
+            updatedAt: data.updatedAt || rowNow,
+          })
+      }
+    }
+
+    const entityRows = await db('entities')
+    for (const row of entityRows) {
+      const data = JSON.parse(row.data)
+      const rowNow = row.updatedAt || now
+      const previous = JSON.stringify(data)
+      const blueprintScope = typeof data.blueprint === 'string' ? blueprintScopes.get(data.blueprint) : null
+      ensureEntitySyncMetadata(data, {
+        now: rowNow,
+        touch: false,
+        scope: blueprintScope || undefined,
+        updatedBy: 'system:migration',
+        updateSource: 'migration',
+      })
+      const next = JSON.stringify(data)
+      if (next !== previous) {
+        await db('entities')
+          .where('id', row.id)
+          .update({
+            data: next,
+            updatedAt: data.updatedAt || rowNow,
+          })
       }
     }
   },
