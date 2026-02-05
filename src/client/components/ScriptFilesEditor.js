@@ -4,6 +4,7 @@ import { cls } from './cls'
 import { loadMonaco } from './monaco'
 import { hashFile } from '../../core/utils-client'
 import { isValidScriptPath } from '../../core/blueprintValidation'
+import { buildScriptGroups } from '../../core/extras/blueprintGroups'
 
 const languageByExt = {
   js: 'javascript',
@@ -996,6 +997,29 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     world.emit('toast', 'Script refreshed')
   }, [selectedPath, loadPath, world])
 
+  const resolveScriptUpdateMode = useCallback(async () => {
+    const app = world.ui?.state?.app || null
+    const targetBlueprint =
+      (app?.data?.blueprint && world.blueprints.get(app.data.blueprint)) || app?.blueprint || scriptRoot
+    if (!scriptRoot) {
+      return { mode: 'group', group: null, targetBlueprint }
+    }
+    const groups = buildScriptGroups(world.blueprints.items)
+    const group =
+      (targetBlueprint?.id && groups.byId.get(targetBlueprint.id)) || groups.byId.get(scriptRoot.id) || null
+    const groupSize = group?.items?.length || 0
+    if (groupSize <= 1 || !world.ui?.confirm) {
+      return { mode: 'group', group, targetBlueprint }
+    }
+    const applyAll = await world.ui.confirm({
+      title: 'Apply code changes?',
+      message: `This script is shared by ${groupSize} blueprints. Apply to all or fork this app?`,
+      confirmText: 'Apply to all',
+      cancelText: 'Fork',
+    })
+    return { mode: applyAll ? 'group' : 'fork', group, targetBlueprint }
+  }, [world, scriptRoot])
+
   const saveCurrent = useCallback(async () => {
     if (!scriptRoot || !scriptFiles) return
     const path = currentPathRef.current
@@ -1023,12 +1047,13 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       setConflict('Script changed on the server. Refresh or retry.')
       return
     }
+    const updateMode = await resolveScriptUpdateMode()
     setSaving(true)
     setError(null)
     setConflict(null)
     let lockToken
     try {
-      if (!world.admin?.upload || !world.admin?.acquireDeployLock) {
+      if (!world.admin?.upload) {
         setError('Admin connection required.')
         return
       }
@@ -1043,30 +1068,78 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       const hash = await hashFile(file)
       const assetFilename = `${hash}.${assetExt}`
       const assetUrl = `asset://${assetFilename}`
+      await world.admin.upload(file)
+      const resolvedUrl = world.resolveURL ? world.resolveURL(assetUrl) : assetUrl
+      world.loader.setFile?.(resolvedUrl, file)
+      const nextScriptFiles = { ...scriptFiles, [path]: assetUrl }
+      const entryUrl = nextScriptFiles[entryPath]
+      const scriptUpdate = {
+        script: entryUrl,
+        scriptEntry: entryPath,
+        scriptFiles: nextScriptFiles,
+        scriptFormat: scriptRoot.scriptFormat || 'module',
+      }
+
+      if (updateMode.mode === 'fork') {
+        if (!world.builder?.forkTemplateFromBlueprint) {
+          setError('Builder access required.')
+          return
+        }
+        const sourceBlueprint = updateMode.targetBlueprint || scriptRoot
+        const forked = await world.builder.forkTemplateFromBlueprint(sourceBlueprint, 'Code fork', null, {
+          ...scriptUpdate,
+          scriptRef: null,
+        })
+        if (!forked) return
+        const app = world.ui?.state?.app
+        if (app) {
+          app.modify({ blueprint: forked.id })
+          world.admin.entityModify(
+            { id: app.data.id, blueprint: forked.id },
+            { ignoreNetworkId: world.network.id }
+          )
+        }
+        world.emit('toast', 'Script forked')
+        return
+      }
+
+      if (!world.admin?.acquireDeployLock) {
+        setError('Admin connection required.')
+        return
+      }
       const scope = deriveLockScopeFromBlueprintId(scriptRoot.id)
       const result = await world.admin.acquireDeployLock({
         owner: world.network.id,
         scope,
       })
       lockToken = result?.token || world.admin.deployLockToken
-      await world.admin.upload(file)
-      const resolvedUrl = world.resolveURL ? world.resolveURL(assetUrl) : assetUrl
-      world.loader.setFile?.(resolvedUrl, file)
-      const nextScriptFiles = { ...scriptFiles, [path]: assetUrl }
       const nextVersion = rootVersion + 1
       const change = {
         id: scriptRoot.id,
         version: nextVersion,
-        script: nextScriptFiles[entryPath],
-        scriptEntry: entryPath,
-        scriptFiles: nextScriptFiles,
-        scriptFormat: scriptRoot.scriptFormat || 'module',
+        ...scriptUpdate,
       }
       world.blueprints.modify(change)
       world.admin.blueprintModify(change, {
         ignoreNetworkId: world.network.id,
         lockToken,
       })
+      if (updateMode.group?.items?.length) {
+        for (const sibling of updateMode.group.items) {
+          if (!sibling?.id || sibling.id === scriptRoot.id) continue
+          const siblingChange = {
+            id: sibling.id,
+            version: (sibling.version || 0) + 1,
+            script: entryUrl,
+            scriptRef: scriptRoot.id,
+          }
+          world.blueprints.modify(siblingChange)
+          world.admin.blueprintModify(siblingChange, {
+            ignoreNetworkId: world.network.id,
+            lockToken,
+          })
+        }
+      }
       state.originalText = text
       state.dirty = false
       state.version = nextVersion
@@ -1103,6 +1176,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     entryPath,
     rootVersion,
     world,
+    resolveScriptUpdateMode,
   ])
 
   const saveAll = useCallback(
@@ -1139,23 +1213,18 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
           return false
         }
       }
+      const updateMode = await resolveScriptUpdateMode()
       setSaving(true)
       setError(null)
       setConflict(null)
       let lockToken
       try {
-        if (!world.admin?.upload || !world.admin?.acquireDeployLock) {
+        if (!world.admin?.upload) {
           setError('Admin connection required.')
           return false
         }
         const nextScriptFiles = { ...scriptFiles }
         const updates = []
-        const scope = deriveLockScopeFromBlueprintId(scriptRoot.id)
-        const result = await world.admin.acquireDeployLock({
-          owner: world.network.id,
-          scope,
-        })
-        lockToken = result?.token || world.admin.deployLockToken
         for (const { path, state } of pending) {
           const text = state.model.getValue()
           const ext = getFileExtension(path)
@@ -1174,20 +1243,74 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
           nextScriptFiles[path] = assetUrl
           updates.push({ path, text, assetUrl })
         }
+        const entryUrl = nextScriptFiles[entryPath]
+        const scriptUpdate = {
+          script: entryUrl,
+          scriptEntry: entryPath,
+          scriptFiles: nextScriptFiles,
+          scriptFormat: scriptRoot.scriptFormat || 'module',
+        }
+
+        if (updateMode.mode === 'fork') {
+          if (!world.builder?.forkTemplateFromBlueprint) {
+            setError('Builder access required.')
+            return false
+          }
+          const sourceBlueprint = updateMode.targetBlueprint || scriptRoot
+          const forked = await world.builder.forkTemplateFromBlueprint(sourceBlueprint, 'Code fork', null, {
+            ...scriptUpdate,
+            scriptRef: null,
+          })
+          if (!forked) return false
+          const app = world.ui?.state?.app
+          if (app) {
+            app.modify({ blueprint: forked.id })
+            world.admin.entityModify(
+              { id: app.data.id, blueprint: forked.id },
+              { ignoreNetworkId: world.network.id }
+            )
+          }
+          world.emit('toast', 'Script forked')
+          return true
+        }
+
+        if (!world.admin?.acquireDeployLock) {
+          setError('Admin connection required.')
+          return false
+        }
+        const scope = deriveLockScopeFromBlueprintId(scriptRoot.id)
+        const result = await world.admin.acquireDeployLock({
+          owner: world.network.id,
+          scope,
+        })
+        lockToken = result?.token || world.admin.deployLockToken
         const nextVersion = rootVersion + 1
         const change = {
           id: scriptRoot.id,
           version: nextVersion,
-          script: nextScriptFiles[entryPath],
-          scriptEntry: entryPath,
-          scriptFiles: nextScriptFiles,
-          scriptFormat: scriptRoot.scriptFormat || 'module',
+          ...scriptUpdate,
         }
         world.blueprints.modify(change)
         world.admin.blueprintModify(change, {
           ignoreNetworkId: world.network.id,
           lockToken,
         })
+        if (updateMode.group?.items?.length) {
+          for (const sibling of updateMode.group.items) {
+            if (!sibling?.id || sibling.id === scriptRoot.id) continue
+            const siblingChange = {
+              id: sibling.id,
+              version: (sibling.version || 0) + 1,
+              script: entryUrl,
+              scriptRef: scriptRoot.id,
+            }
+            world.blueprints.modify(siblingChange)
+            world.admin.blueprintModify(siblingChange, {
+              ignoreNetworkId: world.network.id,
+              lockToken,
+            })
+          }
+        }
         for (const update of updates) {
           const state = fileStatesRef.current.get(update.path)
           if (!state) continue
@@ -1229,7 +1352,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         }
       }
     },
-    [scriptRoot, scriptFiles, entryPath, rootVersion, world, saving]
+    [scriptRoot, scriptFiles, entryPath, rootVersion, world, saving, resolveScriptUpdateMode]
   )
 
   saveAllRef.current = saveAll

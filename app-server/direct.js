@@ -6,7 +6,7 @@ import { isEqual } from 'lodash-es'
 import { parse as acornParse } from 'acorn'
 import { uuid } from './utils.js'
 import { WorldManifest } from './WorldManifest.js'
-import { deriveBlueprintId, parseBlueprintId, isBlueprintDenylist } from './blueprintUtils.js'
+import { deriveBlueprintId, resolveBlueprintId, parseBlueprintId, isBlueprintDenylist } from './blueprintUtils.js'
 import { scaffoldBaseProject, scaffoldBuiltins } from './scaffold.js'
 import { BUILTIN_BLUEPRINT_IDS, SCENE_TEMPLATE } from './templates/builtins.js'
 import { readPacket, writePacket } from '../src/core/packets.js'
@@ -23,6 +23,7 @@ const BLUEPRINT_FIELDS = [
   'unique',
   'scene',
   'disabled',
+  'keep',
   'author',
   'url',
   'desc',
@@ -238,6 +239,86 @@ function isScriptFilename(name) {
 function normalizeScriptFormat(value) {
   if (value === 'module' || value === 'legacy-body') return value
   return null
+}
+
+function getScriptKey(blueprint) {
+  const script = typeof blueprint?.script === 'string' ? blueprint.script.trim() : ''
+  return script || null
+}
+
+function toCreatedAtMs(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (value instanceof Date) return value.getTime()
+  if (typeof value === 'string') {
+    const ts = Date.parse(value)
+    if (Number.isFinite(ts)) return ts
+  }
+  return null
+}
+
+function getBlueprintFileBase(blueprint) {
+  if (!blueprint) return ''
+  if (typeof blueprint.fileBase === 'string' && blueprint.fileBase) return blueprint.fileBase
+  if (typeof blueprint.id === 'string' && blueprint.id) {
+    const parsed = parseBlueprintId(blueprint.id)
+    return parsed.fileBase || blueprint.id
+  }
+  return ''
+}
+
+function compareBlueprintsForMain(a, b) {
+  const aTime = toCreatedAtMs(a?.createdAt)
+  const bTime = toCreatedAtMs(b?.createdAt)
+  if (aTime !== null && bTime !== null && aTime !== bTime) {
+    return aTime - bTime
+  }
+  if (aTime !== null && bTime === null) return -1
+  if (aTime === null && bTime !== null) return 1
+  const aBase = (getBlueprintFileBase(a) || '').toLowerCase()
+  const bBase = (getBlueprintFileBase(b) || '').toLowerCase()
+  if (aBase < bBase) return -1
+  if (aBase > bBase) return 1
+  return 0
+}
+
+function buildScriptGroupIndex(blueprints) {
+  const groups = new Map()
+  if (!blueprints) return groups
+  const items = Array.isArray(blueprints) ? blueprints : Array.from(blueprints.values ? blueprints.values() : [])
+  for (const blueprint of items) {
+    const key = getScriptKey(blueprint)
+    if (!key) continue
+    let group = groups.get(key)
+    if (!group) {
+      group = { script: key, items: [], main: null }
+      groups.set(key, group)
+    }
+    group.items.push(blueprint)
+  }
+  for (const group of groups.values()) {
+    group.items.sort(compareBlueprintsForMain)
+    group.main = group.items[0] || null
+  }
+  return groups
+}
+
+function resolveUniqueFileBase(appPath, desiredBase, blueprintId, existingPath = null) {
+  const base = sanitizeFileBaseName(desiredBase || blueprintId || 'blueprint')
+  for (let idx = 0; idx < 10000; idx += 1) {
+    const suffix = idx === 0 ? '' : `_${idx}`
+    const candidate = `${base}${suffix}`
+    const candidatePath = path.join(appPath, `${candidate}.json`)
+    if (existingPath && path.resolve(candidatePath) === path.resolve(existingPath)) {
+      return candidate
+    }
+    if (!fs.existsSync(candidatePath)) return candidate
+    const existing = readJson(candidatePath)
+    const existingId = typeof existing?.id === 'string' ? existing.id.trim() : ''
+    if (existingId && existingId === blueprintId) {
+      return candidate
+    }
+  }
+  return `${base}_${uuid()}`
 }
 
 function getExportedName(node) {
@@ -813,6 +894,7 @@ export class DirectAppServer {
     this.watchers = new Map()
     this.reconnecting = false
     this.pendingManifestWrite = null
+    this.localBlueprintPathIndex = new Map()
 
     this.assetsUrl = null
     this.snapshot = null
@@ -974,14 +1056,17 @@ export class DirectAppServer {
     this._writeWorldFile(manifest)
 
     const blueprints = Array.isArray(nextSnapshot.blueprints) ? nextSnapshot.blueprints : []
-    const syncedScriptRoots = new Set()
+    const localIndex = this._indexLocalBlueprints()
+    const scriptGroups = buildScriptGroupIndex(blueprints)
+    const syncedScriptKeys = new Set()
     for (const blueprint of blueprints) {
       if (!blueprint?.id) continue
       const scriptRoot = this._resolveRemoteScriptRootBlueprint(blueprint)
       let shouldSyncScriptSources = false
-      if (includeScriptSources && scriptRoot?.id && !syncedScriptRoots.has(scriptRoot.id)) {
+      const scriptKey = getScriptKey(scriptRoot || blueprint)
+      if (includeScriptSources && scriptKey && !syncedScriptKeys.has(scriptKey)) {
         shouldSyncScriptSources = true
-        syncedScriptRoots.add(scriptRoot.id)
+        syncedScriptKeys.add(scriptKey)
       }
       await this._writeBlueprintToDisk({
         blueprint,
@@ -991,6 +1076,8 @@ export class DirectAppServer {
         pruneScriptSources: shouldSyncScriptSources,
         allowScriptOverwrite: includeBuiltScripts,
         scriptRoot,
+        localIndex,
+        scriptGroups,
       })
     }
   }
@@ -1071,7 +1158,11 @@ export class DirectAppServer {
 
   _indexLocalBlueprints() {
     const index = new Map()
-    if (!fs.existsSync(this.appsDir)) return index
+    const pathIndex = new Map()
+    if (!fs.existsSync(this.appsDir)) {
+      this.localBlueprintPathIndex = pathIndex
+      return index
+    }
 
     for (const appName of listSubdirs(this.appsDir)) {
       const appPath = path.join(this.appsDir, appName)
@@ -1085,12 +1176,19 @@ export class DirectAppServer {
         if (!entry.name.endsWith('.json')) continue
         if (isBlueprintDenylist(entry.name)) continue
         const fileBase = path.basename(entry.name, '.json')
-        const id = deriveBlueprintId(appName, fileBase)
         const configPath = path.join(appPath, entry.name)
-        index.set(id, { id, appName, fileBase, configPath, scriptPath })
+        const cfg = readJson(configPath)
+        const id = resolveBlueprintId(appName, fileBase, cfg)
+        const createdAt = typeof cfg?.createdAt === 'string' ? cfg.createdAt : null
+        const scriptKey = typeof cfg?.script === 'string' ? cfg.script.trim() : ''
+        const keep = cfg?.keep === true
+        const info = { id, appName, fileBase, configPath, scriptPath, createdAt, scriptKey, keep }
+        index.set(id, info)
+        pathIndex.set(configPath, info)
       }
     }
 
+    this.localBlueprintPathIndex = pathIndex
     return index
   }
 
@@ -1230,11 +1328,28 @@ export class DirectAppServer {
 
       if (dirPath === rootPath && filename.endsWith('.json') && !isBlueprintDenylist(filename)) {
         const fileBase = path.basename(filename, '.json')
-        const id = deriveBlueprintId(appName, fileBase)
         if (!fs.existsSync(abs)) {
+          const cached = this.localBlueprintPathIndex.get(abs)
+          const id = cached?.id || deriveBlueprintId(appName, fileBase)
           this._scheduleRemoveBlueprint(id, abs)
           return
         }
+        const cfg = readJson(abs)
+        const id = resolveBlueprintId(appName, fileBase, cfg)
+        const scriptPath = this._getScriptPath(appName)
+        const createdAt = typeof cfg?.createdAt === 'string' ? cfg.createdAt : null
+        const scriptKey = typeof cfg?.script === 'string' ? cfg.script.trim() : ''
+        const keep = cfg?.keep === true
+        this.localBlueprintPathIndex.set(abs, {
+          id,
+          appName,
+          fileBase,
+          configPath: abs,
+          scriptPath,
+          createdAt,
+          scriptKey,
+          keep,
+        })
         this._scheduleDeployBlueprint(id)
         return
       }
@@ -1380,15 +1495,23 @@ export class DirectAppServer {
   }
 
   _getBlueprintIdsForApp(appName) {
-    const ids = []
-    if (!this.snapshot?.blueprints) return ids
+    const ids = new Set()
+    if (this.localBlueprintPathIndex?.size) {
+      for (const info of this.localBlueprintPathIndex.values()) {
+        if (info?.appName === appName && info.id) {
+          ids.add(info.id)
+        }
+      }
+    }
+    if (ids.size) return Array.from(ids)
+    if (!this.snapshot?.blueprints) return []
     for (const id of this.snapshot.blueprints.keys()) {
       const parsed = parseBlueprintId(id)
       if (parsed.appName === appName) {
-        ids.push(id)
+        ids.add(id)
       }
     }
-    return ids
+    return Array.from(ids)
   }
 
   async _removeBlueprintsAndEntities(blueprintIds) {
@@ -1612,9 +1735,9 @@ export class DirectAppServer {
     const candidates = index
       ? Array.from(index.values()).filter(item => item.appName === appName)
       : infos
-    const root = candidates.find(info => info.id === appName || info.fileBase === appName)
-    if (root?.id) return root.id
-    return infos[0]?.id || candidates[0]?.id || null
+    if (!candidates || !candidates.length) return null
+    const sorted = candidates.slice().sort(compareBlueprintsForMain)
+    return sorted[0]?.id || candidates[0]?.id || null
   }
 
   _buildScriptPayload(info, scriptInfo) {
@@ -1648,6 +1771,9 @@ export class DirectAppServer {
       script: scriptInfo.scriptUrl,
       ...this._buildScriptPayload(info, scriptInfo),
       ...pickBlueprintFields(cfg),
+    }
+    if (typeof cfg.createdAt === 'string' && cfg.createdAt.trim()) {
+      payload.createdAt = cfg.createdAt.trim()
     }
     return this._resolveLocalBlueprintToAssetUrls(payload, { upload: uploadAssets })
   }
@@ -2129,21 +2255,27 @@ export class DirectAppServer {
 
   async _onRemoteBlueprint(blueprint) {
     this.snapshot.blueprints.set(blueprint.id, blueprint)
-    await this._writeBlueprintToDisk({
+    const result = await this._writeBlueprintToDisk({
       blueprint,
       force: true,
       includeBuiltScripts: true,
       includeScriptSources: true,
       pruneScriptSources: true,
     })
-    const parsed = parseBlueprintId(blueprint.id)
-    this._watchAppDir(parsed.appName)
+    const appName = result?.appName || parseBlueprintId(blueprint.id).appName
+    this._watchAppDir(appName)
   }
 
   async _onRemoteBlueprintRemoved(id) {
+    const localIndex = this._indexLocalBlueprints()
+    const info = localIndex.get(id) || null
+    const configPath =
+      info?.configPath || path.join(this.appsDir, parseBlueprintId(id).appName, `${parseBlueprintId(id).fileBase}.json`)
+    const appName = info?.appName || parseBlueprintId(id).appName
+    const existingConfig = readJson(configPath)
+    const keep = info?.keep === true || existingConfig?.keep === true
     this.snapshot.blueprints.delete(id)
-    const parsed = parseBlueprintId(id)
-    const configPath = path.join(this.appsDir, parsed.appName, `${parsed.fileBase}.json`)
+    if (keep) return
     if (fs.existsSync(configPath)) {
       try {
         fs.rmSync(configPath, { force: true })
@@ -2151,7 +2283,7 @@ export class DirectAppServer {
         console.warn(`⚠️  Failed to delete blueprint config: ${configPath}`)
       }
     }
-    this._maybeRemoveEmptyAppFolder(parsed.appName)
+    this._maybeRemoveEmptyAppFolder(appName)
   }
 
   _maybeRemoveEmptyAppFolder(appName) {
@@ -2185,20 +2317,66 @@ export class DirectAppServer {
     allowScriptOverwrite = false,
     pruneScriptSources = false,
     scriptRoot = null,
+    localIndex = null,
+    scriptGroups = null,
   }) {
-    const { appName, fileBase } = parseBlueprintId(blueprint.id)
+    const index = localIndex || this._indexLocalBlueprints()
+    const existingInfo = blueprint?.id ? index.get(blueprint.id) : null
+    const scriptKey = getScriptKey(blueprint)
+    const groups =
+      scriptGroups || (this.snapshot?.blueprints ? buildScriptGroupIndex(this.snapshot.blueprints) : new Map())
+    let appName = null
+    if (scriptKey && groups.size) {
+      const group = groups.get(scriptKey)
+      const main = group?.main || null
+      if (main?.id) {
+        const mainInfo = index.get(main.id)
+        appName = mainInfo?.appName || parseBlueprintId(main.id).appName
+      }
+    }
+    if (!appName) {
+      appName = existingInfo?.appName || parseBlueprintId(blueprint.id).appName
+    }
     const appPath = path.join(this.appsDir, appName)
     ensureDir(appPath)
 
-    const blueprintPath = path.join(appPath, `${fileBase}.json`)
-    const existingConfig = readJson(blueprintPath)
+    let fileBase = existingInfo?.fileBase || parseBlueprintId(blueprint.id).fileBase || blueprint.id
+    fileBase = sanitizeFileBaseName(fileBase)
+    const blueprintPath = path.join(
+      appPath,
+      `${resolveUniqueFileBase(appPath, fileBase, blueprint.id, existingInfo?.configPath)}.json`
+    )
+    const existingConfigPath = existingInfo?.configPath
+    const existingConfig = existingConfigPath ? readJson(existingConfigPath) : readJson(blueprintPath)
     const localBlueprint = await this._blueprintToLocalConfig(appName, blueprint, { existingConfig })
+    const destinationConfig = readJson(blueprintPath)
     if (force || !fs.existsSync(blueprintPath)) {
       this._writeFileAtomic(blueprintPath, JSON.stringify(localBlueprint, null, 2) + '\n')
     } else {
-      if (!isEqual(existingConfig, localBlueprint)) {
+      if (!isEqual(destinationConfig, localBlueprint)) {
         this._writeFileAtomic(blueprintPath, JSON.stringify(localBlueprint, null, 2) + '\n')
       }
+    }
+    if (existingConfigPath && existingConfigPath !== blueprintPath) {
+      this._deleteFileAtomic(existingConfigPath)
+      if (existingInfo?.appName && existingInfo.appName !== appName) {
+        this._maybeRemoveEmptyAppFolder(existingInfo.appName)
+      }
+    }
+    const nextInfo = {
+      id: blueprint.id,
+      appName,
+      fileBase: path.basename(blueprintPath, '.json'),
+      configPath: blueprintPath,
+      scriptPath: this._getScriptPath(appName),
+      createdAt: typeof blueprint.createdAt === 'string' ? blueprint.createdAt : existingInfo?.createdAt || null,
+      scriptKey: scriptKey || '',
+      keep: blueprint.keep === true,
+    }
+    if (index) index.set(blueprint.id, nextInfo)
+    this.localBlueprintPathIndex.set(blueprintPath, nextInfo)
+    if (existingConfigPath && existingConfigPath !== blueprintPath) {
+      this.localBlueprintPathIndex.delete(existingConfigPath)
     }
 
     const resolvedScriptRoot = scriptRoot || this._resolveRemoteScriptRootBlueprint(blueprint)
@@ -2206,7 +2384,7 @@ export class DirectAppServer {
       if (includeScriptSources) {
         await this._syncScriptSourcesToDisk(appName, resolvedScriptRoot, { pruneMissing: pruneScriptSources })
       }
-      return
+      return { appName, fileBase: nextInfo.fileBase, configPath: blueprintPath }
     }
 
     const hasRemoteScript = typeof blueprint.script === 'string'
@@ -2221,6 +2399,7 @@ export class DirectAppServer {
         }
       }
     }
+    return { appName, fileBase: nextInfo.fileBase, configPath: blueprintPath }
   }
 
   async _downloadScript(scriptUrl) {
@@ -2261,6 +2440,13 @@ export class DirectAppServer {
     if (parsed.appName && parsed.appName !== blueprint.id) {
       const base = this.snapshot?.blueprints?.get(parsed.appName)
       if (base && hasScriptFiles(base)) return base
+    }
+    const scriptKey = getScriptKey(blueprint)
+    if (scriptKey && this.snapshot?.blueprints) {
+      for (const candidate of this.snapshot.blueprints.values()) {
+        if (!candidate || !hasScriptFiles(candidate)) continue
+        if (getScriptKey(candidate) === scriptKey) return candidate
+      }
     }
     return null
   }
@@ -2309,6 +2495,12 @@ export class DirectAppServer {
       existingConfig && typeof existingConfig === 'object' && !Array.isArray(existingConfig)
         ? existingConfig
         : null
+    const existingCreatedAt = typeof existing?.createdAt === 'string' ? existing.createdAt : null
+    const createdAt = typeof blueprint.createdAt === 'string' ? blueprint.createdAt : existingCreatedAt
+    if (typeof blueprint.id === 'string' && blueprint.id) output.id = blueprint.id
+    const scriptKey = typeof blueprint.script === 'string' ? blueprint.script.trim() : ''
+    if (scriptKey) output.script = blueprint.script
+    if (createdAt) output.createdAt = createdAt
     if (blueprint.author !== undefined) output.author = blueprint.author
     if (blueprint.url !== undefined) output.url = blueprint.url
     if (blueprint.desc !== undefined) output.desc = blueprint.desc
@@ -2319,6 +2511,11 @@ export class DirectAppServer {
     if (blueprint.unique !== undefined) output.unique = blueprint.unique
     if (blueprint.disabled !== undefined) output.disabled = blueprint.disabled
     if (blueprint.scene !== undefined) output.scene = blueprint.scene
+    if (blueprint.keep !== undefined) {
+      output.keep = blueprint.keep
+    } else if (existing?.keep !== undefined) {
+      output.keep = existing.keep
+    }
     const scriptFormat = normalizeScriptFormat(blueprint.scriptFormat)
     if (scriptFormat) output.scriptFormat = scriptFormat
 

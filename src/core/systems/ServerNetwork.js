@@ -86,6 +86,8 @@ export class ServerNetwork extends System {
     const blueprints = await this.db('blueprints')
     for (const blueprint of blueprints) {
       const data = JSON.parse(blueprint.data)
+      if (blueprint?.createdAt) data.createdAt = blueprint.createdAt
+      if (data.keep === undefined) data.keep = false
       this.world.blueprints.add(data, true)
     }
     // hydrate entities
@@ -173,12 +175,15 @@ export class ServerNetwork extends System {
     for (const id of this.dirtyBlueprints) {
       const blueprint = this.world.blueprints.get(id)
       try {
+        const createdAt = blueprint.createdAt || now
+        if (!blueprint.createdAt) blueprint.createdAt = createdAt
+        if (blueprint.keep === undefined) blueprint.keep = false
         const record = {
           id: blueprint.id,
           data: JSON.stringify(blueprint),
         }
         await this.db('blueprints')
-          .insert({ ...record, createdAt: now, updatedAt: now })
+          .insert({ ...record, createdAt, updatedAt: now })
           .onConflict('id')
           .merge({ ...record, updatedAt: now })
         counts.upsertedBlueprints++
@@ -481,6 +486,12 @@ export class ServerNetwork extends System {
   }
 
   applyBlueprintAdded(blueprint, { ignoreNetworkId } = {}) {
+    if (!blueprint.createdAt) {
+      blueprint.createdAt = moment().toISOString()
+    }
+    if (blueprint.keep === undefined) {
+      blueprint.keep = false
+    }
     const validation = validateBlueprintScriptFields(blueprint)
     if (!validation.ok) return validation
     this.world.blueprints.add(blueprint)
@@ -499,8 +510,13 @@ export class ServerNetwork extends System {
     }
     // if new version is greater than current version, allow it
     if (change.version > blueprint.version) {
-      this.world.blueprints.modify(change)
-      this.send('blueprintModified', change, ignoreNetworkId)
+      const createdAt = blueprint.createdAt || change.createdAt || moment().toISOString()
+      const nextChange = { ...change, createdAt }
+      if (blueprint.keep === undefined && nextChange.keep === undefined) {
+        nextChange.keep = false
+      }
+      this.world.blueprints.modify(nextChange)
+      this.send('blueprintModified', nextChange, ignoreNetworkId)
       this.dirtyBlueprints.add(change.id)
       const updated = this.world.blueprints.get(change.id)
       if (updated) {

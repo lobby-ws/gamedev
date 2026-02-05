@@ -27,19 +27,17 @@ class Cleaner {
     // ...
   }
 
-  async init({ db }) {
-    const clean = process.env.CLEAN === 'true' || process.env.CLEAN === 'dryrun'
-    if (!clean) return console.log('[clean] skipped')
-    const dryrun = process.env.CLEAN === 'dryrun'
+  async run({ db, dryrun = false } = {}) {
+    if (!db) throw new Error('db_required')
     console.log(dryrun ? '[clean] dry run' : '[clean] running')
     // get all assets
     const allAssets = await assets.list() // hash-only assets
     // get all blueprints
-    const blueprints = new Set()
+    const blueprints = []
     const blueprintRows = await db('blueprints')
     for (const row of blueprintRows) {
       const blueprint = JSON.parse(row.data)
-      blueprints.add(blueprint)
+      blueprints.push(blueprint)
     }
     // get all entities
     const entities = []
@@ -47,6 +45,32 @@ class Cleaner {
     for (const row of entityRows) {
       const entity = JSON.parse(row.data)
       entities.push(entity)
+    }
+    // find orphan blueprints (no entities, not scene, not keep)
+    const usedBlueprintIds = new Set()
+    for (const entity of entities) {
+      if (entity?.type === 'app' && entity.blueprint) {
+        usedBlueprintIds.add(entity.blueprint)
+      }
+    }
+    const orphanIds = []
+    const keptBlueprints = []
+    for (const blueprint of blueprints) {
+      const isScene = blueprint?.scene === true
+      const isKept = blueprint?.keep === true
+      const isUsed = blueprint?.id && usedBlueprintIds.has(blueprint.id)
+      if (!isScene && !isKept && !isUsed) {
+        if (blueprint?.id) orphanIds.push(blueprint.id)
+        continue
+      }
+      keptBlueprints.push(blueprint)
+    }
+    if (orphanIds.length) {
+      console.log(`[clean] ${orphanIds.length} orphan blueprints can be deleted`)
+      if (!dryrun) {
+        await db('blueprints').whereIn('id', orphanIds).delete()
+        console.log(`[clean] ${orphanIds.length} orphan blueprints deleted`)
+      }
     }
     // track a list of assets to keep
     const assetsToKeep = new Set()
@@ -61,7 +85,7 @@ class Cleaner {
     if (settings.image) assetsToKeep.add(settings.image.url.replace('asset://', ''))
     if (settings.avatar) assetsToKeep.add(settings.avatar.url.replace('asset://', ''))
     // keep all assets associated with all blueprints (spawned or unspawned)
-    for (const blueprint of blueprints) {
+    for (const blueprint of keptBlueprints) {
       // blueprint model
       if (blueprint.model && blueprint.model.startsWith('asset://')) {
         assetsToKeep.add(blueprint.model.replace('asset://', ''))
@@ -109,6 +133,21 @@ class Cleaner {
       }
     }
     console.log('[clean] complete')
+    return {
+      ok: true,
+      dryrun,
+      orphanBlueprints: orphanIds.length,
+      deletedBlueprints: dryrun ? 0 : orphanIds.length,
+      assetsToDelete: assetsToDelete.size,
+      deletedAssets: dryrun ? 0 : assetsToDelete.size,
+    }
+  }
+
+  async init({ db }) {
+    const clean = process.env.CLEAN === 'true' || process.env.CLEAN === 'dryrun'
+    if (!clean) return console.log('[clean] skipped')
+    const dryrun = process.env.CLEAN === 'dryrun'
+    await this.run({ db, dryrun })
   }
 }
 

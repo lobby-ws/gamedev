@@ -19,10 +19,13 @@ import { hashFile } from '../../core/utils-client'
 import { isArray, isBoolean, isEqual, merge } from 'lodash-es'
 import { css } from '@firebolt-dev/css'
 import { RotateCcwIcon } from 'lucide-react'
+import { buildScriptGroups, getScriptGroupMain } from '../../core/extras/blueprintGroups'
 
 export function MenuApp({ world, app, blur }) {
   const [pages, setPages] = useState(() => ['index'])
   const [blueprint, setBlueprint] = useState(app.blueprint)
+  const groupMain = getScriptGroupMain(buildScriptGroups(world.blueprints.items), blueprint)
+  const menuTitle = blueprint.name || groupMain?.name || blueprint.id
   useEffect(() => {
     window.app = app
   }, [app])
@@ -51,7 +54,7 @@ export function MenuApp({ world, app, blur }) {
   if (page === 'flags') Page = MenuAppFlags
   if (page === 'metadata') Page = MenuAppMetadata
   return (
-    <Menu title={blueprint.name} blur={blur}>
+    <Menu title={menuTitle} blur={blur}>
       <Page world={world} app={app} blueprint={blueprint} setBlueprint={setBlueprint} pop={pop} push={push} />
     </Menu>
   )
@@ -63,13 +66,32 @@ const extToType = {
 }
 const allowedModels = ['glb', 'vrm']
 
-function MenuAppIndex({ world, app, blueprint, pop, push }) {
+function MenuAppIndex({ world, app, blueprint, setBlueprint, pop, push }) {
   const player = world.entities.player
   const frozen = blueprint.frozen // TODO: disable code editor, model change, metadata editing, flag editing etc
+  const resolveModelUpdateMode = async () => {
+    if (blueprint.unique || !world.ui?.confirm) return 'all'
+    let count = 0
+    for (const entity of world.entities.items.values()) {
+      if (entity.isApp && entity.data.blueprint === blueprint.id) count += 1
+    }
+    const message =
+      count > 1
+        ? `This model is shared by ${count} instances. Apply to all or fork this app?`
+        : 'This model is shared by this template. Apply to all or fork this app?'
+    const applyAll = await world.ui.confirm({
+      title: 'Apply model change?',
+      message,
+      confirmText: 'Apply to all',
+      cancelText: 'Fork',
+    })
+    return applyAll ? 'all' : 'fork'
+  }
   const changeModel = async file => {
     if (!file) return
     const ext = file.name.split('.').pop().toLowerCase()
     if (!allowedModels.includes(ext)) return
+    const updateMode = await resolveModelUpdateMode()
     // immutable hash the file
     const hash = await hashFile(file)
     // use hash as glb filename
@@ -79,11 +101,27 @@ function MenuAppIndex({ world, app, blueprint, pop, push }) {
     // cache file locally so this client can insta-load it
     const type = extToType[ext]
     world.loader.insert(type, url, file)
+    // upload model
+    await world.admin.upload(file)
+    if (updateMode === 'fork') {
+      if (!world.builder?.forkTemplateFromBlueprint) {
+        world.emit('toast', 'Builder access required.')
+        return
+      }
+      const forked = await world.builder.forkTemplateFromBlueprint(blueprint, 'Model fork', null, { model: url })
+      if (!forked) return
+      app.modify({ blueprint: forked.id })
+      world.admin.entityModify(
+        { id: app.data.id, blueprint: forked.id },
+        { ignoreNetworkId: world.network.id }
+      )
+      if (setBlueprint) setBlueprint(forked)
+      world.emit('toast', 'Model forked')
+      return
+    }
     // update blueprint locally (also rebuilds apps)
     const version = blueprint.version + 1
     world.blueprints.modify({ id: blueprint.id, version, model: url })
-    // upload model
-    await world.admin.upload(file)
     // broadcast blueprint change to server + other clients
     world.admin.blueprintModify({ id: blueprint.id, version, model: url }, { ignoreNetworkId: world.network.id })
   }

@@ -11,6 +11,7 @@ import { ControlPriorities } from '../extras/ControlPriorities'
 import { DEG2RAD, RAD2DEG } from '../extras/general'
 import { createNode } from '../extras/createNode'
 import { importApp } from '../extras/appTools'
+import { buildScriptGroups, getScriptGroupMain } from '../extras/blueprintGroups'
 
 const FORWARD = new THREE.Vector3(0, 0, -1)
 const SNAP_DISTANCE = 1
@@ -33,9 +34,22 @@ function splitBlueprintId(id) {
   return { prefix: '', base: id || 'blueprint' }
 }
 
-function getNextBlueprintVariant(world, sourceId) {
+function getNextBlueprintVariant(world, sourceBlueprint) {
+  const sourceId = typeof sourceBlueprint === 'string' ? sourceBlueprint : sourceBlueprint?.id
   const { prefix, base } = splitBlueprintId(sourceId)
-  const safeBase = base || 'blueprint'
+  let safeBase = base || 'blueprint'
+  if (sourceBlueprint && typeof sourceBlueprint === 'object') {
+    const scriptKey = typeof sourceBlueprint.script === 'string' ? sourceBlueprint.script.trim() : ''
+    if (scriptKey) {
+      const groups = buildScriptGroups(world?.blueprints?.items)
+      const main = getScriptGroupMain(groups, sourceBlueprint)
+      const mainName = typeof main?.name === 'string' && main.name.trim() ? main.name.trim() : main?.id
+      if (mainName) {
+        const { base: mainBase } = splitBlueprintId(mainName)
+        safeBase = mainBase || mainName
+      }
+    }
+  }
   for (let n = 2; n < 10000; n += 1) {
     const candidateId = `${prefix}${safeBase}_${n}`
     if (!world.blueprints.get(candidateId)) {
@@ -273,7 +287,7 @@ export class ClientBuilder extends System {
         : {}
     const props =
       mergedProps && typeof mergedProps === 'object' && !Array.isArray(mergedProps) ? mergedProps : baseProps
-    const nextBlueprint = getNextBlueprintVariant(this.world, sourceBlueprint.id)
+    const nextBlueprint = getNextBlueprintVariant(this.world, sourceBlueprint)
     const blueprint = {
       id: nextBlueprint.id,
       version: 0,

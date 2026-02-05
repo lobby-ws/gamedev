@@ -2,6 +2,7 @@ import crypto from 'crypto'
 import fs from 'fs'
 
 import { readPacket, writePacket } from '../core/packets.js'
+import { cleaner } from './cleaner'
 
 const SCRIPT_BLUEPRINT_FIELDS = new Set([
   'script',
@@ -867,5 +868,20 @@ function hasScriptFields(data) {
     })
     await assets.upload(file)
     return { ok: true, filename: mp.filename }
+  })
+
+  fastify.post('/admin/clean', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    if (!db) {
+      return reply.code(500).send({ error: 'db_unavailable' })
+    }
+    try {
+      const dryrun = req.body?.dryrun === true || req.body?.dryRun === true
+      const result = await cleaner.run({ db, dryrun })
+      return result
+    } catch (err) {
+      console.error('[admin] clean failed', err)
+      return reply.code(500).send({ error: 'clean_failed' })
+    }
   })
 }
