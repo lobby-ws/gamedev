@@ -17,14 +17,14 @@ App-server is the dev server that syncs local files to a world via `/admin`. It 
 ### Start the app-server
 
 ```bash
-# In a project folder, this scaffolds built-ins locally and deploys them.
+# In a project folder, this scaffolds the default scene locally and deploys it.
 # Configure .env or .lobby/targets.json first.
 gamedev app-server
 ```
 
 Notes
 - On first run, app-server creates:
-  - `apps/` (built-in templates + $scene)
+  - `apps/` (default $scene app)
   - `assets/` (downloaded referenced assets)
   - `world.json` (world layout + per-entity overrides)
 - If you want to pull script sources from an existing world, use:

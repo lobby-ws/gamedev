@@ -1,5 +1,6 @@
-export const BUILTIN_APP_TEMPLATES = [
+export const ENGINE_TEMPLATES = [
   {
+    id: 'Model',
     name: 'Model',
     image: {
       url: 'asset://Model.png',
@@ -23,6 +24,7 @@ export const BUILTIN_APP_TEMPLATES = [
     disabled: false,
   },
   {
+    id: 'Image',
     name: 'Image',
     image: {
       url: 'asset://Image.png',
@@ -56,6 +58,7 @@ export const BUILTIN_APP_TEMPLATES = [
     disabled: false,
   },
   {
+    id: 'Video',
     name: 'Video',
     image: {
       url: 'asset://Video.png',
@@ -91,6 +94,7 @@ export const BUILTIN_APP_TEMPLATES = [
     disabled: false,
   },
   {
+    id: 'Text',
     name: 'Text',
     image: {
       url: 'asset://Text.png',
@@ -122,6 +126,7 @@ export const BUILTIN_APP_TEMPLATES = [
     disabled: false,
   },
   {
+    id: 'Webview',
     name: 'Webview',
     image: {
       url: 'asset://Webview.png',
@@ -134,7 +139,7 @@ export const BUILTIN_APP_TEMPLATES = [
     },
     scriptFormat: 'module',
     props: {
-      url: "https://www.youtube.com/embed/jfKfPfyJRdk?autoplay=1"
+      url: 'https://www.youtube.com/embed/jfKfPfyJRdk?autoplay=1',
     },
     preload: false,
     public: false,
@@ -145,3 +150,10 @@ export const BUILTIN_APP_TEMPLATES = [
     disabled: false,
   },
 ]
+
+const TEMPLATE_INDEX = new Map(ENGINE_TEMPLATES.map(template => [template.id, template]))
+
+export function getEngineTemplate(id) {
+  if (!id) return null
+  return TEMPLATE_INDEX.get(id) || null
+}

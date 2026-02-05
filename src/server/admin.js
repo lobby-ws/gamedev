@@ -1,7 +1,10 @@
 import crypto from 'crypto'
 import fs from 'fs'
+import { cloneDeep } from 'lodash-es'
 
 import { readPacket, writePacket } from '../core/packets.js'
+import { getEngineTemplate } from '../core/templates.js'
+import { uuid } from '../core/utils.js'
 
 const SCRIPT_BLUEPRINT_FIELDS = new Set([
   'script',
@@ -28,6 +31,14 @@ function isCodeValid(expected, code) {
 function isAdminCodeValid(code) {
   const adminCode = process.env.ADMIN_CODE
   return isCodeValid(adminCode, code)
+}
+
+function isNumberArray(value, length) {
+  return (
+    Array.isArray(value) &&
+    value.length === length &&
+    value.every(item => typeof item === 'number' && Number.isFinite(item))
+  )
 }
 
 function getAdminCodeFromRequest(req) {
@@ -474,6 +485,69 @@ function hasScriptFields(data) {
               return
             }
             sendPacket(ws, 'adminResult', { ok: true, requestId })
+            return
+          }
+
+          if (data.type === 'template_spawn') {
+            if (!capabilities.builder) {
+              sendPacket(ws, 'adminResult', { ok: false, error: 'builder_required', requestId })
+              return
+            }
+            const templateId = typeof data.templateId === 'string' ? data.templateId.trim() : ''
+            const template = templateId ? getEngineTemplate(templateId) : null
+            if (!template) {
+              sendPacket(ws, 'adminResult', { ok: false, error: 'template_not_found', requestId })
+              return
+            }
+            const blueprintId = uuid()
+            const blueprint = {
+              id: blueprintId,
+              version: 0,
+              name: template.name || template.id || 'Template',
+              image: template.image ? cloneDeep(template.image) : null,
+              author: null,
+              url: null,
+              desc: null,
+              model: template.model || null,
+              script: template.script || null,
+              scriptEntry: template.scriptEntry || null,
+              scriptFiles: template.scriptFiles ? cloneDeep(template.scriptFiles) : null,
+              scriptFormat: template.scriptFormat || null,
+              props: template.props ? cloneDeep(template.props) : {},
+              preload: !!template.preload,
+              public: !!template.public,
+              locked: !!template.locked,
+              frozen: !!template.frozen,
+              unique: !!template.unique,
+              scene: false,
+              disabled: !!template.disabled,
+            }
+            const addResult = network.applyBlueprintAdded(blueprint)
+            if (!addResult.ok) {
+              sendPacket(ws, 'adminResult', { ok: false, error: addResult.error, requestId })
+              return
+            }
+
+            const position = isNumberArray(data.position, 3) ? data.position : [0, 0, 0]
+            const quaternion = isNumberArray(data.quaternion, 4) ? data.quaternion : [0, 0, 0, 1]
+            const scale = isNumberArray(data.scale, 3) ? data.scale : [1, 1, 1]
+            const mover = data?.mover === false ? null : defaultNetworkId || null
+            const entityId = uuid()
+            const entity = {
+              id: entityId,
+              type: 'app',
+              blueprint: blueprintId,
+              position,
+              quaternion,
+              scale,
+              mover,
+              uploader: null,
+              pinned: false,
+              props: {},
+              state: {},
+            }
+            network.applyEntityAdded(entity)
+            sendPacket(ws, 'adminResult', { ok: true, requestId, blueprintId, entityId })
             return
           }
 

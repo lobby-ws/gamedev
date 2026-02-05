@@ -62,9 +62,9 @@ import { AppsList } from './AppsList'
 import { DEG2RAD, RAD2DEG } from '../../core/extras/general'
 import * as THREE from '../../core/extras/three'
 import { isTouch } from '../utils'
-import { uuid } from '../../core/utils'
 import { useRank } from './useRank'
 import { Ranks } from '../../core/extras/ranks'
+import { ENGINE_TEMPLATES } from '../../core/templates'
 
 const mainSectionPanes = ['prefs']
 const worldSectionPanes = ['world', 'docs', 'apps', 'add']
@@ -919,32 +919,19 @@ function Apps({ world, hidden }) {
 function Add({ world, hidden }) {
   const span = 4
   const gap = '0.5rem'
-  const [trashMode, setTrashMode] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [createPrompt, setCreatePrompt] = useState('')
   const [createError, setCreateError] = useState(null)
   const [creating, setCreating] = useState(false)
+  const [spawning, setSpawning] = useState(false)
   const [createAttachments, setCreateAttachments] = useState([])
   const [createDocsIndex, setCreateDocsIndex] = useState([])
   const [createMention, setCreateMention] = useState(null)
   const [createScriptRoot, setCreateScriptRoot] = useState(null)
   const createPromptRef = useRef(null)
-  const buildTemplates = () => {
-    const items = Array.from(world.blueprints.items.values()).filter(bp => !bp.scene)
-    return sortBy(items, bp => (bp.name || bp.id || '').toLowerCase())
-  }
-  const [templates, setTemplates] = useState(() => buildTemplates())
-
-  useEffect(() => {
-    const refresh = () => setTemplates(buildTemplates())
-    world.blueprints.on('add', refresh)
-    world.blueprints.on('modify', refresh)
-    world.blueprints.on('remove', refresh)
-    return () => {
-      world.blueprints.off('add', refresh)
-      world.blueprints.off('modify', refresh)
-      world.blueprints.off('remove', refresh)
-    }
+  const templates = useMemo(() => {
+    const items = Array.isArray(ENGINE_TEMPLATES) ? ENGINE_TEMPLATES.slice() : []
+    return sortBy(items, template => (template.name || template.id || '').toLowerCase())
   }, [])
 
   useEffect(() => {
@@ -1211,60 +1198,73 @@ function Add({ world, hidden }) {
     [updateCreateMention]
   )
 
-  const add = blueprint => {
+  const selectSpawned = useCallback(
+    entityId => {
+      if (!entityId) return
+      const existing = world.entities.get(entityId)
+      if (existing) {
+        world.builder.select(existing)
+        return
+      }
+      const handle = entity => {
+        if (!entity?.data?.id || entity.data.id !== entityId) return
+        world.entities.off('added', handle)
+        world.builder.select(entity)
+      }
+      world.entities.on('added', handle)
+      setTimeout(() => {
+        world.entities.off('added', handle)
+      }, 5000)
+    },
+    [world]
+  )
+
+  const add = async template => {
+    if (spawning) return
+    if (!world.builder?.canBuild?.()) {
+      world.emit('toast', 'Builder access required.')
+      return
+    }
+    if (!world.admin?.templateSpawn) {
+      world.emit('toast', 'Admin code required.')
+      return
+    }
     const transform = world.builder.getSpawnTransform(true)
     world.builder.toggle(true)
     world.builder.control.pointer.lock()
-    setTimeout(() => {
-      const data = {
-        id: uuid(),
-        type: 'app',
-        blueprint: blueprint.id,
-        position: transform.position,
-        quaternion: transform.quaternion,
-        scale: [1, 1, 1],
-        mover: world.network.id,
-        uploader: null,
-        pinned: false,
-        props: {},
-        state: {},
+    setSpawning(true)
+    try {
+      const result = await world.admin.templateSpawn(
+        {
+          templateId: template.id,
+          position: transform.position,
+          quaternion: transform.quaternion,
+          scale: [1, 1, 1],
+        },
+        { request: true }
+      )
+      if (result?.entityId) {
+        selectSpawned(result.entityId)
       }
-      const app = world.entities.add(data)
-      world.admin.entityAdd(data, { ignoreNetworkId: world.network.id })
-      world.builder.select(app)
-    }, 100)
-  }
-
-  const remove = blueprint => {
-    world.ui
-      .confirm({
-        title: 'Delete blueprint',
-        message: `Delete blueprint \"${blueprint.name || blueprint.id}\"? This cannot be undone.`,
-        confirmText: 'Delete',
-        cancelText: 'Cancel',
-      })
-      .then(async ok => {
-        if (!ok) return
-        try {
-          await world.admin.blueprintRemove(blueprint.id)
-          world.emit('toast', 'Blueprint deleted')
-        } catch (err) {
-          const code = err?.message || ''
-          if (code === 'in_use') {
-            world.emit('toast', 'Cannot delete blueprint: there are spawned entities using it.')
-          } else {
-            world.emit('toast', 'Blueprint delete failed')
-          }
-        }
-      })
-  }
-
-  const handleClick = blueprint => {
-    if (trashMode) {
-      remove(blueprint)
-    } else {
-      add(blueprint)
+    } catch (err) {
+      const code = err?.code || err?.message
+      if (code === 'builder_required') {
+        world.emit('toast', 'Builder access required.')
+      } else if (code === 'admin_required' || code === 'admin_code_missing') {
+        world.emit('toast', 'Admin code required.')
+      } else if (code === 'template_not_found') {
+        world.emit('toast', 'Template not found.')
+      } else {
+        console.error(err)
+        world.emit('toast', 'Template add failed.')
+      }
+    } finally {
+      setSpawning(false)
     }
+  }
+
+  const handleClick = template => {
+    add(template)
   }
 
   const openCreate = () => {
@@ -1320,11 +1320,6 @@ function Add({ world, hidden }) {
           .add-action.active {
             color: #4ce0a1;
           }
-          .add-toggle {
-            &.active {
-              color: #ff6b6b;
-            }
-          }
           .add-content {
             flex: 1;
             overflow-y: auto;
@@ -1339,9 +1334,6 @@ function Add({ world, hidden }) {
           .add-item {
             flex-basis: calc((100% / ${span}) - (${gap} * (${span} - 1) / ${span}));
             cursor: pointer;
-          }
-          .add-item.trash .add-item-image {
-            border-color: rgba(255, 107, 107, 0.6);
           }
           .add-item-image {
             width: 100%;
@@ -1532,19 +1524,16 @@ function Add({ world, hidden }) {
           <div className={cls('add-action', { active: createOpen })} onClick={openCreate} title='AI Create'>
             <CirclePlusIcon size='1.125rem' />
           </div>
-          <div className={cls('add-toggle', { active: trashMode })} onClick={() => setTrashMode(!trashMode)}>
-            <Trash2Icon size='1.125rem' />
-          </div>
         </div>
         <div className='add-content noscrollbar'>
           <div className='add-items'>
-            {templates.map(blueprint => {
-              const imageUrl = blueprint.image?.url || (typeof blueprint.image === 'string' ? blueprint.image : null)
+            {templates.map(template => {
+              const imageUrl = template.image?.url || (typeof template.image === 'string' ? template.image : null)
               return (
                 <div
-                  className={cls('add-item', { trash: trashMode })}
-                  key={blueprint.id}
-                  onClick={() => handleClick(blueprint)}
+                  className='add-item'
+                  key={template.id}
+                  onClick={() => handleClick(template)}
                 >
                   <div
                     className='add-item-image'
@@ -1552,7 +1541,7 @@ function Add({ world, hidden }) {
                       ${imageUrl ? `background-image: url(${world.resolveURL(imageUrl)});` : ''}
                     `}
                   ></div>
-                  <div className='add-item-name'>{blueprint.name || blueprint.id}</div>
+                  <div className='add-item-name'>{template.name || template.id}</div>
                 </div>
               )
             })}

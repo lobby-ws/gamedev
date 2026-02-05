@@ -334,6 +334,19 @@ export class AdminClient extends System {
     this.send(payload)
   }
 
+  templateSpawn({ templateId, position, quaternion, scale, mover } = {}, { request = true, timeoutMs } = {}) {
+    const payload = {
+      type: 'template_spawn',
+      templateId,
+      position,
+      quaternion,
+      scale,
+      mover,
+    }
+    if (request) return this.request(payload, { timeoutMs })
+    this.send(payload)
+  }
+
   blueprintModify(change, { ignoreNetworkId, lockToken, request, timeoutMs } = {}) {
     const payload = {
       type: 'blueprint_modify',

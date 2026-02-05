@@ -16,7 +16,7 @@ npm run dev
 ```
 
 The scaffolded `package.json` includes `gamedev` and `typescript` as devDependencies.
-Built-in apps and a default `$scene` entry are included in `apps/` and `world.json`.
+A default `$scene` entry is included in `apps/` and `world.json`.
 
 World projects are meant to live in their own repository (no engine source). The CLI syncs your files to a world server:
 - If `WORLD_URL` points at localhost/127.0.0.1, `gamedev dev` starts a local world server and the app-server.

@@ -2,7 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
-import { BUILTIN_APP_TEMPLATES, SCENE_TEMPLATE } from './templates/builtins.js'
+import { SCENE_TEMPLATE } from './templates/builtins.js'
 import { WorldManifest } from './WorldManifest.js'
 import { uuid } from './utils.js'
 
@@ -420,7 +420,7 @@ export function scaffoldBuiltins({ rootDir, force = false, writeFile } = {}) {
   const assetsDir = path.join(rootDir, 'assets')
   ensureDir(appsDir)
 
-  const templates = [...BUILTIN_APP_TEMPLATES, SCENE_TEMPLATE]
+  const templates = [SCENE_TEMPLATE]
   const assetFiles = new Set()
 
   for (const template of templates) {

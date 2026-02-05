@@ -25,6 +25,17 @@ function isNumberArray(value, length) {
   )
 }
 
+function hasScriptFiles(blueprint) {
+  return blueprint?.scriptFiles && typeof blueprint.scriptFiles === 'object' && !Array.isArray(blueprint.scriptFiles)
+}
+
+function getBlueprintAppName(id) {
+  if (typeof id !== 'string' || !id) return ''
+  if (id === '$scene') return '$scene'
+  const idx = id.indexOf('__')
+  return idx === -1 ? id : id.slice(0, idx)
+}
+
 function serializePlayerForAdmin(player) {
   if (!player?.data) return null
   return {
@@ -58,6 +69,7 @@ export class ServerNetwork extends System {
     this.dirtyApps = new Set()
     this.isServer = true
     this.queue = []
+    this.cleanupInProgress = false
   }
 
   init({ db }) {
@@ -106,6 +118,7 @@ export class ServerNetwork extends System {
     }
     // watch settings changes
     this.world.settings.on('change', this.saveSettings)
+    await this.cleanupUnusedBlueprints()
     // queue first save
     if (SAVE_INTERVAL) {
       this.saveTimerId = setTimeout(this.save, SAVE_INTERVAL * 1000)
@@ -606,9 +619,59 @@ export class ServerNetwork extends System {
     this.send('entityRemoved', id, ignoreNetworkId)
     if (entity?.isApp) {
       this.dirtyApps.add(id)
+      void this.cleanupUnusedBlueprints()
     }
     this.emit('entityRemoved', id)
     return { ok: true }
+  }
+
+  async cleanupUnusedBlueprints() {
+    if (this.cleanupInProgress) return
+    this.cleanupInProgress = true
+    try {
+      const keep = new Set()
+      for (const entity of this.world.entities.items.values()) {
+        if (entity?.isApp && entity.data?.blueprint) {
+          keep.add(entity.data.blueprint)
+        }
+      }
+      for (const blueprint of this.world.blueprints.items.values()) {
+        if (blueprint?.scene) {
+          keep.add(blueprint.id)
+        }
+      }
+      let changed = true
+      while (changed) {
+        changed = false
+        for (const blueprint of this.world.blueprints.items.values()) {
+          if (!keep.has(blueprint.id)) continue
+          const scriptRef = typeof blueprint.scriptRef === 'string' ? blueprint.scriptRef.trim() : ''
+          if (scriptRef && !keep.has(scriptRef)) {
+            keep.add(scriptRef)
+            changed = true
+          }
+          if (!scriptRef && !hasScriptFiles(blueprint)) {
+            const appName = getBlueprintAppName(blueprint.id)
+            if (appName && appName !== blueprint.id && this.world.blueprints.get(appName) && !keep.has(appName)) {
+              keep.add(appName)
+              changed = true
+            }
+          }
+        }
+      }
+
+      const toRemove = []
+      for (const [id, blueprint] of this.world.blueprints.items.entries()) {
+        if (keep.has(id)) continue
+        if (blueprint?.scene) continue
+        toRemove.push(id)
+      }
+      for (const id of toRemove) {
+        await this.applyBlueprintRemoved({ id })
+      }
+    } finally {
+      this.cleanupInProgress = false
+    }
   }
 
   applySettingsModified(data, { ignoreNetworkId } = {}) {
