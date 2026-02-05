@@ -317,12 +317,23 @@ export class ClientBuilder extends System {
     }
     this.world.blueprints.add(blueprint)
     let lockToken
+    let lockScope = null
+    let releaseLock = false
     try {
       if (hasScriptFields(blueprint)) {
-        const scope =
-          typeof blueprint.scriptRef === 'string' && blueprint.scriptRef.trim() ? blueprint.scriptRef.trim() : blueprint.id
-        const result = await this.world.admin.acquireDeployLock({ owner: this.world.network.id, scope })
-        lockToken = result?.token || this.world.admin.deployLockToken
+        lockScope =
+          typeof blueprint.scriptRef === 'string' && blueprint.scriptRef.trim()
+            ? blueprint.scriptRef.trim()
+            : blueprint.id
+        const admin = this.world.admin
+        const currentScope = admin?.deployLockScope || 'global'
+        if (admin?.deployLockToken && (currentScope === 'global' || currentScope === lockScope)) {
+          lockToken = admin.deployLockToken
+        } else {
+          const result = await admin.acquireDeployLock({ owner: this.world.network.id, scope: lockScope })
+          lockToken = result?.token || admin.deployLockToken
+          releaseLock = !!lockToken
+        }
       }
       await this.world.admin.blueprintAdd(blueprint, {
         ignoreNetworkId: this.world.network.id,
@@ -334,6 +345,14 @@ export class ClientBuilder extends System {
       this.world.blueprints.remove(blueprint.id)
       this.handleAdminError(err, `${actionLabel} failed.`)
       return null
+    } finally {
+      if (releaseLock && lockToken && this.world.admin?.releaseDeployLock) {
+        try {
+          await this.world.admin.releaseDeployLock(lockToken, lockScope)
+        } catch (releaseErr) {
+          console.error('failed to release deploy lock', releaseErr)
+        }
+      }
     }
   }
 
