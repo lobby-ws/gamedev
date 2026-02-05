@@ -27,7 +27,7 @@ class Cleaner {
     // ...
   }
 
-  async run({ db, dryrun = false } = {}) {
+  async run({ db, dryrun = false, world = null, broadcast = null } = {}) {
     if (!db) throw new Error('db_required')
     console.log(dryrun ? '[clean] dry run' : '[clean] running')
     // get all assets
@@ -54,6 +54,7 @@ class Cleaner {
       }
     }
     const orphanIds = []
+    const orphanBlueprints = []
     const keptBlueprints = []
     for (const blueprint of blueprints) {
       const isScene = blueprint?.scene === true
@@ -61,15 +62,47 @@ class Cleaner {
       const isUsed = blueprint?.id && usedBlueprintIds.has(blueprint.id)
       if (!isScene && !isKept && !isUsed) {
         if (blueprint?.id) orphanIds.push(blueprint.id)
+        orphanBlueprints.push(blueprint)
         continue
       }
       keptBlueprints.push(blueprint)
     }
+    const removedIds = []
+    const failedIds = []
     if (orphanIds.length) {
       console.log(`[clean] ${orphanIds.length} orphan blueprints can be deleted`)
       if (!dryrun) {
-        await db('blueprints').whereIn('id', orphanIds).delete()
-        console.log(`[clean] ${orphanIds.length} orphan blueprints deleted`)
+        if (world?.network?.applyBlueprintRemoved) {
+          for (const id of orphanIds) {
+            try {
+              const result = await world.network.applyBlueprintRemoved({ id })
+              if (result?.ok) {
+                removedIds.push(id)
+                broadcast?.('blueprintRemoved', { id })
+              } else if (result?.error === 'not_found') {
+                await db('blueprints').where('id', id).delete()
+                removedIds.push(id)
+              } else {
+                failedIds.push({ id, error: result?.error || 'remove_failed' })
+              }
+            } catch (err) {
+              failedIds.push({ id, error: err?.message || 'remove_failed' })
+            }
+          }
+        } else {
+          await db('blueprints').whereIn('id', orphanIds).delete()
+          removedIds.push(...orphanIds)
+        }
+        console.log(`[clean] ${removedIds.length} orphan blueprints deleted`)
+      }
+    }
+    const keptForAssets = dryrun ? keptBlueprints.slice() : keptBlueprints.slice()
+    if (!dryrun && failedIds.length) {
+      const failedSet = new Set(failedIds.map(item => item.id))
+      for (const blueprint of orphanBlueprints) {
+        if (blueprint?.id && failedSet.has(blueprint.id)) {
+          keptForAssets.push(blueprint)
+        }
       }
     }
     // track a list of assets to keep
@@ -85,7 +118,7 @@ class Cleaner {
     if (settings.image) assetsToKeep.add(settings.image.url.replace('asset://', ''))
     if (settings.avatar) assetsToKeep.add(settings.avatar.url.replace('asset://', ''))
     // keep all assets associated with all blueprints (spawned or unspawned)
-    for (const blueprint of keptBlueprints) {
+    for (const blueprint of keptForAssets) {
       // blueprint model
       if (blueprint.model && blueprint.model.startsWith('asset://')) {
         assetsToKeep.add(blueprint.model.replace('asset://', ''))
@@ -137,7 +170,10 @@ class Cleaner {
       ok: true,
       dryrun,
       orphanBlueprints: orphanIds.length,
-      deletedBlueprints: dryrun ? 0 : orphanIds.length,
+      orphanIds,
+      deletedBlueprints: dryrun ? 0 : removedIds.length,
+      deletedBlueprintIds: dryrun ? [] : removedIds,
+      failedBlueprints: failedIds,
       assetsToDelete: assetsToDelete.size,
       deletedAssets: dryrun ? 0 : assetsToDelete.size,
     }

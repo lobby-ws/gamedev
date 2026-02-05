@@ -877,7 +877,7 @@ function hasScriptFields(data) {
     }
     try {
       const dryrun = req.body?.dryrun === true || req.body?.dryRun === true
-      const result = await cleaner.run({ db, dryrun })
+      const result = await cleaner.run({ db, dryrun, world, broadcast })
       return result
     } catch (err) {
       console.error('[admin] clean failed', err)
