@@ -1913,6 +1913,8 @@ function App({ world, hidden }) {
   const [appTab, setAppTab] = useState('settings')
   const [mergingId, setMergingId] = useState(null)
   const [addingId, setAddingId] = useState(null)
+  const [entityTick, setEntityTick] = useState(0)
+  const [variantTick, setVariantTick] = useState(0)
   useEffect(() => {
     showTransforms = transforms
   }, [transforms])
@@ -1929,10 +1931,42 @@ function App({ world, hidden }) {
       world.blueprints.off('modify', onModify)
     }
   }, [world, blueprint.id])
-  const scriptGroups = buildScriptGroups(world.blueprints.items)
+  useEffect(() => {
+    const refresh = () => setVariantTick(tick => tick + 1)
+    world.blueprints.on('add', refresh)
+    world.blueprints.on('modify', refresh)
+    world.blueprints.on('remove', refresh)
+    return () => {
+      world.blueprints.off('add', refresh)
+      world.blueprints.off('modify', refresh)
+      world.blueprints.off('remove', refresh)
+    }
+  }, [world])
+  useEffect(() => {
+    const refresh = () => setEntityTick(tick => tick + 1)
+    world.entities.on('added', refresh)
+    world.entities.on('removed', refresh)
+    return () => {
+      world.entities.off('added', refresh)
+      world.entities.off('removed', refresh)
+    }
+  }, [world])
+  const usedBlueprintIds = useMemo(() => {
+    const used = new Set()
+    for (const entity of world.entities.items.values()) {
+      if (entity?.isApp) {
+        used.add(entity.data.blueprint)
+      }
+    }
+    return used
+  }, [world, entityTick])
+  const scriptGroups = useMemo(() => buildScriptGroups(world.blueprints.items), [world, variantTick])
   const scriptGroup = scriptGroups.byId.get(blueprint.id) || null
   const variantMain = scriptGroup?.main || blueprint
   const variants = scriptGroup?.items?.length ? scriptGroup.items : [blueprint]
+  const isVariantOrphan = variant =>
+    !variant?.scene && !usedBlueprintIds.has(variant.id) && variant.keep !== true
+  const visibleVariants = variants.filter(variant => !isVariantOrphan(variant))
   const frozen = blueprint.frozen
   const resolveModelUpdateMode = async () => {
     if (blueprint.unique || !world.ui?.confirm) return 'all'
@@ -2364,8 +2398,8 @@ function App({ world, hidden }) {
             </>
           ) : (
             <div className='app-variants'>
-              {variants.length ? (
-                variants.map(variant => {
+              {visibleVariants.length ? (
+                visibleVariants.map(variant => {
                   const isMain = variant.id === variantMain.id
                   const canMerge = !isMain && areBlueprintsTwinUnique(variantMain, variant)
                   const isMerging = mergingId === variant.id
