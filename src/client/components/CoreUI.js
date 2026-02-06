@@ -17,6 +17,7 @@ import { ControlPriorities } from '../../core/extras/ControlPriorities'
 // import { MenuApp } from './MenuApp'
 import { ChevronDoubleUpIcon, HandIcon } from './Icons'
 import { Sidebar } from './Sidebar'
+import { MainMenu } from './MainMenu'
 
 export function CoreUI({ world }) {
   const ref = useRef()
@@ -30,6 +31,7 @@ export function CoreUI({ world }) {
   const [disconnected, setDisconnected] = useState(false)
   const [apps, setApps] = useState(false)
   const [kicked, setKicked] = useState(null)
+  const [menuOpen, setMenuOpen] = useState(false)
   useEffect(() => {
     world.on('ready', setReady)
     world.on('player', setPlayer)
@@ -95,7 +97,8 @@ export function CoreUI({ world }) {
       {!ui.reticleSuppressors && <Reticle world={world} />}
       {<Toast world={world} />}
       {ready && <ActionsBlock world={world} />}
-      {ready && <Sidebar world={world} ui={ui} />}
+      {ready && <Sidebar world={world} ui={ui} onOpenMenu={() => setMenuOpen(true)} />}
+      {ready && <MainMenu world={world} open={menuOpen} onClose={() => setMenuOpen(false)} />}
       {ready && <Chat world={world} />}
       {/* {ready && <Side world={world} player={player} menu={menu} />} */}
       {avatar && <AvatarPane key={avatar.hash} world={world} info={avatar} />}
@@ -985,13 +988,11 @@ function Reticle({ world }) {
         justify-content: center;
         font-size: 1rem;
         .reticle-item {
-          width: 0.25rem;
-          height: 0.25rem;
-          border-radius: 0.625rem;
-          /* border: 0.125rem solid ${buildMode ? '#ff4d4d' : 'white'}; */
-          background: ${buildMode ? '#ff4d4d' : 'white'};
-          border: 0.5px solid rgba(0, 0, 0, 0.3);
-          /* mix-blend-mode: ${buildMode ? 'normal' : 'difference'}; */
+          width: 0.6rem;
+          height: 0.6rem;
+          border: 1.5px solid ${buildMode ? 'rgba(255, 77, 77, 0.6)' : 'rgba(255, 255, 255, 0.5)'};
+          border-radius: 2px;
+          filter: drop-shadow(0 0 3px rgba(255, 255, 255, 0.15));
         }
       `}
     >
