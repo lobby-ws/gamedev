@@ -557,6 +557,57 @@ function normalizeBlueprintScriptFields(source) {
   }
 }
 
+function normalizeEntityForCompare(source) {
+  if (!source || typeof source !== 'object') return null
+  const props =
+    source.props && typeof source.props === 'object' && !Array.isArray(source.props) ? source.props : {}
+  return {
+    id: source.id,
+    type: source.type || 'app',
+    blueprint: source.blueprint,
+    position: Array.isArray(source.position) ? source.position.slice(0, 3) : [0, 0, 0],
+    quaternion: Array.isArray(source.quaternion) ? source.quaternion.slice(0, 4) : [0, 0, 0, 1],
+    scale: Array.isArray(source.scale) ? source.scale.slice(0, 3) : [1, 1, 1],
+    pinned: Boolean(source.pinned),
+    props,
+    state: source.state && typeof source.state === 'object' ? source.state : {},
+  }
+}
+
+function normalizeSettingsForCompare(source) {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return {}
+  return source
+}
+
+function normalizeSpawnForCompare(source) {
+  return {
+    position: Array.isArray(source?.position) ? source.position.slice(0, 3) : [0, 0, 0],
+    quaternion: Array.isArray(source?.quaternion) ? source.quaternion.slice(0, 4) : [0, 0, 0, 1],
+  }
+}
+
+function hashSyncValue(value) {
+  return sha256(Buffer.from(stableStringify(value), 'utf8'))
+}
+
+function classifySyncDiff({ baselineHash, localHash, remoteHash }) {
+  const hasBaseline = baselineHash !== null && baselineHash !== undefined
+  if (!hasBaseline) {
+    if (localHash == null && remoteHash == null) return 'unchanged'
+    if (localHash == null) return 'remote-only'
+    if (remoteHash == null) return 'local-only'
+    if (localHash === remoteHash) return 'unchanged'
+    return 'concurrent'
+  }
+  const localChanged = localHash !== baselineHash
+  const remoteChanged = remoteHash !== baselineHash
+  if (!localChanged && !remoteChanged) return 'unchanged'
+  if (localChanged && !remoteChanged) return 'local-only'
+  if (!localChanged && remoteChanged) return 'remote-only'
+  if (localHash === remoteHash) return 'unchanged'
+  return 'concurrent'
+}
+
 function formatNameList(items, limit = 6) {
   if (!Array.isArray(items) || items.length === 0) return ''
   if (items.length <= limit) return items.join(', ')
@@ -970,27 +1021,30 @@ export class DirectAppServer {
     this.assetsUrl = null
     this.snapshot = null
     this.syncState = this._readSyncState()
+    this.deferSyncStateWrites = false
     this.loggedTarget = false
     this.loggedChangefeedWarning = false
     this.scriptFormatWarnings = new Set()
   }
 
-  async connect() {
+  async connect({ refreshSyncState = true, syncCursorFromChangefeed = true } = {}) {
     await this.client.connect()
     const snapshot = await this.client.getSnapshot()
     this.assetsUrl = snapshot.assetsUrl
     this._validateWorldId(snapshot.worldId)
-    this._initSnapshot(snapshot)
-    try {
-      await this._syncCursorFromChangefeed()
-    } catch (err) {
-      const message = err?.message || ''
-      if (!message.startsWith('changes_failed:')) {
-        throw err
-      }
-      if (!this.loggedChangefeedWarning) {
-        console.warn(`⚠️  Changefeed unavailable (${message}); continuing without cursor sync.`)
-        this.loggedChangefeedWarning = true
+    this._initSnapshot(snapshot, { refreshSyncState })
+    if (syncCursorFromChangefeed) {
+      try {
+        await this._syncCursorFromChangefeed()
+      } catch (err) {
+        const message = err?.message || ''
+        if (!message.startsWith('changes_failed:')) {
+          throw err
+        }
+        if (!this.loggedChangefeedWarning) {
+          console.warn(`⚠️  Changefeed unavailable (${message}); continuing without cursor sync.`)
+          this.loggedChangefeedWarning = true
+        }
       }
     }
     return snapshot
@@ -1009,7 +1063,7 @@ export class DirectAppServer {
     }
   }
 
-  _initSnapshot(snapshot) {
+  _initSnapshot(snapshot, { refreshSyncState = true } = {}) {
     const settings = snapshot.settings && typeof snapshot.settings === 'object' ? { ...snapshot.settings } : {}
     const spawn = {
       position: Array.isArray(snapshot.spawn?.position) ? snapshot.spawn.position.slice(0, 3) : [0, 0, 0],
@@ -1033,7 +1087,9 @@ export class DirectAppServer {
       blueprints,
       entities,
     }
-    this._refreshSyncState()
+    if (refreshSyncState) {
+      this._refreshSyncState()
+    }
   }
 
   _readSyncState() {
@@ -1050,7 +1106,20 @@ export class DirectAppServer {
     return normalizeSyncString(item.updatedAt) || null
   }
 
-  _buildSyncObjectIndex(items, previousIndex = {}, nowIso) {
+  _normalizeSyncObjectForHash(kind, item) {
+    if (!item || typeof item !== 'object') return null
+    if (kind === 'blueprints') return normalizeBlueprintForCompare(item)
+    if (kind === 'entities') return normalizeEntityForCompare(item)
+    return item
+  }
+
+  _hashSyncObject(kind, item) {
+    const normalized = this._normalizeSyncObjectForHash(kind, item)
+    if (!normalized) return null
+    return hashSyncValue(normalized)
+  }
+
+  _buildSyncObjectIndex(kind, items, previousIndex = {}, nowIso) {
     const entries = {}
     const previous = previousIndex && typeof previousIndex === 'object' ? previousIndex : {}
     const values = Array.isArray(items) ? items : Array.from(items?.values ? items.values() : [])
@@ -1060,7 +1129,8 @@ export class DirectAppServer {
       const uid = normalizeSyncString(item.uid)
       const key = uid || id
       if (!key) continue
-      const hash = sha256(Buffer.from(stableStringify(item), 'utf8'))
+      const hash = this._hashSyncObject(kind, item)
+      if (!hash) continue
       const lastSyncedRevision = this._extractSyncRevision(item)
       const existing = previous[key]
       const unchanged = existing?.hash === hash && isEqual(existing?.lastSyncedRevision, lastSyncedRevision)
@@ -1076,51 +1146,89 @@ export class DirectAppServer {
     return entries
   }
 
-  _refreshSyncState() {
-    if (!this.snapshot?.worldId) return
+  _buildSyncWorldEntry(kind, value, previousEntry = {}, nowIso) {
+    const hashInput = kind === 'settings' ? normalizeSettingsForCompare(value) : normalizeSpawnForCompare(value)
+    const hash = hashSyncValue(hashInput)
+    const existing = previousEntry && typeof previousEntry === 'object' ? previousEntry : {}
+    const unchanged = existing?.hash === hash
+    return {
+      hash,
+      lastSyncedAt: unchanged && normalizeSyncString(existing?.lastSyncedAt) ? existing.lastSyncedAt : nowIso,
+    }
+  }
+
+  _buildSyncStateSnapshot({ cursor } = {}) {
+    if (!this.snapshot?.worldId) return null
 
     const previous = this.syncState && typeof this.syncState === 'object' ? this.syncState : {}
     const previousWorldId = normalizeSyncString(previous.worldId)
     const worldChanged = !!previousWorldId && previousWorldId !== this.snapshot.worldId
     const previousObjects = !worldChanged && previous.objects && typeof previous.objects === 'object' ? previous.objects : {}
+    const previousWorldState = !worldChanged && previous.world && typeof previous.world === 'object' ? previous.world : {}
     const nowIso = new Date().toISOString()
 
-    const baseState = {
+    const nextCursor =
+      cursor !== undefined
+        ? normalizeSyncCursor(cursor)
+        : worldChanged
+          ? null
+          : normalizeSyncCursor(previous.cursor)
+
+    return {
       formatVersion: 1,
       worldId: this.snapshot.worldId,
-      cursor: worldChanged ? null : normalizeSyncCursor(previous.cursor),
+      cursor: nextCursor,
+      world: {
+        settings: this._buildSyncWorldEntry('settings', this.snapshot.settings, previousWorldState.settings, nowIso),
+        spawn: this._buildSyncWorldEntry('spawn', this.snapshot.spawn, previousWorldState.spawn, nowIso),
+      },
       objects: {
-        blueprints: this._buildSyncObjectIndex(this.snapshot.blueprints, previousObjects.blueprints, nowIso),
-        entities: this._buildSyncObjectIndex(this.snapshot.entities, previousObjects.entities, nowIso),
+        blueprints: this._buildSyncObjectIndex(
+          'blueprints',
+          this.snapshot.blueprints,
+          previousObjects.blueprints,
+          nowIso
+        ),
+        entities: this._buildSyncObjectIndex('entities', this.snapshot.entities, previousObjects.entities, nowIso),
       },
       lastConflictSnapshots:
         !worldChanged && Array.isArray(previous.lastConflictSnapshots) ? previous.lastConflictSnapshots : [],
-    }
-
-    const next = {
-      ...baseState,
       updatedAt: normalizeSyncString(previous.updatedAt) || nowIso,
     }
+  }
 
+  _writeSyncState(next) {
+    if (!next || typeof next !== 'object') return
+    if (this.deferSyncStateWrites) return
+    const previous = this.syncState && typeof this.syncState === 'object' ? this.syncState : {}
     if (isEqual(previous, next)) return
+    const nowIso = new Date().toISOString()
+    const output = {
+      ...next,
+      updatedAt: nowIso,
+    }
+    this.syncState = output
+    this._writeFileAtomic(this.syncStateFile, JSON.stringify(output, null, 2) + '\n')
+  }
 
-    next.updatedAt = nowIso
-    this.syncState = next
-    this._writeFileAtomic(this.syncStateFile, JSON.stringify(next, null, 2) + '\n')
+  async _withDeferredSyncStateWrites(fn) {
+    const previous = this.deferSyncStateWrites
+    this.deferSyncStateWrites = true
+    try {
+      return await fn()
+    } finally {
+      this.deferSyncStateWrites = previous
+    }
+  }
+
+  _refreshSyncState() {
+    const next = this._buildSyncStateSnapshot()
+    this._writeSyncState(next)
   }
 
   _setSyncCursor(cursor) {
-    const normalized = normalizeSyncCursor(cursor)
-    if (!this.syncState || typeof this.syncState !== 'object') return
-    if (isEqual(this.syncState.cursor, normalized)) return
-    const nowIso = new Date().toISOString()
-    const next = {
-      ...this.syncState,
-      cursor: normalized,
-      updatedAt: nowIso,
-    }
-    this.syncState = next
-    this._writeFileAtomic(this.syncStateFile, JSON.stringify(next, null, 2) + '\n')
+    const next = this._buildSyncStateSnapshot({ cursor })
+    this._writeSyncState(next)
   }
 
   async _syncCursorFromChangefeed({ limit = CHANGEFEED_PAGE_LIMIT, maxPages = CHANGEFEED_MAX_PAGES } = {}) {
@@ -1153,11 +1261,403 @@ export class DirectAppServer {
     this._setSyncCursor(cursor)
   }
 
+  _isBidirectionalSyncEnabled() {
+    const flag = normalizeSyncString(process.env.BIDIRECTIONAL_SYNC)
+    if (!flag) return true
+    return flag.toLowerCase() !== 'false'
+  }
+
+  _isStrictSyncConflictsEnabled() {
+    const flag = normalizeSyncString(process.env.SYNC_STRICT_CONFLICTS)
+    if (!flag) return true
+    return flag.toLowerCase() !== 'false'
+  }
+
+  async _getRuntimeHeadCursor({ fallback = null } = {}) {
+    try {
+      const response = await this.client.getChanges()
+      const cursor = normalizeSyncCursor(response?.headCursor ?? response?.cursor)
+      return cursor ?? normalizeSyncCursor(fallback)
+    } catch (err) {
+      const message = err?.message || ''
+      if (!message.startsWith('changes_failed:')) {
+        throw err
+      }
+      if (!this.loggedChangefeedWarning) {
+        console.warn(`⚠️  Changefeed unavailable (${message}); continuing without cursor sync.`)
+        this.loggedChangefeedWarning = true
+      }
+      return normalizeSyncCursor(fallback)
+    }
+  }
+
+  _syncEntriesById(entries) {
+    const byId = new Map()
+    if (!entries || typeof entries !== 'object') return byId
+    for (const entry of Object.values(entries)) {
+      const id = normalizeSyncString(entry?.id)
+      if (!id) continue
+      byId.set(id, entry)
+    }
+    return byId
+  }
+
+  _buildManifestEntityIndex(manifest) {
+    const byId = new Map()
+    const entities = Array.isArray(manifest?.entities) ? manifest.entities : []
+    for (const entity of entities) {
+      if (!entity?.id) continue
+      const normalized = normalizeEntityForCompare({ ...entity, type: 'app' })
+      if (!normalized) continue
+      byId.set(normalized.id, normalized)
+    }
+    return byId
+  }
+
+  _normalizeSnapshotCollection(items) {
+    if (Array.isArray(items)) return items
+    if (items instanceof Map) return Array.from(items.values())
+    if (items && typeof items.values === 'function') return Array.from(items.values())
+    return []
+  }
+
+  _normalizeSnapshotForExport(snapshot) {
+    const source = snapshot && typeof snapshot === 'object' ? snapshot : {}
+    const settings = source.settings && typeof source.settings === 'object' ? { ...source.settings } : {}
+    const spawn = normalizeSpawnForCompare(source.spawn)
+    const blueprints = this._normalizeSnapshotCollection(source.blueprints)
+    const entities = this._normalizeSnapshotCollection(source.entities)
+    return {
+      ...source,
+      settings,
+      spawn,
+      blueprints,
+      entities,
+    }
+  }
+
+  async _buildLocalBlueprintPayloadIndex(localIndex = this._indexLocalBlueprints()) {
+    const localBlueprints = new Map()
+    const byApp = new Map()
+    for (const info of localIndex.values()) {
+      if (!byApp.has(info.appName)) byApp.set(info.appName, [])
+      byApp.get(info.appName).push(info)
+    }
+    for (const [appName, infos] of byApp.entries()) {
+      const scriptInfo = await this._safeUploadScriptForApp(appName, infos[0]?.scriptPath, {
+        upload: false,
+        allowMissing: true,
+      })
+      if (scriptInfo?.mode === 'module') {
+        scriptInfo.scriptRootId = this._resolveScriptRootId(appName, infos, localIndex)
+      }
+      for (const info of infos) {
+        const desired = await this._prepareBlueprintPayload(info, scriptInfo, { uploadAssets: false })
+        localBlueprints.set(info.id, desired)
+      }
+    }
+    return localBlueprints
+  }
+
+  _computeStartupHandshakePlan({ manifest, localBlueprints }) {
+    const plan = {
+      mergedManifest: JSON.parse(JSON.stringify(manifest)),
+      blueprints: {
+        localOnlyUpserts: [],
+        localOnlyRemovals: [],
+        remoteOnlyUpserts: [],
+        remoteOnlyRemovals: [],
+      },
+      manifest: {
+        localOnly: false,
+        remoteOnly: false,
+        settingsMode: 'unchanged',
+        spawnMode: 'unchanged',
+        localOnlyEntities: [],
+        remoteOnlyEntities: [],
+      },
+      conflicts: [],
+    }
+
+    const baselineBlueprints = this._syncEntriesById(this.syncState?.objects?.blueprints)
+    const baselineEntities = this._syncEntriesById(this.syncState?.objects?.entities)
+    const remoteBlueprints = this.snapshot?.blueprints || new Map()
+    const localEntities = this._buildManifestEntityIndex(manifest)
+    const remoteEntities = new Map()
+    for (const entity of this.snapshot?.entities?.values() || []) {
+      if (entity?.type !== 'app' || !entity?.id) continue
+      const normalized = normalizeEntityForCompare(entity)
+      if (!normalized) continue
+      remoteEntities.set(normalized.id, normalized)
+    }
+
+    const localSettings = normalizeSettingsForCompare(manifest?.settings)
+    const remoteSettings = normalizeSettingsForCompare(this.snapshot?.settings)
+    const baselineSettingsHash = normalizeSyncString(this.syncState?.world?.settings?.hash)
+    const localSettingsHash = hashSyncValue(localSettings)
+    const remoteSettingsHash = hashSyncValue(remoteSettings)
+    const settingsMode = classifySyncDiff({
+      baselineHash: baselineSettingsHash,
+      localHash: localSettingsHash,
+      remoteHash: remoteSettingsHash,
+    })
+    plan.manifest.settingsMode = settingsMode
+    if (settingsMode === 'remote-only') {
+      plan.manifest.remoteOnly = true
+      plan.mergedManifest.settings = remoteSettings
+    } else if (settingsMode === 'local-only') {
+      plan.manifest.localOnly = true
+    } else if (settingsMode === 'concurrent') {
+      plan.conflicts.push({
+        kind: 'settings',
+        id: '$world.settings',
+        baselineHash: baselineSettingsHash,
+        localHash: localSettingsHash,
+        remoteHash: remoteSettingsHash,
+      })
+    }
+
+    const localSpawn = normalizeSpawnForCompare(manifest?.spawn)
+    const remoteSpawn = normalizeSpawnForCompare(this.snapshot?.spawn)
+    const baselineSpawnHash = normalizeSyncString(this.syncState?.world?.spawn?.hash)
+    const localSpawnHash = hashSyncValue(localSpawn)
+    const remoteSpawnHash = hashSyncValue(remoteSpawn)
+    const spawnMode = classifySyncDiff({
+      baselineHash: baselineSpawnHash,
+      localHash: localSpawnHash,
+      remoteHash: remoteSpawnHash,
+    })
+    plan.manifest.spawnMode = spawnMode
+    if (spawnMode === 'remote-only') {
+      plan.manifest.remoteOnly = true
+      plan.mergedManifest.spawn = remoteSpawn
+    } else if (spawnMode === 'local-only') {
+      plan.manifest.localOnly = true
+    } else if (spawnMode === 'concurrent') {
+      plan.conflicts.push({
+        kind: 'spawn',
+        id: '$world.spawn',
+        baselineHash: baselineSpawnHash,
+        localHash: localSpawnHash,
+        remoteHash: remoteSpawnHash,
+      })
+    }
+
+    const mergedEntities = new Map(localEntities)
+    const entityIds = new Set([...baselineEntities.keys(), ...localEntities.keys(), ...remoteEntities.keys()])
+    for (const id of entityIds) {
+      const baselineHash = normalizeSyncString(baselineEntities.get(id)?.hash)
+      const localEntity = localEntities.get(id) || null
+      const remoteEntity = remoteEntities.get(id) || null
+      const localHash = localEntity ? hashSyncValue(localEntity) : null
+      const remoteHash = remoteEntity ? hashSyncValue(remoteEntity) : null
+      const mode = classifySyncDiff({ baselineHash, localHash, remoteHash })
+      if (mode === 'remote-only') {
+        plan.manifest.remoteOnly = true
+        plan.manifest.remoteOnlyEntities.push(id)
+        if (remoteEntity) mergedEntities.set(id, remoteEntity)
+        else mergedEntities.delete(id)
+        continue
+      }
+      if (mode === 'local-only') {
+        plan.manifest.localOnly = true
+        plan.manifest.localOnlyEntities.push(id)
+        continue
+      }
+      if (mode === 'concurrent') {
+        plan.conflicts.push({
+          kind: 'entity',
+          id,
+          baselineHash,
+          localHash,
+          remoteHash,
+        })
+      }
+    }
+    plan.mergedManifest.entities = Array.from(mergedEntities.values())
+
+    const blueprintIds = new Set([...baselineBlueprints.keys(), ...localBlueprints.keys(), ...remoteBlueprints.keys()])
+    for (const id of blueprintIds) {
+      const baselineHash = normalizeSyncString(baselineBlueprints.get(id)?.hash)
+      const localBlueprint = localBlueprints.get(id) || null
+      const remoteBlueprint = remoteBlueprints.get(id) || null
+      const localHash = localBlueprint ? this._hashSyncObject('blueprints', localBlueprint) : null
+      const remoteHash = remoteBlueprint ? this._hashSyncObject('blueprints', remoteBlueprint) : null
+      const mode = classifySyncDiff({ baselineHash, localHash, remoteHash })
+      if (mode === 'remote-only') {
+        if (remoteBlueprint) plan.blueprints.remoteOnlyUpserts.push(id)
+        else plan.blueprints.remoteOnlyRemovals.push(id)
+        continue
+      }
+      if (mode === 'local-only') {
+        if (localBlueprint) plan.blueprints.localOnlyUpserts.push(id)
+        else plan.blueprints.localOnlyRemovals.push(id)
+        continue
+      }
+      if (mode === 'concurrent') {
+        plan.conflicts.push({
+          kind: 'blueprint',
+          id,
+          baselineHash,
+          localHash,
+          remoteHash,
+        })
+      }
+    }
+
+    return plan
+  }
+
+  _removeLocalBlueprintFromDisk(id, { localIndex } = {}) {
+    const index = localIndex || this._indexLocalBlueprints()
+    const info = index.get(id) || null
+    const parsed = parseBlueprintId(id)
+    const appName = info?.appName || parsed.appName
+    const fileBase = parsed.fileBase || id
+    const configPath = info?.configPath || path.join(this.appsDir, appName, `${fileBase}.json`)
+    const existingConfig = readJson(configPath)
+    const keep = info?.keep === true || existingConfig?.keep === true
+    if (keep) return false
+    if (fs.existsSync(configPath)) {
+      this._deleteFileAtomic(configPath)
+    }
+    index.delete(id)
+    this.localBlueprintPathIndex.delete(configPath)
+    this._maybeRemoveEmptyAppFolder(appName)
+    return true
+  }
+
+  async _applyRemoteOnlyBlueprintChanges(plan, localIndex) {
+    const scriptGroups = buildScriptGroupIndex(this.snapshot?.blueprints || new Map())
+    for (const id of plan.blueprints.remoteOnlyUpserts) {
+      const blueprint = this.snapshot?.blueprints?.get(id)
+      if (!blueprint) continue
+      const result = await this._writeBlueprintToDisk({
+        blueprint,
+        force: true,
+        includeBuiltScripts: true,
+        includeScriptSources: true,
+        pruneScriptSources: true,
+        localIndex,
+        scriptGroups,
+      })
+      if (result?.appName) {
+        this._watchAppDir(result.appName)
+      }
+    }
+    for (const id of plan.blueprints.remoteOnlyRemovals) {
+      this._removeLocalBlueprintFromDisk(id, { localIndex })
+    }
+  }
+
+  async _pushLocalOnlyBlueprintChanges(plan, localIndex) {
+    const byApp = new Map()
+    for (const id of plan.blueprints.localOnlyUpserts) {
+      const info = localIndex.get(id)
+      if (!info) continue
+      if (!byApp.has(info.appName)) byApp.set(info.appName, [])
+      byApp.get(info.appName).push(info)
+    }
+    for (const [appName, infos] of byApp.entries()) {
+      await this._deployBlueprintsForApp(appName, infos, localIndex)
+    }
+    if (plan.blueprints.localOnlyRemovals.length) {
+      await this._removeBlueprintsAndEntities(plan.blueprints.localOnlyRemovals)
+    }
+  }
+
+  _recordSyncConflicts(conflicts, { cursor, reason = 'startup' } = {}) {
+    if (!Array.isArray(conflicts) || !conflicts.length) return
+    const previous = this.syncState && typeof this.syncState === 'object' ? this.syncState : {}
+    const nowIso = new Date().toISOString()
+    const entry = {
+      id: uuid(),
+      at: nowIso,
+      reason,
+      cursor: normalizeSyncCursor(cursor),
+      conflicts: conflicts.map(conflict => ({
+        kind: normalizeSyncString(conflict?.kind) || 'unknown',
+        id: normalizeSyncString(conflict?.id) || null,
+        baselineHash: normalizeSyncString(conflict?.baselineHash),
+        localHash: normalizeSyncString(conflict?.localHash),
+        remoteHash: normalizeSyncString(conflict?.remoteHash),
+      })),
+    }
+    const next = {
+      formatVersion: typeof previous.formatVersion === 'number' ? previous.formatVersion : 1,
+      worldId: normalizeSyncString(previous.worldId) || this.snapshot?.worldId || null,
+      cursor: normalizeSyncCursor(previous.cursor),
+      world: previous.world && typeof previous.world === 'object' ? previous.world : {},
+      objects: previous.objects && typeof previous.objects === 'object' ? previous.objects : {},
+      lastConflictSnapshots: [entry, ...(Array.isArray(previous.lastConflictSnapshots) ? previous.lastConflictSnapshots : [])].slice(0, 25),
+      updatedAt: nowIso,
+    }
+    this.syncState = next
+    this._writeFileAtomic(this.syncStateFile, JSON.stringify(next, null, 2) + '\n')
+  }
+
+  async _runStartupHandshake(manifest, { reason = 'startup' } = {}) {
+    const initialCursor = await this._getRuntimeHeadCursor({ fallback: this.syncState?.cursor })
+    const localIndex = this._indexLocalBlueprints()
+    const localBlueprints = await this._buildLocalBlueprintPayloadIndex(localIndex)
+    const plan = this._computeStartupHandshakePlan({ manifest, localBlueprints })
+
+    if (plan.conflicts.length > 0) {
+      this._recordSyncConflicts(plan.conflicts, { cursor: initialCursor, reason })
+      if (this._isStrictSyncConflictsEnabled()) {
+        const conflictKinds = Array.from(new Set(plan.conflicts.map(conflict => conflict.kind))).join(', ')
+        throw new Error(
+          `Sync conflict detected (${plan.conflicts.length} object${plan.conflicts.length === 1 ? '' : 's'}: ${conflictKinds}). ` +
+            'Resolve manually or run "gamedev world export", then retry.'
+        )
+      }
+      console.warn(
+        `⚠️  Sync conflicts detected (${plan.conflicts.length}); SYNC_STRICT_CONFLICTS=false so local changes will be applied.`
+      )
+    }
+
+    await this._withDeferredSyncStateWrites(async () => {
+      if (plan.blueprints.remoteOnlyUpserts.length || plan.blueprints.remoteOnlyRemovals.length) {
+        await this._applyRemoteOnlyBlueprintChanges(plan, localIndex)
+      }
+
+      if (plan.manifest.remoteOnly) {
+        this._writeWorldFile(plan.mergedManifest)
+      }
+
+      if (plan.conflicts.length > 0 && !this._isStrictSyncConflictsEnabled()) {
+        await this._deployAllBlueprints()
+        await this._applyManifestToWorld(manifest)
+        return
+      }
+
+      if (plan.blueprints.localOnlyUpserts.length || plan.blueprints.localOnlyRemovals.length) {
+        await this._pushLocalOnlyBlueprintChanges(plan, localIndex)
+      }
+
+      if (plan.manifest.localOnly) {
+        await this._applyManifestToWorld(plan.mergedManifest)
+      }
+    })
+
+    const finalCursor = await this._getRuntimeHeadCursor({ fallback: initialCursor })
+    const next = this._buildSyncStateSnapshot({ cursor: finalCursor })
+    this._writeSyncState(next)
+  }
+
   async start() {
     ensureDir(this.appsDir)
     ensureDir(this.assetsDir)
 
-    const snapshot = await this.connect()
+    const bidirectionalSync = this._isBidirectionalSyncEnabled()
+    const snapshot = await this.connect(
+      bidirectionalSync
+        ? {
+            refreshSyncState: false,
+            syncCursorFromChangefeed: false,
+          }
+        : {}
+    )
 
     const hasWorldFile = fs.existsSync(this.worldFile)
     const hasApps = this._hasLocalApps()
@@ -1178,8 +1678,12 @@ export class DirectAppServer {
       if (errors.length) {
         throw new Error(`Invalid world.json:\n- ${errors.join('\n- ')}`)
       }
-      await this._deployAllBlueprints()
-      await this._applyManifestToWorld(manifest)
+      if (bidirectionalSync) {
+        await this._runStartupHandshake(manifest, { reason: 'startup' })
+      } else {
+        await this._deployAllBlueprints()
+        await this._applyManifestToWorld(manifest)
+      }
     }
 
     this._startWatchers()
@@ -1251,7 +1755,8 @@ export class DirectAppServer {
     snapshot = this.snapshot,
     { includeBuiltScripts = false, includeScriptSources = true } = {}
   ) {
-    const nextSnapshot = snapshot || (await this.client.getSnapshot())
+    const rawSnapshot = snapshot || (await this.client.getSnapshot())
+    const nextSnapshot = this._normalizeSnapshotForExport(rawSnapshot)
     this.assetsUrl = nextSnapshot.assetsUrl
     if (!this.snapshot) this._initSnapshot(nextSnapshot)
 
@@ -1320,7 +1825,15 @@ export class DirectAppServer {
     while (this.reconnecting) {
       try {
         console.warn(`⚠️  Disconnected from ${this.worldUrl}, reconnecting...`)
-        const snapshot = await this.connect()
+        const bidirectionalSync = this._isBidirectionalSyncEnabled()
+        const snapshot = await this.connect(
+          bidirectionalSync
+            ? {
+                refreshSyncState: false,
+                syncCursorFromChangefeed: false,
+              }
+            : {}
+        )
         if (!fs.existsSync(this.worldFile) && !this._hasLocalApps()) {
           try {
             await this._bootstrapEmptyProject(snapshot)
@@ -1341,10 +1854,14 @@ export class DirectAppServer {
           if (errors.length) {
             throw new Error(`Invalid world.json:\n- ${errors.join('\n- ')}`)
           }
-          await this._deployAllBlueprints()
-          await this._applyManifestToWorld(manifest)
+          if (bidirectionalSync) {
+            await this._runStartupHandshake(manifest, { reason: 'reconnect' })
+          } else {
+            await this._deployAllBlueprints()
+            await this._applyManifestToWorld(manifest)
+          }
         }
-        console.log(`✅ Reconnected to ${this.worldUrl} (/admin)`) 
+        console.log(`✅ Reconnected to ${this.worldUrl} (/admin)`)
         this.reconnecting = false
         return
       } catch (err) {
@@ -1735,9 +2252,13 @@ export class DirectAppServer {
     for (const id of entityIds) {
       try {
         await this.client.request('entity_remove', { id })
+        this.snapshot?.entities?.delete(id)
       } catch (err) {
         const code = err?.code || err?.message
-        if (code === 'not_found') continue
+        if (code === 'not_found') {
+          this.snapshot?.entities?.delete(id)
+          continue
+        }
         console.warn(`⚠️  Failed to remove entity ${id}:`, err?.message || err)
       }
     }
@@ -1745,9 +2266,13 @@ export class DirectAppServer {
     for (const id of ids) {
       try {
         await this.client.removeBlueprint(id)
+        this.snapshot?.blueprints?.delete(id)
       } catch (err) {
         const code = err?.code || err?.message
-        if (code === 'not_found') continue
+        if (code === 'not_found') {
+          this.snapshot?.blueprints?.delete(id)
+          continue
+        }
         if (code === 'in_use') {
           console.warn(`⚠️  Blueprint ${id} is still in use and was not removed.`)
           continue
@@ -1755,6 +2280,8 @@ export class DirectAppServer {
         console.warn(`⚠️  Failed to remove blueprint ${id}:`, err?.message || err)
       }
     }
+
+    this._refreshSyncState()
   }
 
   async _removeAppFromWorld(appName) {
@@ -1944,13 +2471,8 @@ export class DirectAppServer {
   }
 
   _buildScriptPayload(info, scriptInfo) {
-    const payload = {
-      scriptEntry: null,
-      scriptFiles: null,
-      scriptFormat: null,
-      scriptRef: null,
-    }
-    if (!scriptInfo || scriptInfo.mode !== 'module') return payload
+    if (!scriptInfo || scriptInfo.mode !== 'module') return {}
+    const payload = {}
     const rootId = scriptInfo.scriptRootId || info.appName || info.id
     if (info.id === rootId) {
       payload.scriptEntry = scriptInfo.scriptEntry
@@ -1963,17 +2485,57 @@ export class DirectAppServer {
     return payload
   }
 
+  _isMissingScriptError(err) {
+    const message = err?.message || ''
+    return message.startsWith('missing_script_entry:') || message.startsWith('missing_script_files:')
+  }
+
+  async _safeUploadScriptForApp(appName, scriptPath = null, { upload = true, allowMissing = false } = {}) {
+    try {
+      return await this._uploadScriptForApp(appName, scriptPath, { upload })
+    } catch (err) {
+      if (allowMissing && this._isMissingScriptError(err)) {
+        return null
+      }
+      throw err
+    }
+  }
+
+  _resolveBlueprintPayloadScript(info, cfg, current, scriptInfo) {
+    if (scriptInfo && scriptInfo.mode === 'module') {
+      return {
+        script: scriptInfo.scriptUrl,
+        ...this._buildScriptPayload(info, scriptInfo),
+      }
+    }
+
+    const script = normalizeSyncString(cfg?.script) ?? normalizeSyncString(current?.script) ?? ''
+    const scriptEntry = normalizeSyncString(current?.scriptEntry)
+    const scriptFiles =
+      current?.scriptFiles && typeof current.scriptFiles === 'object' && !Array.isArray(current.scriptFiles)
+        ? current.scriptFiles
+        : null
+    const scriptFormat = normalizeScriptFormat(cfg?.scriptFormat) || normalizeScriptFormat(current?.scriptFormat)
+    const scriptRef = normalizeSyncString(current?.scriptRef)
+    const payload = { script }
+    if (scriptEntry) payload.scriptEntry = scriptEntry
+    if (scriptFiles) payload.scriptFiles = scriptFiles
+    if (scriptFormat) payload.scriptFormat = scriptFormat
+    if (scriptRef) payload.scriptRef = scriptRef
+    return payload
+  }
+
   async _prepareBlueprintPayload(info, scriptInfo, { uploadAssets = true } = {}) {
     const cfg = readJson(info.configPath)
     if (!cfg || typeof cfg !== 'object') {
       throw new Error(`invalid_blueprint_config:${info.configPath}`)
     }
     const current = this.snapshot?.blueprints?.get(info.id) || null
+    const scriptPayload = this._resolveBlueprintPayloadScript(info, cfg, current, scriptInfo)
     const payload = {
       id: info.id,
-      name: info.fileBase,
-      script: scriptInfo.scriptUrl,
-      ...this._buildScriptPayload(info, scriptInfo),
+      name: this._resolveBlueprintPayloadName(info, cfg, current),
+      ...scriptPayload,
       ...pickBlueprintFields(cfg),
     }
     const resolvedScope = this._resolveBlueprintPayloadScope(info, cfg, current)
@@ -1983,7 +2545,13 @@ export class DirectAppServer {
     if (typeof cfg.createdAt === 'string' && cfg.createdAt.trim()) {
       payload.createdAt = cfg.createdAt.trim()
     }
-    return this._resolveLocalBlueprintToAssetUrls(payload, { upload: uploadAssets })
+    return this._resolveLocalBlueprintToAssetUrls(payload, { upload: uploadAssets, current })
+  }
+
+  _resolveBlueprintPayloadName(info, cfg, current = null) {
+    const configuredName = normalizeSyncString(cfg?.name)
+    const currentName = normalizeSyncString(current?.name)
+    return configuredName || currentName || info.fileBase
   }
 
   _resolveBlueprintPayloadScope(info, cfg, current = null) {
@@ -2000,8 +2568,9 @@ export class DirectAppServer {
     infos,
     { uploadAssets = false, uploadScripts = false, index = null } = {}
   ) {
-    const scriptInfo = await this._uploadScriptForApp(appName, infos[0].scriptPath, {
+    const scriptInfo = await this._safeUploadScriptForApp(appName, infos[0].scriptPath, {
       upload: uploadScripts,
+      allowMissing: true,
     })
     if (scriptInfo?.mode === 'module') {
       scriptInfo.scriptRootId = this._resolveScriptRootId(appName, infos, index)
@@ -2167,7 +2736,9 @@ export class DirectAppServer {
 
     await this._withDeployLock(async lock => {
       await this._createDeploySnapshot(snapshotIds, { note: snapshotNote, lockToken: lock.token, scope: lock.scope })
-      const scriptInfo = await this._uploadScriptForApp(appName, list[0].scriptPath)
+      const scriptInfo = await this._safeUploadScriptForApp(appName, list[0].scriptPath, {
+        allowMissing: true,
+      })
       if (scriptInfo?.mode === 'module') {
         scriptInfo.scriptRootId = this._resolveScriptRootId(appName, list, blueprintIndex)
       }
@@ -2277,11 +2848,11 @@ export class DirectAppServer {
     }
     const current = this.snapshot?.blueprints?.get(info.id) || null
 
+    const scriptPayload = this._resolveBlueprintPayloadScript(info, cfg, current, scriptInfo)
     const payload = {
       id: info.id,
-      name: info.fileBase,
-      script: scriptInfo.scriptUrl,
-      ...this._buildScriptPayload(info, scriptInfo),
+      name: this._resolveBlueprintPayloadName(info, cfg, current),
+      ...scriptPayload,
       ...pickBlueprintFields(cfg),
     }
     const resolvedScope = this._resolveBlueprintPayloadScope(info, cfg, current)
@@ -2292,7 +2863,7 @@ export class DirectAppServer {
       payload.createdAt = cfg.createdAt.trim()
     }
 
-    const resolved = await this._resolveLocalBlueprintToAssetUrls(payload)
+    const resolved = await this._resolveLocalBlueprintToAssetUrls(payload, { current })
 
     if (!current) {
       resolved.version = 0
@@ -2321,22 +2892,40 @@ export class DirectAppServer {
     }
   }
 
-  async _resolveLocalBlueprintToAssetUrls(cfg, { upload = true } = {}) {
+  async _resolveLocalBlueprintToAssetUrls(cfg, { upload = true, current = null } = {}) {
     const out = { ...cfg }
 
     if (typeof out.model === 'string') {
-      out.model = await this._resolveLocalAssetToWorldUrl(out.model, { upload })
+      out.model = await this._resolveLocalAssetToWorldUrl(out.model, {
+        upload,
+        existingUrl: typeof current?.model === 'string' ? current.model : null,
+      })
     }
 
     if (out.image && typeof out.image === 'object' && typeof out.image.url === 'string') {
-      out.image = { ...out.image, url: await this._resolveLocalAssetToWorldUrl(out.image.url, { upload }) }
+      out.image = {
+        ...out.image,
+        url: await this._resolveLocalAssetToWorldUrl(out.image.url, {
+          upload,
+          existingUrl: getExistingAssetUrl(current?.image),
+        }),
+      }
     }
 
     if (out.props && typeof out.props === 'object') {
       const nextProps = {}
+      const existingProps =
+        current?.props && typeof current.props === 'object' && !Array.isArray(current.props) ? current.props : {}
       for (const [k, v] of Object.entries(out.props)) {
         if (v && typeof v === 'object' && typeof v.url === 'string') {
-          nextProps[k] = { ...v, url: await this._resolveLocalAssetToWorldUrl(v.url, { upload }) }
+          const existingValue = existingProps[k]
+          nextProps[k] = {
+            ...v,
+            url: await this._resolveLocalAssetToWorldUrl(v.url, {
+              upload,
+              existingUrl: getExistingAssetUrl(existingValue),
+            }),
+          }
         } else {
           nextProps[k] = v
         }
@@ -2347,14 +2936,20 @@ export class DirectAppServer {
     return out
   }
 
-  async _resolveLocalEntityPropsToAssetUrls(props, { upload = true } = {}) {
+  async _resolveLocalEntityPropsToAssetUrls(props, { upload = true, currentProps = null } = {}) {
     if (!props || typeof props !== 'object' || Array.isArray(props)) return {}
     const nextProps = {}
+    const existingProps =
+      currentProps && typeof currentProps === 'object' && !Array.isArray(currentProps) ? currentProps : {}
     for (const [key, value] of Object.entries(props)) {
       if (value && typeof value === 'object' && typeof value.url === 'string') {
+        const existingValue = existingProps[key]
         nextProps[key] = {
           ...value,
-          url: await this._resolveLocalAssetToWorldUrl(value.url, { upload }),
+          url: await this._resolveLocalAssetToWorldUrl(value.url, {
+            upload,
+            existingUrl: getExistingAssetUrl(existingValue),
+          }),
         }
       } else {
         nextProps[key] = value
@@ -2363,7 +2958,7 @@ export class DirectAppServer {
     return nextProps
   }
 
-  async _resolveLocalAssetToWorldUrl(url, { upload = true } = {}) {
+  async _resolveLocalAssetToWorldUrl(url, { upload = true, existingUrl = null } = {}) {
     if (typeof url !== 'string') return url
     const normalized = normalizeAssetPath(url)
     if (normalized.startsWith('asset://')) return normalized
@@ -2374,6 +2969,22 @@ export class DirectAppServer {
     const buffer = fs.readFileSync(abs)
     const hash = sha256(buffer)
     const ext = path.extname(normalized).toLowerCase().replace(/^\./, '') || 'bin'
+    const normalizedExisting = typeof existingUrl === 'string' ? normalizeAssetPath(existingUrl) : null
+    if (!upload && normalizedExisting && normalizedExisting.startsWith('asset://')) {
+      const existingFilename = extractAssetFilename(normalizedExisting)
+      const existingExtWithDot = existingFilename ? path.extname(existingFilename).toLowerCase() : ''
+      const existingExt = existingExtWithDot.replace(/^\./, '')
+      if (!existingExt || existingExt === ext) {
+        if (existingFilename && isHashedAssetFilename(existingFilename)) {
+          const expectedHash = existingFilename.slice(0, -existingExtWithDot.length).toLowerCase()
+          if (expectedHash === hash) {
+            return normalizedExisting
+          }
+        } else {
+          return normalizedExisting
+        }
+      }
+    }
     const filename = `${hash}.${ext}`
     if (upload) {
       await this.client.uploadAsset({ filename, buffer })
@@ -2420,7 +3031,9 @@ export class DirectAppServer {
       const existing = current.get(id)
       const desiredProps =
         entity.props && typeof entity.props === 'object' && !Array.isArray(entity.props) ? entity.props : {}
-      const resolvedProps = await this._resolveLocalEntityPropsToAssetUrls(desiredProps)
+      const resolvedProps = await this._resolveLocalEntityPropsToAssetUrls(desiredProps, {
+        currentProps: existing?.props,
+      })
       if (!existing) {
         const data = {
           id: entity.id,
@@ -2756,6 +3369,8 @@ export class DirectAppServer {
     const existingCreatedAt = typeof existing?.createdAt === 'string' ? existing.createdAt : null
     const createdAt = typeof blueprint.createdAt === 'string' ? blueprint.createdAt : existingCreatedAt
     if (typeof blueprint.id === 'string' && blueprint.id) output.id = blueprint.id
+    const name = normalizeSyncString(blueprint?.name) || normalizeSyncString(existing?.name)
+    if (name) output.name = name
     const scope = getBlueprintScopeValue(blueprint) || normalizeScopeValue(existing?.scope)
     if (scope) output.scope = scope
     const scriptKey = typeof blueprint.script === 'string' ? blueprint.script.trim() : ''
@@ -2801,7 +3416,7 @@ export class DirectAppServer {
         })
       }
       output.image = img
-    } else if (blueprint.image == null) {
+    } else if (blueprint.image === null) {
       output.image = null
     } else if (blueprint.image !== undefined) {
       output.image = blueprint.image
