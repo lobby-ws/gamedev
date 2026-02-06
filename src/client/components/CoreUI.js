@@ -5,10 +5,6 @@ import moment from 'moment'
 
 import { AvatarPane } from './AvatarPane'
 import { useElemSize } from './useElemSize'
-import { MouseLeftIcon } from './MouseLeftIcon'
-import { MouseRightIcon } from './MouseRightIcon'
-import { MouseWheelIcon } from './MouseWheelIcon'
-import { buttons, propToLabel } from '../../core/extras/buttons'
 import { cls, isTouch } from '../utils'
 import { uuid } from '../../core/utils'
 import { ControlPriorities } from '../../core/extras/ControlPriorities'
@@ -96,7 +92,6 @@ export function CoreUI({ world }) {
       {disconnected && <Disconnected />}
       {!ui.reticleSuppressors && <Reticle world={world} />}
       {<Toast world={world} />}
-      {ready && <ActionsBlock world={world} />}
       {ready && <Sidebar world={world} ui={ui} onOpenMenu={() => setMenuOpen(true)} />}
       {ready && <MainMenu world={world} open={menuOpen} onClose={() => setMenuOpen(false)} />}
       {ready && <Chat world={world} />}
@@ -828,138 +823,6 @@ function KickedOverlay({ code }) {
       `}
     >
       <div>{kickMessages[code] || kickMessages.unknown}</div>
-    </div>
-  )
-}
-
-function ActionsBlock({ world }) {
-  const [showActions, setShowActions] = useState(() => world.prefs.actions)
-  useEffect(() => {
-    const onPrefsChange = changes => {
-      if (changes.actions) setShowActions(changes.actions.value)
-    }
-    world.prefs.on('change', onPrefsChange)
-    return () => {
-      world.prefs.off('change', onPrefsChange)
-    }
-  }, [])
-  if (isTouch) return null
-  if (!showActions) return null
-  return (
-    <div
-      css={css`
-        position: absolute;
-        top: calc(2rem + env(safe-area-inset-top));
-        left: calc(2rem + env(safe-area-inset-left));
-        bottom: calc(2rem + env(safe-area-inset-bottom));
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        @media all and (max-width: 1200px) {
-          top: calc(1rem + env(safe-area-inset-top));
-          left: calc(1rem + env(safe-area-inset-left));
-          bottom: calc(1rem + env(safe-area-inset-bottom));
-        }
-      `}
-    >
-      <Actions world={world} />
-    </div>
-  )
-}
-
-function Actions({ world }) {
-  const [actions, setActions] = useState(() => world.controls.actions)
-  useEffect(() => {
-    world.on('actions', setActions)
-    return () => world.off('actions', setActions)
-  }, [])
-  return (
-    <div
-      className='actions'
-      css={css`
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        .actions-item {
-          display: flex;
-          align-items: center;
-          margin: 0 0 0.5rem;
-          &-icon {
-            // ...
-          }
-          &-label {
-            margin-left: 0.625em;
-            paint-order: stroke fill;
-            -webkit-text-stroke: 0.25rem rgba(0, 0, 0, 0.2);
-          }
-        }
-      `}
-    >
-      {actions.map(action => (
-        <div className='actions-item' key={action.id}>
-          <div className='actions-item-icon'>{getActionIcon(action)}</div>
-          <div className='actions-item-label'>{action.label}</div>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function getActionIcon(action) {
-  if (action.type === 'custom') {
-    return <ActionPill label={action.btn} />
-  }
-  if (action.type === 'controlLeft') {
-    return <ActionPill label='Ctrl' />
-  }
-  if (action.type === 'mouseLeft') {
-    return <ActionIcon icon={MouseLeftIcon} />
-  }
-  if (action.type === 'mouseRight') {
-    return <ActionIcon icon={MouseRightIcon} />
-  }
-  if (action.type === 'mouseWheel') {
-    return <ActionIcon icon={MouseWheelIcon} />
-  }
-  if (buttons.has(action.type)) {
-    return <ActionPill label={propToLabel[action.type]} />
-  }
-  return <ActionPill label='?' />
-}
-
-function ActionPill({ label }) {
-  return (
-    <div
-      className='actionpill'
-      css={css`
-        border: 0.0625rem solid white;
-        border-radius: 0.25rem;
-        background: rgba(0, 0, 0, 0.1);
-        padding: 0.25rem 0.375rem;
-        font-size: 0.875em;
-        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-        paint-order: stroke fill;
-        -webkit-text-stroke: 0.25rem rgba(0, 0, 0, 0.2);
-      `}
-    >
-      {label}
-    </div>
-  )
-}
-
-function ActionIcon({ icon: Icon }) {
-  return (
-    <div
-      className='actionicon'
-      css={css`
-        line-height: 0;
-        svg {
-          filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.8));
-        }
-      `}
-    >
-      <Icon size='1.5rem' />
     </div>
   )
 }
