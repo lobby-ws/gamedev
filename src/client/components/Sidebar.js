@@ -122,6 +122,11 @@ export function Sidebar({ world, ui, onOpenMenu }) {
             background: ${theme.borderLight};
             margin: 0.25rem 0;
           }
+          .sidebar-script {
+            align-self: stretch;
+            display: flex;
+            pointer-events: auto;
+          }
           &.touch {
             font-size: 0.875rem;
             top: env(safe-area-inset-top);
@@ -204,9 +209,13 @@ export function Sidebar({ world, ui, onOpenMenu }) {
             {open && ui.pane === 'apps' && <Apps world={world} hidden={!ui.active} />}
             {open && ui.pane === 'add' && <Add world={world} hidden={!ui.active} />}
             {open && ui.pane === 'app' && <App key={ui.app.data.id} world={world} hidden={!ui.active} />}
-            {open && ui.pane === 'script' && <Script key={ui.app.data.id} world={world} hidden={!ui.active} />}
-            {open && ui.pane === 'nodes' && <Nodes key={ui.app.data.id} world={world} hidden={!ui.active} />}
-            {open && ui.pane === 'meta' && <Meta key={ui.app.data.id} world={world} hidden={!ui.active} />}
+            {open && ui.pane !== 'script' && ui.pane === 'nodes' && <Nodes key={ui.app.data.id} world={world} hidden={!ui.active} />}
+            {open && ui.pane !== 'script' && ui.pane === 'meta' && <Meta key={ui.app.data.id} world={world} hidden={!ui.active} />}
+          </div>
+        )}
+        {isBuilder && open && ui.pane === 'script' && (
+          <div className='sidebar-script'>
+            <Script key={ui.app.data.id} world={world} hidden={!ui.active} />
           </div>
         )}
       </div>
