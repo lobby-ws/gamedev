@@ -176,7 +176,7 @@ export function Sidebar({ world, ui, onOpenMenu }) {
                         className={cls('sidebar-nav-btn', { active: activePane === 'app' })}
                         onClick={() => selectPane('app')}
                       >
-                        App
+                        Object
                       </div>
                       <div
                         className={cls('sidebar-nav-btn', { active: activePane === 'script' })}
