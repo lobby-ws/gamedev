@@ -219,7 +219,7 @@ export function MainMenu({ world, open, onClose }) {
               <img className='mainmenu-logo' src='/logo.png' />
               <div className='mainmenu-head-spacer' />
               <div className='mainmenu-actions'>
-                {(livekit.enabled || true) && (
+                {livekit.enabled && (
                   <div
                     className={cls('mainmenu-action', { muted: livekit.muted })}
                     onClick={() => world.livekit.toggleMuted()}
@@ -227,7 +227,7 @@ export function MainMenu({ world, open, onClose }) {
                     {livekit.muted ? <MicOffIcon size='1rem' /> : <MicIcon size='1rem' />}
                   </div>
                 )}
-                {(world.xr.isSupported || true) && (
+                {world.xr.isSupported && (
                   <div className='mainmenu-action' onClick={() => world.xr.start()}>
                     <VRIcon size='1.125rem' />
                   </div>

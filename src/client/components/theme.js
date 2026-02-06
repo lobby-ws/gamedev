@@ -1,5 +1,5 @@
 export const theme = {
-  bgPanel: 'rgba(8, 9, 14, 0.95)',
+  bgPanel: 'rgba(30, 30, 35, 0.7)',
   bgSection: 'rgba(30, 30, 35, 0.7)',
   bgInput: 'rgba(8, 9, 14, 0.8)',
   bgInputSolid: 'rgba(8, 9, 14, 0.95)',
