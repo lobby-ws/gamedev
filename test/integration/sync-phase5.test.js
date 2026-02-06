@@ -295,3 +295,93 @@ test('phase 5 writes conflict artifacts and sync resolve can finalize them', asy
     assert.equal(resolvedBlueprint.desc, 'remote-conflict')
   })
 })
+
+for (const mode of ['remote', 'local']) {
+  test(`phase 5 spawn conflict resolve (${mode}) persists across app-server restart`, async t => {
+    if (!(await canListenOnLoopback())) {
+      t.skip('loopback sockets are unavailable in this environment')
+      return
+    }
+
+    await withWorldServer(async world => {
+      await setupWorldFixture(world)
+      const rootDir = await createTempDir(`hyperfy-sync-phase5-spawn-${mode}-`)
+      await seedLocalProjectFromWorld(world, rootDir)
+
+      const worldPath = path.join(rootDir, 'world.json')
+      const localManifest = readJsonFile(worldPath)
+      localManifest.spawn = {
+        position: [1, 2, 3],
+        quaternion: [0, 0, 0, 1],
+      }
+      fs.writeFileSync(worldPath, JSON.stringify(localManifest, null, 2) + '\n', 'utf8')
+
+      const remoteSpawn = {
+        position: [9, 8, 7],
+        quaternion: [0, 0, 0, 1],
+      }
+      const remoteSet = await fetchJson(`${world.worldUrl}/admin/spawn`, {
+        adminCode: world.adminCode,
+        method: 'PUT',
+        body: remoteSpawn,
+      })
+      assert.equal(remoteSet.res.status, 200)
+
+      await withWorldEnv(world, async () => {
+        const appServer = new DirectAppServer({
+          worldUrl: world.worldUrl,
+          adminCode: world.adminCode,
+          rootDir,
+        })
+        try {
+          await assert.rejects(
+            () => appServer.start(),
+            err =>
+              typeof err?.message === 'string' &&
+              err.message.includes('Sync conflict detected') &&
+              err.message.includes('spawn')
+          )
+        } finally {
+          await stopAppServer(appServer)
+        }
+      })
+
+      const artifacts = listConflictArtifacts(path.join(rootDir, '.lobby', 'conflicts')).filter(
+        item => item.data.status === 'open'
+      )
+      const spawnConflict = artifacts.find(item => item.data.kind === 'spawn')
+      assert.ok(spawnConflict)
+
+      await withWorldEnv(world, async () => {
+        const exitCode = await runSyncCommand({
+          command: 'resolve',
+          args: [spawnConflict.data.id, '--use', mode],
+          rootDir,
+        })
+        assert.equal(exitCode, 0)
+      })
+
+      const resolvedManifest = readJsonFile(worldPath)
+      const expectedSpawn = mode === 'remote' ? remoteSpawn : localManifest.spawn
+      assert.deepEqual(resolvedManifest.spawn, expectedSpawn)
+
+      await withWorldEnv(world, async () => {
+        const appServer = new DirectAppServer({
+          worldUrl: world.worldUrl,
+          adminCode: world.adminCode,
+          rootDir,
+        })
+        try {
+          await appServer.start()
+        } finally {
+          await stopAppServer(appServer)
+        }
+      })
+
+      const { data: snapshot } = await fetchJson(`${world.worldUrl}/admin/snapshot`, {
+        adminCode: world.adminCode,
+      })
+      assert.deepEqual(snapshot.spawn, expectedSpawn)
+    })
+  })
+}

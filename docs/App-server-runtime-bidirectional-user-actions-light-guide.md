@@ -113,8 +113,9 @@ Resolve:
 2. Resolve one conflict:
    - remote wins: `... sync resolve <id> --use remote`
    - local wins: `... sync resolve <id> --use local`
-3. Restart app-server.
-4. Rejoin client and verify spawn matches the chosen resolution.
+3. Open `world.json` and confirm `spawn` now matches the chosen resolution.
+4. Restart app-server.
+5. Rejoin client and verify spawn matches the chosen resolution.
 
 Expected:
 - conflict can be listed and resolved from CLI

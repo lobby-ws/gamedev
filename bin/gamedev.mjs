@@ -568,9 +568,6 @@ async function appServerCommand(args = []) {
   const artifacts = resolveServerPaths({ needsWorldServer: false })
   if (!artifacts) return 1
 
-  const appProjectDir = path.join(projectDir, 'project')
-  fs.mkdirSync(appProjectDir, { recursive: true })
-
   if (localMode) {
     console.log(`World: Local world detected, waiting for server (${env.WORLD_URL})`)
     const ready = await waitForWorldReady(env.WORLD_URL)
@@ -589,7 +586,7 @@ async function appServerCommand(args = []) {
   console.log('Sync: Starting app-server sync')
   children.push(
     spawnProcess('app server', process.execPath, [artifacts.appServerPath], {
-      cwd: appProjectDir,
+      cwd: projectDir,
       env: envBase,
     })
   )

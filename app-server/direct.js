@@ -2924,7 +2924,7 @@ export class DirectAppServer {
 
   _readManifestForSyncResolve() {
     const manifest = this.manifest.read()
-    if (manifest) return manifest
+    if (manifest) return cloneJson(manifest)
     return this.manifest.createEmpty()
   }
 
