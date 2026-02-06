@@ -2,6 +2,7 @@ import { css } from '@firebolt-dev/css'
 import { useEffect, useRef, useState } from 'react'
 import { RocketIcon, SearchIcon } from 'lucide-react'
 import { cls } from '../cls'
+import { theme } from '../theme'
 import { AppsList } from '../AppsList'
 import { Pane } from './Pane'
 
@@ -28,9 +29,9 @@ export function Apps({ world, hidden }) {
       <div
         className='apps'
         css={css`
-          background: rgba(11, 10, 21, 0.9);
-          border: 1px solid rgba(255, 255, 255, 0.05);
-          border-radius: 1.375rem;
+          background: ${theme.bgSection};
+          border: 1px solid ${theme.borderLight};
+          border-radius: ${theme.radius};
           flex: 1;
           display: flex;
           flex-direction: column;
@@ -39,7 +40,7 @@ export function Apps({ world, hidden }) {
           .apps-head {
             height: 3.125rem;
             padding: 0 0.6rem 0 1rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            border-bottom: 1px solid ${theme.borderLight};
             display: flex;
             align-items: center;
           }
@@ -87,7 +88,7 @@ export function Apps({ world, hidden }) {
         `}
       >
         <div className='apps-head'>
-          <div className='apps-title'>Apps</div>
+          <div className='apps-title'>Objects</div>
           <label className='apps-search'>
             <SearchIcon size='1.125rem' />
             <input type='text' placeholder='Search' value={query} onChange={e => setQuery(e.target.value)} />

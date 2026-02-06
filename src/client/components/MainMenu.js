@@ -7,6 +7,7 @@ import { useRank } from './useRank'
 import { isTouch } from '../utils'
 import { Group } from './sidebar/Group'
 import { cls } from './cls'
+import { theme } from './theme'
 import { HintContext, HintProvider } from './Hint'
 import { MicIcon, MicOffIcon, VRIcon } from './Icons'
 import { sortBy } from 'lodash-es'
@@ -97,282 +98,283 @@ export function MainMenu({ world, open, onClose }) {
       <div
         className='mainmenu'
         css={css`
-        position: absolute;
-        inset: 0;
-        z-index: 100;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        pointer-events: auto;
-        .mainmenu-backdrop {
           position: absolute;
           inset: 0;
-          background: rgba(0, 0, 0, 0.6);
-          backdrop-filter: blur(15px);
-        }
-        .mainmenu-panel {
-          position: relative;
-          width: 22rem;
-          max-width: calc(100% - 2rem);
-          max-height: calc(100% - 4rem);
-          min-height: 30rem;
-          background: rgba(11, 10, 21, 0.95);
-          border: 1px solid rgba(255, 255, 255, 0.08);
-          border-radius: 1.375rem;
-          display: flex;
-          flex-direction: column;
-          overflow: hidden;
-        }
-        .mainmenu-head {
-          flex-shrink: 0;
-          display: flex;
-          flex-direction: column;
-          border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-        }
-        .mainmenu-head-top {
-          height: 3.5rem;
-          padding: 0 0.75rem 0 1rem;
-          display: flex;
-          align-items: center;
-          gap: 0.75rem;
-        }
-        .mainmenu-logo {
-          width: 2rem;
-          height: 2rem;
-          object-fit: contain;
-        }
-        .mainmenu-head-spacer {
-          flex: 1;
-        }
-        .mainmenu-actions {
-          display: flex;
-          align-items: center;
-          gap: 0.25rem;
-        }
-        .mainmenu-action {
-          width: 2rem;
-          height: 2rem;
+          z-index: 100;
           display: flex;
           align-items: center;
           justify-content: center;
-          border-radius: 50%;
-          color: rgba(255, 255, 255, 0.6);
-          cursor: pointer;
-          &:hover {
-            color: white;
-            background: rgba(255, 255, 255, 0.08);
+          pointer-events: auto;
+          .mainmenu-backdrop {
+            position: absolute;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(15px);
           }
-          &.muted {
-            color: #ff4b4b;
+          .mainmenu-panel {
+            position: relative;
+            width: 22rem;
+            max-width: calc(100% - 2rem);
+            max-height: calc(100% - 4rem);
+            min-height: 30rem;
+            background: ${theme.bgPanel};
+            border: 1px solid ${theme.border};
+            border-radius: ${theme.radius};
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
           }
-        }
-        .mainmenu-close {
-          width: 2rem;
-          height: 2rem;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          color: rgba(255, 255, 255, 0.6);
-          cursor: pointer;
-          &:hover {
-            color: white;
+          .mainmenu-head {
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            border-bottom: 1px solid ${theme.borderLight};
           }
-        }
-        .mainmenu-tabs {
-          display: flex;
-          align-items: center;
-          gap: 0;
-          padding: 0 0.5rem;
-        }
-        .mainmenu-tab {
-          flex: 1;
-          height: 2.5rem;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 0.4rem;
-          font-size: 0.875rem;
-          color: rgba(255, 255, 255, 0.4);
-          cursor: pointer;
-          border-bottom: 2px solid transparent;
-          &:hover {
-            color: rgba(255, 255, 255, 0.8);
+          .mainmenu-head-top {
+            height: 3.5rem;
+            padding: 0 0.75rem 0 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
           }
-          &.active {
-            color: white;
-            border-bottom-color: white;
+          .mainmenu-logo {
+            width: 2rem;
+            height: 2rem;
+            object-fit: contain;
           }
-        }
-        .mainmenu-content {
-          flex: 1;
-          overflow-y: auto;
-          padding: 0.6rem 0;
-        }
-      `}
-    >
-      <div className='mainmenu-backdrop' onClick={onClose} />
-      <div className='mainmenu-panel'>
-        <div className='mainmenu-head'>
-          <div className='mainmenu-head-top'>
-            <img className='mainmenu-logo' src='/logo.png' />
-            <div className='mainmenu-head-spacer' />
-            <div className='mainmenu-actions'>
-              {(livekit.enabled || true) && (
-                <div
-                  className={cls('mainmenu-action', { muted: livekit.muted })}
-                  onClick={() => world.livekit.toggleMuted()}
-                >
-                  {livekit.muted ? <MicOffIcon size='1rem' /> : <MicIcon size='1rem' />}
-                </div>
-              )}
-              {(world.xr.isSupported || true) && (
-                <div className='mainmenu-action' onClick={() => world.xr.start()}>
-                  <VRIcon size='1.125rem' />
-                </div>
-              )}
-            </div>
-            <div className='mainmenu-close' onClick={onClose}>
-              <XIcon size='1.125rem' />
-            </div>
-          </div>
-          <div className='mainmenu-tabs'>
-            <div className={cls('mainmenu-tab', { active: tab === 'settings' })} onClick={() => setTab('settings')}>
-              <SettingsIcon size='0.875rem' />
-              Settings
-            </div>
-            {isAdmin && (
-              <div className={cls('mainmenu-tab', { active: tab === 'players' })} onClick={() => setTab('players')}>
-                <UsersIcon size='0.875rem' />
-                Players
+          .mainmenu-head-spacer {
+            flex: 1;
+          }
+          .mainmenu-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+          }
+          .mainmenu-action {
+            width: 2rem;
+            height: 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: ${theme.radiusSmall};
+            color: rgba(255, 255, 255, 0.6);
+            cursor: pointer;
+            &:hover {
+              color: white;
+              background: ${theme.bgHover};
+            }
+            &.muted {
+              color: #ff4b4b;
+            }
+          }
+          .mainmenu-close {
+            width: 2rem;
+            height: 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: rgba(255, 255, 255, 0.6);
+            cursor: pointer;
+            &:hover {
+              color: white;
+            }
+          }
+          .mainmenu-tabs {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            padding: 0 0.5rem;
+          }
+          .mainmenu-tab {
+            flex: 1;
+            height: 2.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.4rem;
+            font-size: 0.875rem;
+            color: rgba(255, 255, 255, 0.4);
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            &:hover {
+              color: rgba(255, 255, 255, 0.8);
+            }
+            &.active {
+              color: white;
+              border-bottom-color: white;
+              background: ${theme.bgHover};
+            }
+          }
+          .mainmenu-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0.6rem 0;
+          }
+        `}
+      >
+        <div className='mainmenu-backdrop' onClick={onClose} />
+        <div className='mainmenu-panel'>
+          <div className='mainmenu-head'>
+            <div className='mainmenu-head-top'>
+              <img className='mainmenu-logo' src='/logo.png' />
+              <div className='mainmenu-head-spacer' />
+              <div className='mainmenu-actions'>
+                {(livekit.enabled || true) && (
+                  <div
+                    className={cls('mainmenu-action', { muted: livekit.muted })}
+                    onClick={() => world.livekit.toggleMuted()}
+                  >
+                    {livekit.muted ? <MicOffIcon size='1rem' /> : <MicIcon size='1rem' />}
+                  </div>
+                )}
+                {(world.xr.isSupported || true) && (
+                  <div className='mainmenu-action' onClick={() => world.xr.start()}>
+                    <VRIcon size='1.125rem' />
+                  </div>
+                )}
               </div>
+              <div className='mainmenu-close' onClick={onClose}>
+                <XIcon size='1.125rem' />
+              </div>
+            </div>
+            <div className='mainmenu-tabs'>
+              <div className={cls('mainmenu-tab', { active: tab === 'settings' })} onClick={() => setTab('settings')}>
+                <SettingsIcon size='0.875rem' />
+                Settings
+              </div>
+              {isAdmin && (
+                <div className={cls('mainmenu-tab', { active: tab === 'players' })} onClick={() => setTab('players')}>
+                  <UsersIcon size='0.875rem' />
+                  Players
+                </div>
+              )}
+            </div>
+          </div>
+          <div className='mainmenu-content noscrollbar'>
+            {tab === 'settings' && (
+              <>
+                <FieldText label='Name' hint='Change your name' value={name} onChange={changeName} />
+                <Group label='Interface' />
+                <FieldRange
+                  label='Scale'
+                  hint='Change the scale of the user interface'
+                  min={0.5}
+                  max={1.5}
+                  step={0.1}
+                  value={ui}
+                  onChange={ui => world.prefs.setUI(ui)}
+                />
+                <FieldToggle
+                  label='Fullscreen'
+                  hint='Toggle fullscreen. Not supported in some browsers'
+                  value={isFullscreen}
+                  onChange={value => toggleFullscreen(value)}
+                  trueLabel='Enabled'
+                  falseLabel='Disabled'
+                />
+                {isBuilder && (
+                  <FieldToggle
+                    label='Build Prompts'
+                    hint='Show or hide action prompts when in build mode'
+                    value={actions}
+                    onChange={actions => world.prefs.setActions(actions)}
+                    trueLabel='Visible'
+                    falseLabel='Hidden'
+                  />
+                )}
+                <FieldToggle
+                  label='Stats'
+                  hint='Show or hide performance stats'
+                  value={world.prefs.stats}
+                  onChange={stats => world.prefs.setStats(stats)}
+                  trueLabel='Visible'
+                  falseLabel='Hidden'
+                />
+                {!isTouch && (
+                  <FieldBtn
+                    label='Hide Interface'
+                    note='Z'
+                    hint='Hide the user interface. Press Z to re-enable.'
+                    onClick={() => {
+                      world.ui.toggleVisible()
+                      onClose()
+                    }}
+                  />
+                )}
+                <Group label='Graphics' />
+                <FieldSwitch
+                  label='Resolution'
+                  hint='Change your display resolution'
+                  options={dprOptions}
+                  value={dpr}
+                  onChange={dpr => world.prefs.setDPR(dpr)}
+                />
+                <FieldSwitch
+                  label='Shadows'
+                  hint='Change the quality of shadows in the world'
+                  options={shadowOptions}
+                  value={shadows}
+                  onChange={shadows => world.prefs.setShadows(shadows)}
+                />
+                <FieldToggle
+                  label='Post-processing'
+                  hint='Enable or disable all postprocessing effects'
+                  trueLabel='On'
+                  falseLabel='Off'
+                  value={postprocessing}
+                  onChange={postprocessing => world.prefs.setPostprocessing(postprocessing)}
+                />
+                <FieldToggle
+                  label='Bloom'
+                  hint='Enable or disable the bloom effect'
+                  trueLabel='On'
+                  falseLabel='Off'
+                  value={bloom}
+                  onChange={bloom => world.prefs.setBloom(bloom)}
+                />
+                {world.settings.ao && (
+                  <FieldToggle
+                    label='Ambient Occlusion'
+                    hint='Enable or disable the ambient occlusion effect'
+                    trueLabel='On'
+                    falseLabel='Off'
+                    value={ao}
+                    onChange={ao => world.prefs.setAO(ao)}
+                  />
+                )}
+                <Group label='Audio' />
+                <FieldRange
+                  label='Music'
+                  hint='Adjust general music volume'
+                  min={0}
+                  max={2}
+                  step={0.05}
+                  value={music}
+                  onChange={music => world.prefs.setMusic(music)}
+                />
+                <FieldRange
+                  label='SFX'
+                  hint='Adjust sound effects volume'
+                  min={0}
+                  max={2}
+                  step={0.05}
+                  value={sfx}
+                  onChange={sfx => world.prefs.setSFX(sfx)}
+                />
+                <FieldRange
+                  label='Voice'
+                  hint='Adjust global voice chat volume'
+                  min={0}
+                  max={2}
+                  step={0.05}
+                  value={voice}
+                  onChange={voice => world.prefs.setVoice(voice)}
+                />
+              </>
             )}
+            {tab === 'players' && isAdmin && <PlayersSection world={world} />}
           </div>
         </div>
-        <div className='mainmenu-content noscrollbar'>
-        {tab === 'settings' && (<>
-          <FieldText label='Name' hint='Change your name' value={name} onChange={changeName} />
-          <Group label='Interface' />
-          <FieldRange
-            label='Scale'
-            hint='Change the scale of the user interface'
-            min={0.5}
-            max={1.5}
-            step={0.1}
-            value={ui}
-            onChange={ui => world.prefs.setUI(ui)}
-          />
-          <FieldToggle
-            label='Fullscreen'
-            hint='Toggle fullscreen. Not supported in some browsers'
-            value={isFullscreen}
-            onChange={value => toggleFullscreen(value)}
-            trueLabel='Enabled'
-            falseLabel='Disabled'
-          />
-          {isBuilder && (
-            <FieldToggle
-              label='Build Prompts'
-              hint='Show or hide action prompts when in build mode'
-              value={actions}
-              onChange={actions => world.prefs.setActions(actions)}
-              trueLabel='Visible'
-              falseLabel='Hidden'
-            />
-          )}
-          <FieldToggle
-            label='Stats'
-            hint='Show or hide performance stats'
-            value={world.prefs.stats}
-            onChange={stats => world.prefs.setStats(stats)}
-            trueLabel='Visible'
-            falseLabel='Hidden'
-          />
-          {!isTouch && (
-            <FieldBtn
-              label='Hide Interface'
-              note='Z'
-              hint='Hide the user interface. Press Z to re-enable.'
-              onClick={() => {
-                world.ui.toggleVisible()
-                onClose()
-              }}
-            />
-          )}
-          <Group label='Graphics' />
-          <FieldSwitch
-            label='Resolution'
-            hint='Change your display resolution'
-            options={dprOptions}
-            value={dpr}
-            onChange={dpr => world.prefs.setDPR(dpr)}
-          />
-          <FieldSwitch
-            label='Shadows'
-            hint='Change the quality of shadows in the world'
-            options={shadowOptions}
-            value={shadows}
-            onChange={shadows => world.prefs.setShadows(shadows)}
-          />
-          <FieldToggle
-            label='Post-processing'
-            hint='Enable or disable all postprocessing effects'
-            trueLabel='On'
-            falseLabel='Off'
-            value={postprocessing}
-            onChange={postprocessing => world.prefs.setPostprocessing(postprocessing)}
-          />
-          <FieldToggle
-            label='Bloom'
-            hint='Enable or disable the bloom effect'
-            trueLabel='On'
-            falseLabel='Off'
-            value={bloom}
-            onChange={bloom => world.prefs.setBloom(bloom)}
-          />
-          {world.settings.ao && (
-            <FieldToggle
-              label='Ambient Occlusion'
-              hint='Enable or disable the ambient occlusion effect'
-              trueLabel='On'
-              falseLabel='Off'
-              value={ao}
-              onChange={ao => world.prefs.setAO(ao)}
-            />
-          )}
-          <Group label='Audio' />
-          <FieldRange
-            label='Music'
-            hint='Adjust general music volume'
-            min={0}
-            max={2}
-            step={0.05}
-            value={music}
-            onChange={music => world.prefs.setMusic(music)}
-          />
-          <FieldRange
-            label='SFX'
-            hint='Adjust sound effects volume'
-            min={0}
-            max={2}
-            step={0.05}
-            value={sfx}
-            onChange={sfx => world.prefs.setSFX(sfx)}
-          />
-          <FieldRange
-            label='Voice'
-            hint='Adjust global voice chat volume'
-            min={0}
-            max={2}
-            step={0.05}
-            value={voice}
-            onChange={voice => world.prefs.setVoice(voice)}
-          />
-        </>)}
-        {tab === 'players' && isAdmin && (
-          <PlayersSection world={world} />
-        )}
-        </div>
-      </div>
       </div>
     </HintProvider>
   )
@@ -453,7 +455,7 @@ function PlayersSection({ world }) {
         .mainmenu-players-live {
           height: 1.75rem;
           padding: 0 0.625rem;
-          border-radius: 999px;
+          border-radius: ${theme.radiusSmall};
           border: 1px solid rgba(255, 255, 255, 0.15);
           background: transparent;
           color: rgba(255, 255, 255, 0.7);
@@ -475,7 +477,7 @@ function PlayersSection({ world }) {
         .mainmenu-players-live-dot {
           width: 0.35rem;
           height: 0.35rem;
-          border-radius: 50%;
+          border-radius: ${theme.radiusSmall};
           background: rgba(255, 255, 255, 0.35);
         }
         .mainmenu-players-live.active .mainmenu-players-live-dot {
@@ -570,9 +572,7 @@ function PlayersSection({ world }) {
             <div
               className='mainmenu-players-btn'
               onPointerEnter={() =>
-                setHint(
-                  player.isMuted() ? 'Player is muted. Click to unmute.' : 'Player is not muted. Click to mute.'
-                )
+                setHint(player.isMuted() ? 'Player is muted. Click to unmute.' : 'Player is not muted. Click to mute.')
               }
               onPointerLeave={() => setHint(null)}
               onClick={() => toggleMute(player)}

@@ -2,6 +2,7 @@ import { css } from '@firebolt-dev/css'
 import { useEffect, useState } from 'react'
 import { FieldFile, FieldText, FieldTextarea } from '../Fields'
 import { Pane } from './Pane'
+import { theme } from '../theme'
 
 export function Meta({ world, hidden }) {
   const app = world.ui.state.app
@@ -27,16 +28,16 @@ export function Meta({ world, hidden }) {
         className='meta'
         css={css`
           flex: 1;
-          background: rgba(11, 10, 21, 0.9);
-          border: 1px solid rgba(255, 255, 255, 0.05);
-          border-radius: 1.375rem;
+          background: ${theme.bgSection};
+          border: 1px solid ${theme.borderLight};
+          border-radius: ${theme.radius};
           display: flex;
           flex-direction: column;
           min-height: 1rem;
           .meta-head {
             height: 3.125rem;
             padding: 0 1rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            border-bottom: 1px solid ${theme.borderLight};
             display: flex;
             align-items: center;
           }

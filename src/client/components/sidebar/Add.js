@@ -9,6 +9,7 @@ import {
   Trash2Icon,
 } from 'lucide-react'
 import { cls } from '../cls'
+import { theme } from '../theme'
 import { sortBy } from 'lodash-es'
 import { uuid } from '../../../core/utils'
 import { buildScriptGroups } from '../../../core/extras/blueprintGroups'
@@ -534,9 +535,9 @@ export function Add({ world, hidden }) {
       <div
         className='add'
         css={css`
-          background: rgba(11, 10, 21, 0.9);
-          border: 1px solid rgba(255, 255, 255, 0.05);
-          border-radius: 1.375rem;
+          background: ${theme.bgSection};
+          border: 1px solid ${theme.borderLight};
+          border-radius: ${theme.radius};
           display: flex;
           flex-direction: column;
           min-height: 22rem;
@@ -545,7 +546,7 @@ export function Add({ world, hidden }) {
           .add-head {
             height: 3.125rem;
             padding: 0 1rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            border-bottom: 1px solid ${theme.borderLight};
             display: flex;
             align-items: center;
           }
@@ -566,7 +567,7 @@ export function Add({ world, hidden }) {
             color: rgba(255, 255, 255, 0.6);
             font-size: 0.75rem;
             padding: 0.25rem 0.65rem;
-            border-radius: 999px;
+            border-radius: ${theme.radiusSmall};
             &:hover {
               cursor: pointer;
               color: white;
@@ -622,8 +623,8 @@ export function Add({ world, hidden }) {
             aspect-ratio: 1;
             background-color: #1c1d22;
             background-size: cover;
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            border-radius: 0.7rem;
+            border: 1px solid ${theme.borderLight};
+            border-radius: ${theme.radius};
             margin: 0 0 0.4rem;
           }
           .add-item-name {
@@ -649,7 +650,7 @@ export function Add({ world, hidden }) {
             font-size: 0.9rem;
           }
           .add-orphans-clean {
-            border-radius: 999px;
+            border-radius: ${theme.radiusSmall};
             border: 1px solid rgba(255, 255, 255, 0.12);
             padding: 0.35rem 0.85rem;
             font-size: 0.75rem;
@@ -677,7 +678,7 @@ export function Add({ world, hidden }) {
             gap: 0.75rem;
             padding: 0.5rem 0.75rem;
             border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 0.65rem;
+            border-radius: ${theme.radius};
             background: rgba(255, 255, 255, 0.03);
           }
           .add-orphan-name {
@@ -695,7 +696,7 @@ export function Add({ world, hidden }) {
             background: transparent;
             color: rgba(255, 255, 255, 0.65);
             padding: 0.25rem 0.5rem;
-            border-radius: 999px;
+            border-radius: ${theme.radiusSmall};
             font-size: 0.75rem;
             &:hover {
               cursor: pointer;
@@ -720,14 +721,14 @@ export function Add({ world, hidden }) {
             display: flex;
             align-items: center;
             justify-content: center;
-            background: rgba(11, 10, 21, 0.85);
+            background: ${theme.bgSection};
             backdrop-filter: blur(6px);
           }
           .add-create-panel {
             width: 100%;
-            border-radius: 0.9rem;
+            border-radius: ${theme.radius};
             border: 1px solid rgba(255, 255, 255, 0.08);
-            background: rgba(18, 19, 30, 0.95);
+            background: ${theme.bgPanel};
             padding: 1rem;
             display: flex;
             flex-direction: column;
@@ -744,7 +745,7 @@ export function Add({ world, hidden }) {
             width: 100%;
             min-height: 7rem;
             resize: vertical;
-            border-radius: 0.6rem;
+            border-radius: ${theme.radius};
             border: 1px solid rgba(255, 255, 255, 0.08);
             background: rgba(10, 11, 18, 0.9);
             color: white;
@@ -759,7 +760,7 @@ export function Add({ world, hidden }) {
             top: calc(100% + 0.35rem);
             background: rgba(8, 9, 14, 0.98);
             border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 0.65rem;
+            border-radius: ${theme.radius};
             max-height: 12rem;
             overflow-y: auto;
             z-index: 5;
@@ -771,7 +772,7 @@ export function Add({ world, hidden }) {
             align-items: center;
             gap: 0.5rem;
             padding: 0.35rem 0.5rem;
-            border-radius: 0.5rem;
+            border-radius: ${theme.radiusSmall};
             font-size: 0.75rem;
             color: rgba(255, 255, 255, 0.8);
             cursor: pointer;
@@ -797,7 +798,7 @@ export function Add({ world, hidden }) {
           }
           .add-create-mention-tag {
             font-size: 0.65rem;
-            border-radius: 999px;
+            border-radius: ${theme.radiusSmall};
             border: 1px solid rgba(255, 255, 255, 0.15);
             padding: 0.1rem 0.4rem;
             color: rgba(255, 255, 255, 0.6);
@@ -819,7 +820,7 @@ export function Add({ world, hidden }) {
             align-items: center;
             gap: 0.5rem;
             padding: 0.3rem 0.5rem;
-            border-radius: 0.5rem;
+            border-radius: ${theme.radiusSmall};
             border: 1px solid rgba(255, 255, 255, 0.08);
             background: rgba(8, 9, 14, 0.5);
             font-size: 0.75rem;
@@ -862,7 +863,7 @@ export function Add({ world, hidden }) {
             gap: 0.5rem;
           }
           .add-create-btn {
-            border-radius: 999px;
+            border-radius: ${theme.radiusSmall};
             border: 1px solid rgba(255, 255, 255, 0.12);
             padding: 0.45rem 0.9rem;
             font-size: 0.85rem;

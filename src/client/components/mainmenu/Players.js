@@ -1,18 +1,14 @@
 import { css } from '@firebolt-dev/css'
 import { useContext, useEffect, useState } from 'react'
-import {
-  CircleArrowRightIcon,
-  HammerIcon,
-  UserXIcon,
-  Volume2Icon,
-} from 'lucide-react'
+import { CircleArrowRightIcon, HammerIcon, UserXIcon, Volume2Icon } from 'lucide-react'
 import { MicIcon, MicOffIcon } from '../Icons'
 import { cls } from '../cls'
+import { theme } from '../theme'
 import { HintContext } from '../Hint'
 import { sortBy } from 'lodash-es'
 import * as THREE from '../../../core/extras/three'
 import { Ranks } from '../../../core/extras/ranks'
-import { Pane } from './Pane'
+import { Pane } from '../sidebar/Pane'
 
 function getPlayers(world) {
   let players = []
@@ -75,16 +71,16 @@ export function Players({ world, hidden, livePlayers, setLivePlayers }) {
       <div
         className='players'
         css={css`
-          background: rgba(11, 10, 21, 0.9);
-          border: 1px solid rgba(255, 255, 255, 0.05);
-          border-radius: 1.375rem;
+          background: ${theme.bgSection};
+          border: 1px solid ${theme.borderLight};
+          border-radius: ${theme.radius};
           display: flex;
           flex-direction: column;
           min-height: 1rem;
           .players-head {
             height: 3.125rem;
             padding: 0 1rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            border-bottom: 1px solid ${theme.borderLight};
             display: flex;
             align-items: center;
             gap: 0.75rem;
@@ -101,7 +97,7 @@ export function Players({ world, hidden, livePlayers, setLivePlayers }) {
           .players-live {
             height: 2rem;
             padding: 0 0.75rem;
-            border-radius: 999px;
+            border-radius: ${theme.radiusSmall};
             border: 1px solid rgba(255, 255, 255, 0.15);
             background: transparent;
             color: rgba(255, 255, 255, 0.7);
@@ -123,7 +119,7 @@ export function Players({ world, hidden, livePlayers, setLivePlayers }) {
           .players-live-dot {
             width: 0.4rem;
             height: 0.4rem;
-            border-radius: 50%;
+            border-radius: ${theme.radiusSmall};
             background: rgba(255, 255, 255, 0.35);
           }
           .players-live.active .players-live-dot {

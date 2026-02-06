@@ -8,6 +8,7 @@ import {
   SparkleIcon,
 } from 'lucide-react'
 import { cls } from '../cls'
+import { theme } from '../theme'
 import { isArray } from 'lodash-es'
 import { ScriptEditor } from '../ScriptEditor'
 import { ScriptFilesEditor } from '../ScriptFilesEditor'
@@ -544,9 +545,9 @@ export function Script({ world, hidden }) {
       css={css`
         pointer-events: auto;
         align-self: stretch;
-        background: rgba(11, 10, 21, 0.9);
-        border: 1px solid rgba(255, 255, 255, 0.05);
-        border-radius: 1.375rem;
+        background: ${theme.bgSection};
+        border: 1px solid ${theme.borderLight};
+        border-radius: ${theme.radius};
         display: flex;
         flex-direction: column;
         align-items: stretch;
@@ -557,7 +558,7 @@ export function Script({ world, hidden }) {
           padding: 0 1rem;
           display: flex;
           align-items: center;
-          border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+          border-bottom: 1px solid ${theme.borderLight};
           gap: 0.75rem;
         }
         .script-title {
@@ -582,7 +583,7 @@ export function Script({ world, hidden }) {
           display: flex;
           align-items: center;
           justify-content: center;
-          border-radius: 999px;
+          border-radius: ${theme.radiusSmall};
           border: 1px solid rgba(255, 255, 255, 0.15);
           background: transparent;
           color: rgba(255, 255, 255, 0.8);
@@ -600,7 +601,7 @@ export function Script({ world, hidden }) {
         .script-status {
           font-size: 0.75rem;
           padding: 0.5rem 1rem;
-          border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+          border-bottom: 1px solid ${theme.borderLight};
         }
         .script-status.error {
           color: #ff6b6b;
@@ -625,7 +626,7 @@ export function Script({ world, hidden }) {
           display: flex;
           align-items: center;
           justify-content: center;
-          border-radius: 999px;
+          border-radius: ${theme.radiusSmall};
           border: 1px solid rgba(255, 255, 255, 0.15);
           background: transparent;
           color: rgba(255, 255, 255, 0.8);
@@ -642,7 +643,7 @@ export function Script({ world, hidden }) {
         }
         .script-ai-panel {
           padding: 0.75rem 1rem;
-          border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+          border-bottom: 1px solid ${theme.borderLight};
           display: flex;
           flex-direction: column;
           gap: 0.75rem;
@@ -688,7 +689,7 @@ export function Script({ world, hidden }) {
           display: flex;
           align-items: center;
           justify-content: center;
-          border-radius: 0.4rem;
+          border-radius: ${theme.radiusSmall};
           border: 1px solid rgba(255, 255, 255, 0.15);
           color: rgba(255, 255, 255, 0.75);
         }
@@ -702,7 +703,7 @@ export function Script({ world, hidden }) {
         }
         .script-ai-proposal {
           padding: 0.75rem;
-          border-radius: 0.75rem;
+          border-radius: ${theme.radius};
           border: 1px solid rgba(0, 167, 255, 0.28);
           background: rgba(0, 167, 255, 0.08);
           display: flex;
@@ -734,7 +735,7 @@ export function Script({ world, hidden }) {
           display: flex;
           align-items: center;
           justify-content: center;
-          border-radius: 999px;
+          border-radius: ${theme.radiusSmall};
           border: 1px solid rgba(255, 255, 255, 0.15);
           background: transparent;
           color: rgba(255, 255, 255, 0.75);
@@ -756,9 +757,9 @@ export function Script({ world, hidden }) {
         }
         .script-ai-input {
           position: relative;
-          border-radius: 0.75rem;
+          border-radius: ${theme.radius};
           border: 1px solid rgba(255, 255, 255, 0.08);
-          background: rgba(8, 9, 14, 0.6);
+          background: ${theme.bgInput};
           padding: 0.5rem 0.75rem;
         }
         .script-ai-input textarea {
@@ -773,9 +774,9 @@ export function Script({ world, hidden }) {
           left: 0;
           right: 0;
           top: calc(100% + 0.35rem);
-          background: rgba(8, 9, 14, 0.98);
+          background: ${theme.bgInputSolid};
           border: 1px solid rgba(255, 255, 255, 0.1);
-          border-radius: 0.65rem;
+          border-radius: ${theme.radius};
           max-height: 12rem;
           overflow-y: auto;
           z-index: 5;
@@ -787,7 +788,7 @@ export function Script({ world, hidden }) {
           align-items: center;
           gap: 0.5rem;
           padding: 0.35rem 0.5rem;
-          border-radius: 0.5rem;
+          border-radius: ${theme.radiusSmall};
           font-size: 0.75rem;
           color: rgba(255, 255, 255, 0.8);
           cursor: pointer;
@@ -813,7 +814,7 @@ export function Script({ world, hidden }) {
         }
         .script-ai-mention-tag {
           font-size: 0.65rem;
-          border-radius: 999px;
+          border-radius: ${theme.radiusSmall};
           border: 1px solid rgba(255, 255, 255, 0.15);
           padding: 0.1rem 0.4rem;
           color: rgba(255, 255, 255, 0.6);
@@ -835,9 +836,9 @@ export function Script({ world, hidden }) {
           align-items: center;
           gap: 0.5rem;
           padding: 0.3rem 0.5rem;
-          border-radius: 0.5rem;
+          border-radius: ${theme.radiusSmall};
           border: 1px solid rgba(255, 255, 255, 0.08);
-          background: rgba(8, 9, 14, 0.5);
+          background: ${theme.bgInput};
           font-size: 0.75rem;
           color: rgba(255, 255, 255, 0.8);
         }
@@ -863,9 +864,9 @@ export function Script({ world, hidden }) {
           }
         }
         .script-ai-error {
-          border-radius: 0.75rem;
+          border-radius: ${theme.radius};
           border: 1px solid rgba(255, 255, 255, 0.08);
-          background: rgba(8, 9, 14, 0.6);
+          background: ${theme.bgInput};
           padding: 0.75rem;
           display: flex;
           flex-direction: column;
@@ -909,7 +910,7 @@ export function Script({ world, hidden }) {
           display: flex;
           align-items: center;
           justify-content: center;
-          border-radius: 999px;
+          border-radius: ${theme.radiusSmall};
           border: 1px solid rgba(255, 255, 255, 0.15);
           background: transparent;
           color: rgba(255, 255, 255, 0.8);

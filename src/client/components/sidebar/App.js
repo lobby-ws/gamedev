@@ -11,6 +11,7 @@ import {
   Trash2Icon,
 } from 'lucide-react'
 import { cls } from '../cls'
+import { theme } from '../theme'
 import { isArray, isBoolean, isEqual, merge } from 'lodash-es'
 import { HintContext } from '../Hint'
 import {
@@ -263,16 +264,16 @@ export function App({ world, hidden }) {
       <div
         className='app'
         css={css`
-          background: rgba(11, 10, 21, 0.9);
-          border: 1px solid rgba(255, 255, 255, 0.05);
-          border-radius: 1.375rem;
+          background: ${theme.bgSection};
+          border: 1px solid ${theme.borderLight};
+          border-radius: ${theme.radius};
           display: flex;
           flex-direction: column;
           min-height: 1rem;
           .app-head {
             height: 3.125rem;
             padding: 0 1rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            border-bottom: 1px solid ${theme.borderLight};
             display: flex;
             align-items: center;
           }
@@ -280,7 +281,7 @@ export function App({ world, hidden }) {
             padding: 0.45rem 1rem;
             display: flex;
             gap: 0.5rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            border-bottom: 1px solid ${theme.borderLight};
           }
           .app-tab {
             border: 1px solid rgba(255, 255, 255, 0.12);
@@ -288,7 +289,7 @@ export function App({ world, hidden }) {
             color: rgba(255, 255, 255, 0.6);
             font-size: 0.75rem;
             padding: 0.25rem 0.7rem;
-            border-radius: 999px;
+            border-radius: ${theme.radiusSmall};
             &:hover {
               cursor: pointer;
               color: white;
@@ -330,7 +331,7 @@ export function App({ world, hidden }) {
           }
           .app-toggles {
             padding: 0.5rem 1.4rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            border-bottom: 1px solid ${theme.borderLight};
             display: flex;
             align-items: center;
             justify-content: space-between;
@@ -353,7 +354,7 @@ export function App({ world, hidden }) {
             }
           }
           .app-transforms {
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            border-bottom: 1px solid ${theme.borderLight};
           }
           .app-transforms-btn {
             display: flex;
@@ -380,7 +381,7 @@ export function App({ world, hidden }) {
             gap: 0.75rem;
             padding: 0.45rem 0.6rem;
             border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 0.6rem;
+            border-radius: ${theme.radiusSmall};
             background: rgba(255, 255, 255, 0.03);
           }
           .app-variant-name {
@@ -395,7 +396,7 @@ export function App({ world, hidden }) {
             color: rgba(255, 255, 255, 0.6);
             border: 1px solid rgba(255, 255, 255, 0.2);
             padding: 0.1rem 0.4rem;
-            border-radius: 999px;
+            border-radius: ${theme.radiusSmall};
           }
           .app-variant-merge {
             border: 1px solid rgba(255, 255, 255, 0.12);
@@ -403,7 +404,7 @@ export function App({ world, hidden }) {
             color: rgba(255, 255, 255, 0.7);
             font-size: 0.7rem;
             padding: 0.2rem 0.55rem;
-            border-radius: 999px;
+            border-radius: ${theme.radiusSmall};
             &:hover:not(:disabled) {
               cursor: pointer;
               color: white;
@@ -420,7 +421,7 @@ export function App({ world, hidden }) {
             color: rgba(255, 255, 255, 0.85);
             font-size: 0.7rem;
             padding: 0.2rem 0.55rem;
-            border-radius: 999px;
+            border-radius: ${theme.radiusSmall};
             &:hover:not(:disabled) {
               cursor: pointer;
               color: white;

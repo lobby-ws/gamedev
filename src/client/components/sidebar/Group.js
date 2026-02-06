@@ -1,4 +1,5 @@
 import { css } from '@firebolt-dev/css'
+import { theme } from '../theme'
 
 export function Group({ label }) {
   return (
@@ -6,7 +7,7 @@ export function Group({ label }) {
       <div
         css={css`
           height: 0.0625rem;
-          background: rgba(255, 255, 255, 0.05);
+          background: ${theme.borderLight};
           margin: 0.6rem 0;
         `}
       />

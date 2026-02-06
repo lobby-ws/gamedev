@@ -4,8 +4,9 @@ import { FieldBtn, FieldRange, FieldSwitch, FieldText, FieldToggle } from '../Fi
 import { useFullscreen } from '../useFullscreen'
 import { useRank } from '../useRank'
 import { isTouch } from '../../utils'
-import { Pane } from './Pane'
-import { Group } from './Group'
+import { Pane } from '../sidebar/Pane'
+import { Group } from '../sidebar/Group'
+import { theme } from '../theme'
 
 const shadowOptions = [
   { label: 'None', value: 'none' },
@@ -76,9 +77,9 @@ export function Prefs({ world, hidden }) {
         className='prefs noscrollbar'
         css={css`
           overflow-y: auto;
-          background: rgba(11, 10, 21, 0.9);
-          border: 1px solid rgba(255, 255, 255, 0.05);
-          border-radius: 1.375rem;
+          background: ${theme.bgSection};
+          border: 1px solid ${theme.borderLight};
+          border-radius: ${theme.radius};
           padding: 0.6rem 0;
         `}
       >

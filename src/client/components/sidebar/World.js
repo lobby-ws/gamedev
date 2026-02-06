@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { FieldFile, FieldNumber, FieldSwitch, FieldText, FieldToggle } from '../Fields'
 import { useRank } from '../useRank'
 import { Ranks } from '../../../core/extras/ranks'
+import { theme } from '../theme'
 import { Pane } from './Pane'
 
 const voiceChatOptions = [
@@ -45,16 +46,16 @@ export function World({ world, hidden }) {
       <div
         className='world'
         css={css`
-          background: rgba(11, 10, 21, 0.9);
-          border: 1px solid rgba(255, 255, 255, 0.05);
-          border-radius: 1.375rem;
+          background: ${theme.bgSection};
+          border: 1px solid ${theme.borderLight};
+          border-radius: ${theme.radius};
           display: flex;
           flex-direction: column;
           min-height: 12rem;
           .world-head {
             height: 3.125rem;
             padding: 0 1rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            border-bottom: 1px solid ${theme.borderLight};
             display: flex;
             align-items: center;
           }
