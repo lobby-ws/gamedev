@@ -103,7 +103,7 @@ export function MainMenu({ world, open, onClose }) {
           z-index: 100;
           display: flex;
           align-items: center;
-          justify-content: flex-start;
+          justify-content: center;
           pointer-events: auto;
           .mainmenu-backdrop {
             position: absolute;
@@ -113,9 +113,9 @@ export function MainMenu({ world, open, onClose }) {
           }
           .mainmenu-panel {
             position: absolute;
-            left: env(safe-area-inset-left);
+            left: 50%;
             top: 50%;
-            transform: translateY(-50%);
+            transform: translate(-50%, -50%);
             width: 22rem;
             max-width: calc(100% - 2rem);
             max-height: calc(100% - 4rem);
