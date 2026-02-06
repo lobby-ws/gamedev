@@ -988,13 +988,11 @@ function Reticle({ world }) {
         justify-content: center;
         font-size: 1rem;
         .reticle-item {
-          width: 0.25rem;
-          height: 0.25rem;
-          border-radius: 0.625rem;
-          /* border: 0.125rem solid ${buildMode ? '#ff4d4d' : 'white'}; */
-          background: ${buildMode ? '#ff4d4d' : 'white'};
-          border: 0.5px solid rgba(0, 0, 0, 0.3);
-          /* mix-blend-mode: ${buildMode ? 'normal' : 'difference'}; */
+          width: 0.6rem;
+          height: 0.6rem;
+          border: 1.5px solid ${buildMode ? 'rgba(255, 77, 77, 0.6)' : 'rgba(255, 255, 255, 0.5)'};
+          border-radius: 2px;
+          filter: drop-shadow(0 0 3px rgba(255, 255, 255, 0.15));
         }
       `}
     >
