@@ -218,6 +218,7 @@ export class HyperfyCLI {
     this.assetsDir = path.join(this.rootDir, 'assets')
     this.worldFile = path.join(this.rootDir, 'world.json')
     this.syncStateFile = path.join(this.rootDir, '.lobby', 'sync-state.json')
+    this.blueprintIndexFile = path.join(this.rootDir, '.lobby', 'blueprint-index.json')
     this.conflictsDir = path.join(this.rootDir, '.lobby', 'conflicts')
 
     this.worldUrl = overrides.worldUrl || process.env.WORLD_URL || null
@@ -601,6 +602,7 @@ export class HyperfyCLI {
       console.log(`   • Local assets in ${this.assetsDir}`)
       console.log(`   • ${this.worldFile}`)
       console.log(`   • ${this.syncStateFile}`)
+      console.log(`   • ${this.blueprintIndexFile}`)
       console.log(``)
 
       const rl = readline.createInterface({
@@ -631,6 +633,9 @@ export class HyperfyCLI {
       }
       if (fs.existsSync(this.syncStateFile)) {
         fs.rmSync(this.syncStateFile, { force: true })
+      }
+      if (fs.existsSync(this.blueprintIndexFile)) {
+        fs.rmSync(this.blueprintIndexFile, { force: true })
       }
       if (fs.existsSync(this.conflictsDir)) {
         fs.rmSync(this.conflictsDir, { recursive: true, force: true })

@@ -6,7 +6,7 @@ import { isEqual } from 'lodash-es'
 import { parse as acornParse } from 'acorn'
 import { uuid } from './utils.js'
 import { WorldManifest } from './WorldManifest.js'
-import { deriveBlueprintId, resolveBlueprintId, parseBlueprintId, isBlueprintDenylist } from './blueprintUtils.js'
+import { deriveBlueprintId, parseBlueprintId, isBlueprintDenylist } from './blueprintUtils.js'
 import { scaffoldBaseProject, scaffoldBuiltins } from './scaffold.js'
 import { BUILTIN_BLUEPRINT_IDS, SCENE_TEMPLATE } from './templates/builtins.js'
 import { readPacket, writePacket } from '../src/core/packets.js'
@@ -39,6 +39,7 @@ const CHANGEFEED_PAGE_LIMIT = 500
 const CHANGEFEED_MAX_PAGES = 20
 const MAX_SYNC_CONFLICT_SNAPSHOTS = 25
 const MAX_SYNC_CONFLICT_ARTIFACTS = 100
+const BLUEPRINT_IDENTITY_INDEX_VERSION = 1
 
 const OWNERSHIP_LOCAL = 'local'
 const OWNERSHIP_REMOTE = 'runtime'
@@ -181,6 +182,22 @@ function normalizeSyncString(value) {
   if (typeof value !== 'string') return null
   const trimmed = value.trim()
   return trimmed || null
+}
+
+function normalizeProjectRelativePath(value) {
+  if (typeof value !== 'string') return null
+  const normalized = normalizeScriptRelPath(value).trim()
+  if (!normalized) return null
+  const clean = path.posix.normalize(normalized)
+  if (!clean || clean === '.' || clean.startsWith('../') || clean === '..') return null
+  if (clean.startsWith('/')) return null
+  return clean
+}
+
+function toProjectRelativePath(rootDir, filePath) {
+  if (typeof rootDir !== 'string' || typeof filePath !== 'string') return null
+  const rel = normalizeScriptRelPath(path.relative(rootDir, filePath))
+  return normalizeProjectRelativePath(rel)
 }
 
 function normalizeSyncCursor(value) {
@@ -731,6 +748,30 @@ function hashSyncValue(value) {
   return sha256(Buffer.from(stableStringify(value), 'utf8'))
 }
 
+function buildBlueprintIdentitySignature(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return null
+  const createdAt = normalizeSyncString(config.createdAt)
+  if (createdAt) return `createdAt:${createdAt}`
+  const copy = cloneJson(config)
+  if (!copy || typeof copy !== 'object' || Array.isArray(copy)) return null
+  delete copy.id
+  delete copy.uid
+  return `hash:${hashSyncValue(copy)}`
+}
+
+function createEmptyBlueprintIdentityIndex() {
+  return {
+    formatVersion: BLUEPRINT_IDENTITY_INDEX_VERSION,
+    blueprints: {
+      byId: {},
+      byUid: {},
+      byPath: {},
+      bySignature: {},
+    },
+    updatedAt: null,
+  }
+}
+
 function classifySyncDiff({ baselineHash, localHash, remoteHash }) {
   const hasBaseline = baselineHash !== null && baselineHash !== undefined
   if (!hasBaseline) {
@@ -1144,6 +1185,7 @@ export class DirectAppServer {
     this.sharedDir = path.join(this.rootDir, SHARED_DIR_NAME)
     this.worldFile = path.join(this.rootDir, 'world.json')
     this.syncStateFile = path.join(this.lobbyDir, 'sync-state.json')
+    this.blueprintIdentityFile = path.join(this.lobbyDir, 'blueprint-index.json')
     this.conflictsDir = path.join(this.lobbyDir, 'conflicts')
     this.syncPolicyFile = path.join(this.lobbyDir, 'sync-policy.json')
     this.manifest = new WorldManifest(this.worldFile)
@@ -1164,6 +1206,7 @@ export class DirectAppServer {
     this.assetsUrl = null
     this.snapshot = null
     this.syncState = this._readSyncState()
+    this.blueprintIdentityIndex = this._readBlueprintIdentityIndex()
     this.syncPolicy = this._readSyncPolicy()
     this.deferSyncStateWrites = false
     this.loggedTarget = false
@@ -1240,6 +1283,307 @@ export class DirectAppServer {
     const state = readJson(this.syncStateFile)
     if (!state || typeof state !== 'object') return null
     return state
+  }
+
+  _normalizeBlueprintIdentityRecord(record, { key, keyType } = {}) {
+    if (!record || typeof record !== 'object') return null
+    const id =
+      keyType === 'id'
+        ? normalizeSyncString(key)
+        : normalizeSyncString(record.id)
+    if (!id) return null
+    const uid =
+      keyType === 'uid'
+        ? normalizeSyncString(key)
+        : normalizeSyncString(record.uid) || null
+    const projectionPath = normalizeProjectRelativePath(
+      keyType === 'path' ? key : record.path
+    )
+    const signature =
+      keyType === 'signature'
+        ? normalizeSyncString(key)
+        : normalizeSyncString(record.signature) || null
+    return {
+      id,
+      uid,
+      path: projectionPath,
+      signature,
+    }
+  }
+
+  _readBlueprintIdentityIndex() {
+    const fallback = createEmptyBlueprintIdentityIndex()
+    const state = readJson(this.blueprintIdentityFile)
+    if (!state || typeof state !== 'object') return fallback
+    const blueprints = state.blueprints && typeof state.blueprints === 'object' ? state.blueprints : {}
+    const normalizeTable = (table, keyType) => {
+      const output = {}
+      if (!table || typeof table !== 'object') return output
+      for (const [key, value] of Object.entries(table)) {
+        const normalized = this._normalizeBlueprintIdentityRecord(value, { key, keyType })
+        if (!normalized) continue
+        if (keyType === 'id') {
+          output[normalized.id] = normalized
+          continue
+        }
+        if (keyType === 'uid' && normalized.uid) {
+          output[normalized.uid] = normalized
+          continue
+        }
+        if (keyType === 'path' && normalized.path) {
+          output[normalized.path] = normalized
+          continue
+        }
+        if (keyType === 'signature' && normalized.signature) {
+          output[normalized.signature] = normalized
+        }
+      }
+      return output
+    }
+    return {
+      formatVersion:
+        typeof state.formatVersion === 'number' ? state.formatVersion : BLUEPRINT_IDENTITY_INDEX_VERSION,
+      blueprints: {
+        byId: normalizeTable(blueprints.byId, 'id'),
+        byUid: normalizeTable(blueprints.byUid, 'uid'),
+        byPath: normalizeTable(blueprints.byPath, 'path'),
+        bySignature: normalizeTable(blueprints.bySignature, 'signature'),
+      },
+      updatedAt: normalizeSyncString(state.updatedAt),
+    }
+  }
+
+  _writeBlueprintIdentityIndex(next) {
+    if (!next || typeof next !== 'object') return
+    const previous =
+      this.blueprintIdentityIndex && typeof this.blueprintIdentityIndex === 'object'
+        ? this.blueprintIdentityIndex
+        : createEmptyBlueprintIdentityIndex()
+    if (isEqual(previous.blueprints, next.blueprints)) return
+    const output = {
+      formatVersion: BLUEPRINT_IDENTITY_INDEX_VERSION,
+      blueprints: next.blueprints,
+      updatedAt: new Date().toISOString(),
+    }
+    this.blueprintIdentityIndex = output
+    this._writeFileAtomic(this.blueprintIdentityFile, JSON.stringify(output, null, 2) + '\n')
+  }
+
+  _buildBlueprintIdentityLookup() {
+    const lookup = {
+      byId: new Map(),
+      byUid: new Map(),
+      byPath: new Map(),
+      bySignature: new Map(),
+    }
+
+    const indexState =
+      this.blueprintIdentityIndex?.blueprints && typeof this.blueprintIdentityIndex.blueprints === 'object'
+        ? this.blueprintIdentityIndex.blueprints
+        : {}
+
+    const byIdTable = indexState.byId && typeof indexState.byId === 'object' ? indexState.byId : {}
+    for (const [idKey, rawRecord] of Object.entries(byIdTable)) {
+      const record = this._normalizeBlueprintIdentityRecord(rawRecord, { key: idKey, keyType: 'id' })
+      if (!record) continue
+      lookup.byId.set(record.id, record)
+      if (record.uid) lookup.byUid.set(record.uid, record.id)
+    }
+
+    const byUidTable = indexState.byUid && typeof indexState.byUid === 'object' ? indexState.byUid : {}
+    for (const [uidKey, rawRecord] of Object.entries(byUidTable)) {
+      const record = this._normalizeBlueprintIdentityRecord(rawRecord, { key: uidKey, keyType: 'uid' })
+      if (!record || !record.uid) continue
+      const currentId = normalizeSyncString(record.id)
+      if (!currentId) continue
+      lookup.byUid.set(record.uid, currentId)
+      const existing = lookup.byId.get(currentId) || { id: currentId, uid: null, path: null, signature: null }
+      lookup.byId.set(currentId, {
+        ...existing,
+        uid: record.uid || existing.uid,
+      })
+    }
+
+    const byPathTable = indexState.byPath && typeof indexState.byPath === 'object' ? indexState.byPath : {}
+    for (const [pathKey, rawRecord] of Object.entries(byPathTable)) {
+      const record = this._normalizeBlueprintIdentityRecord(rawRecord, { key: pathKey, keyType: 'path' })
+      if (!record || !record.path) continue
+      lookup.byPath.set(record.path, record)
+    }
+
+    const bySignatureTable =
+      indexState.bySignature && typeof indexState.bySignature === 'object' ? indexState.bySignature : {}
+    for (const [signatureKey, rawRecord] of Object.entries(bySignatureTable)) {
+      const record = this._normalizeBlueprintIdentityRecord(rawRecord, {
+        key: signatureKey,
+        keyType: 'signature',
+      })
+      if (!record || !record.signature) continue
+      lookup.bySignature.set(record.signature, record)
+    }
+
+    const baselineEntries = this.syncState?.objects?.blueprints
+    if (baselineEntries && typeof baselineEntries === 'object') {
+      for (const entry of Object.values(baselineEntries)) {
+        const id = normalizeSyncString(entry?.id)
+        if (!id) continue
+        const uid = normalizeSyncString(entry?.uid)
+        const existing = lookup.byId.get(id) || { id, uid: null, path: null, signature: null }
+        lookup.byId.set(id, { ...existing, uid: uid || existing.uid })
+        if (uid) lookup.byUid.set(uid, id)
+      }
+    }
+
+    for (const blueprint of this.snapshot?.blueprints?.values() || []) {
+      const id = normalizeSyncString(blueprint?.id)
+      if (!id) continue
+      const uid = normalizeSyncString(blueprint?.uid)
+      const existing = lookup.byId.get(id) || { id, uid: null, path: null, signature: null }
+      lookup.byId.set(id, { ...existing, uid: uid || existing.uid })
+      if (uid) lookup.byUid.set(uid, id)
+    }
+
+    return lookup
+  }
+
+  _resolveIndexedBlueprintId({ appName, fileBase, cfg, configPath, identityLookup }) {
+    const explicit = normalizeSyncString(cfg?.id)
+    if (explicit) return explicit
+
+    const uid = normalizeSyncString(cfg?.uid)
+    if (uid) {
+      const mapped = identityLookup?.byUid?.get(uid)
+      if (mapped) return mapped
+    }
+
+    const relativeConfigPath = toProjectRelativePath(this.rootDir, configPath)
+    if (relativeConfigPath) {
+      const record = identityLookup?.byPath?.get(relativeConfigPath)
+      const mapped = normalizeSyncString(record?.id)
+      if (mapped) return mapped
+    }
+
+    const signature = buildBlueprintIdentitySignature(cfg)
+    if (signature) {
+      const record = identityLookup?.bySignature?.get(signature)
+      const mapped = normalizeSyncString(record?.id)
+      if (mapped) return mapped
+    }
+
+    return deriveBlueprintId(appName, fileBase)
+  }
+
+  _resolveIndexedBlueprintUid({ id, cfg, identityLookup }) {
+    const explicit = normalizeSyncString(cfg?.uid)
+    if (explicit) return explicit
+    const record = identityLookup?.byId?.get(id)
+    return normalizeSyncString(record?.uid) || null
+  }
+
+  _syncBlueprintIdentityIndex(localIndex) {
+    const previous =
+      this.blueprintIdentityIndex && typeof this.blueprintIdentityIndex === 'object'
+        ? this.blueprintIdentityIndex
+        : createEmptyBlueprintIdentityIndex()
+    const previousBlueprints =
+      previous.blueprints && typeof previous.blueprints === 'object' ? previous.blueprints : {}
+    const nextById = {
+      ...(previousBlueprints.byId && typeof previousBlueprints.byId === 'object' ? previousBlueprints.byId : {}),
+    }
+    const nextByUid = {
+      ...(previousBlueprints.byUid && typeof previousBlueprints.byUid === 'object' ? previousBlueprints.byUid : {}),
+    }
+    const nextBySignature = {
+      ...(previousBlueprints.bySignature && typeof previousBlueprints.bySignature === 'object'
+        ? previousBlueprints.bySignature
+        : {}),
+    }
+    const nextByPath = {}
+
+    for (const info of localIndex?.values() || []) {
+      const id = normalizeSyncString(info?.id)
+      if (!id) continue
+      const uid = normalizeSyncString(info?.uid)
+      const projectionPath =
+        normalizeProjectRelativePath(info?.relativeConfigPath) ||
+        toProjectRelativePath(this.rootDir, info?.configPath)
+      const signature = normalizeSyncString(info?.identitySignature)
+      const record = {
+        id,
+        uid: uid || null,
+        path: projectionPath || null,
+        signature: signature || null,
+      }
+      nextById[id] = record
+      if (uid) nextByUid[uid] = record
+      if (signature) nextBySignature[signature] = record
+      if (projectionPath) nextByPath[projectionPath] = record
+    }
+
+    const next = {
+      formatVersion: BLUEPRINT_IDENTITY_INDEX_VERSION,
+      blueprints: {
+        byId: nextById,
+        byUid: nextByUid,
+        byPath: nextByPath,
+        bySignature: nextBySignature,
+      },
+      updatedAt: previous.updatedAt,
+    }
+    this._writeBlueprintIdentityIndex(next)
+  }
+
+  _getBlueprintIdentityRecord(id) {
+    const normalizedId = normalizeSyncString(id)
+    if (!normalizedId) return null
+    const table =
+      this.blueprintIdentityIndex?.blueprints?.byId && typeof this.blueprintIdentityIndex.blueprints.byId === 'object'
+        ? this.blueprintIdentityIndex.blueprints.byId
+        : null
+    if (!table) return null
+    const raw = table[normalizedId]
+    if (!raw || typeof raw !== 'object') return null
+    return this._normalizeBlueprintIdentityRecord(raw, { key: normalizedId, keyType: 'id' })
+  }
+
+  _getAppNameFromProjectionPath(projectionPath) {
+    const normalized = normalizeProjectRelativePath(projectionPath)
+    if (!normalized) return null
+    const segments = normalized.split('/')
+    if (segments.length < 3) return null
+    if (segments[0] !== 'apps') return null
+    return normalizeSyncString(segments[1]) || null
+  }
+
+  _resolveBlueprintProjection(id, { localIndex } = {}) {
+    const normalizedId = normalizeSyncString(id)
+    if (!normalizedId) return { info: null, configPath: null, appName: null }
+    const index = localIndex || this._indexLocalBlueprints()
+    const info = index.get(normalizedId) || null
+    if (info?.configPath) {
+      return {
+        info,
+        configPath: info.configPath,
+        appName: info.appName,
+      }
+    }
+
+    const identityRecord = this._getBlueprintIdentityRecord(normalizedId)
+    const identityPath = normalizeProjectRelativePath(identityRecord?.path)
+    if (identityPath) {
+      return {
+        info: null,
+        configPath: path.join(this.rootDir, identityPath),
+        appName: this._getAppNameFromProjectionPath(identityPath),
+      }
+    }
+
+    const parsed = parseBlueprintId(normalizedId)
+    return {
+      info: null,
+      configPath: path.join(this.appsDir, parsed.appName, `${parsed.fileBase}.json`),
+      appName: parsed.appName,
+    }
   }
 
   _readSyncPolicy() {
@@ -2283,11 +2627,14 @@ export class DirectAppServer {
 
   _removeLocalBlueprintFromDisk(id, { localIndex } = {}) {
     const index = localIndex || this._indexLocalBlueprints()
-    const info = index.get(id) || null
+    const projection = this._resolveBlueprintProjection(id, { localIndex: index })
+    const info = projection.info
     const parsed = parseBlueprintId(id)
-    const appName = info?.appName || parsed.appName
-    const fileBase = parsed.fileBase || id
-    const configPath = info?.configPath || path.join(this.appsDir, appName, `${fileBase}.json`)
+    const appName = projection.appName || info?.appName || parsed.appName
+    const configPath =
+      projection.configPath ||
+      info?.configPath ||
+      path.join(this.appsDir, appName, `${parsed.fileBase || id}.json`)
     const existingConfig = readJson(configPath)
     const keep = info?.keep === true || existingConfig?.keep === true
     if (keep) return false
@@ -2295,7 +2642,10 @@ export class DirectAppServer {
       this._deleteFileAtomic(configPath)
     }
     index.delete(id)
-    this.localBlueprintPathIndex.delete(configPath)
+    if (configPath) {
+      this.localBlueprintPathIndex.delete(configPath)
+    }
+    this._syncBlueprintIdentityIndex(index)
     this._maybeRemoveEmptyAppFolder(appName)
     return true
   }
@@ -3107,8 +3457,10 @@ export class DirectAppServer {
   _indexLocalBlueprints() {
     const index = new Map()
     const pathIndex = new Map()
+    const identityLookup = this._buildBlueprintIdentityLookup()
     if (!fs.existsSync(this.appsDir)) {
       this.localBlueprintPathIndex = pathIndex
+      this._syncBlueprintIdentityIndex(index)
       return index
     }
 
@@ -3126,17 +3478,73 @@ export class DirectAppServer {
         const fileBase = path.basename(entry.name, '.json')
         const configPath = path.join(appPath, entry.name)
         const cfg = readJson(configPath)
-        const id = resolveBlueprintId(appName, fileBase, cfg)
+        const id = this._resolveIndexedBlueprintId({
+          appName,
+          fileBase,
+          cfg,
+          configPath,
+          identityLookup,
+        })
+        if (!id) continue
+        const uid = this._resolveIndexedBlueprintUid({ id, cfg, identityLookup })
         const createdAt = typeof cfg?.createdAt === 'string' ? cfg.createdAt : null
         const scriptKey = typeof cfg?.script === 'string' ? cfg.script.trim() : ''
         const keep = cfg?.keep === true
-        const info = { id, appName, fileBase, configPath, scriptPath, createdAt, scriptKey, keep }
+        const relativeConfigPath = toProjectRelativePath(this.rootDir, configPath)
+        const identitySignature = buildBlueprintIdentitySignature(cfg)
+        const info = {
+          id,
+          uid,
+          appName,
+          fileBase,
+          configPath,
+          relativeConfigPath,
+          scriptPath,
+          createdAt,
+          scriptKey,
+          keep,
+          identitySignature,
+        }
+        const existing = index.get(id)
+        if (existing && existing.configPath !== configPath) {
+          console.warn(
+            `⚠️  Duplicate blueprint id "${id}" at ${existing.configPath} and ${configPath}; using ${existing.configPath}.`
+          )
+          continue
+        }
         index.set(id, info)
         pathIndex.set(configPath, info)
+
+        identityLookup.byId.set(id, {
+          id,
+          uid: uid || null,
+          path: relativeConfigPath || null,
+          signature: identitySignature || null,
+        })
+        if (uid) {
+          identityLookup.byUid.set(uid, id)
+        }
+        if (relativeConfigPath) {
+          identityLookup.byPath.set(relativeConfigPath, {
+            id,
+            uid: uid || null,
+            path: relativeConfigPath,
+            signature: identitySignature || null,
+          })
+        }
+        if (identitySignature) {
+          identityLookup.bySignature.set(identitySignature, {
+            id,
+            uid: uid || null,
+            path: relativeConfigPath || null,
+            signature: identitySignature,
+          })
+        }
       }
     }
 
     this.localBlueprintPathIndex = pathIndex
+    this._syncBlueprintIdentityIndex(index)
     return index
   }
 
@@ -3282,22 +3690,9 @@ export class DirectAppServer {
           this._scheduleRemoveBlueprint(id, abs)
           return
         }
-        const cfg = readJson(abs)
-        const id = resolveBlueprintId(appName, fileBase, cfg)
-        const scriptPath = this._getScriptPath(appName)
-        const createdAt = typeof cfg?.createdAt === 'string' ? cfg.createdAt : null
-        const scriptKey = typeof cfg?.script === 'string' ? cfg.script.trim() : ''
-        const keep = cfg?.keep === true
-        this.localBlueprintPathIndex.set(abs, {
-          id,
-          appName,
-          fileBase,
-          configPath: abs,
-          scriptPath,
-          createdAt,
-          scriptKey,
-          keep,
-        })
+        this._indexLocalBlueprints()
+        const info = this.localBlueprintPathIndex.get(abs)
+        const id = info?.id || deriveBlueprintId(appName, fileBase)
         this._scheduleDeployBlueprint(id)
         return
       }
@@ -3417,28 +3812,36 @@ export class DirectAppServer {
   }
 
   _scheduleRemoveApp(appName, appPath) {
+    const previousIds = this._getBlueprintIdsForApp(appName)
     const key = `remove:app:${appName}`
     if (this.removeTimers.has(key)) clearTimeout(this.removeTimers.get(key))
     const timer = setTimeout(() => {
       this.removeTimers.delete(key)
       if (appPath && fs.existsSync(appPath)) return
-      this._removeAppFromWorld(appName).catch(err => {
+      const localIndex = this._indexLocalBlueprints()
+      const removals = previousIds.filter(id => !localIndex.has(id))
+      if (!removals.length) return
+      this._removeBlueprintsAndEntities(removals).catch(err => {
         console.warn(`⚠️  Failed to remove app ${appName} from world:`, err?.message || err)
       })
-    }, 100)
+    }, 200)
     this.removeTimers.set(key, timer)
   }
 
   _scheduleRemoveBlueprint(id, configPath) {
-    const key = `remove:blueprint:${id}`
+    const normalizedId = normalizeSyncString(id)
+    if (!normalizedId) return
+    const key = `remove:blueprint:${normalizedId}`
     if (this.removeTimers.has(key)) clearTimeout(this.removeTimers.get(key))
     const timer = setTimeout(() => {
       this.removeTimers.delete(key)
       if (configPath && fs.existsSync(configPath)) return
-      this._removeBlueprintsAndEntities([id]).catch(err => {
-        console.warn(`⚠️  Failed to remove blueprint ${id}:`, err?.message || err)
+      const localIndex = this._indexLocalBlueprints()
+      if (localIndex.has(normalizedId)) return
+      this._removeBlueprintsAndEntities([normalizedId]).catch(err => {
+        console.warn(`⚠️  Failed to remove blueprint ${normalizedId}:`, err?.message || err)
       })
-    }, 100)
+    }, 200)
     this.removeTimers.set(key, timer)
   }
 
@@ -4366,23 +4769,15 @@ export class DirectAppServer {
 
   async _onRemoteBlueprintRemoved(id) {
     const localIndex = this._indexLocalBlueprints()
-    const info = localIndex.get(id) || null
-    const configPath =
-      info?.configPath || path.join(this.appsDir, parseBlueprintId(id).appName, `${parseBlueprintId(id).fileBase}.json`)
-    const appName = info?.appName || parseBlueprintId(id).appName
+    const projection = this._resolveBlueprintProjection(id, { localIndex })
+    const info = projection.info || localIndex.get(id) || null
+    const configPath = projection.configPath
     const existingConfig = readJson(configPath)
     const keep = info?.keep === true || existingConfig?.keep === true
     this.snapshot.blueprints.delete(id)
     this._refreshSyncState()
     if (keep) return
-    if (fs.existsSync(configPath)) {
-      try {
-        fs.rmSync(configPath, { force: true })
-      } catch (err) {
-        console.warn(`⚠️  Failed to delete blueprint config: ${configPath}`)
-      }
-    }
-    this._maybeRemoveEmptyAppFolder(appName)
+    this._removeLocalBlueprintFromDisk(id, { localIndex })
   }
 
   _maybeRemoveEmptyAppFolder(appName) {
@@ -4462,21 +4857,32 @@ export class DirectAppServer {
         this._maybeRemoveEmptyAppFolder(existingInfo.appName)
       }
     }
+    const relativeConfigPath = toProjectRelativePath(this.rootDir, blueprintPath)
+    const identitySignature = buildBlueprintIdentitySignature(localBlueprint)
     const nextInfo = {
       id: blueprint.id,
+      uid:
+        normalizeSyncString(blueprint?.uid) ||
+        normalizeSyncString(localBlueprint?.uid) ||
+        normalizeSyncString(existingInfo?.uid) ||
+        normalizeSyncString(existingConfig?.uid) ||
+        null,
       appName,
       fileBase: path.basename(blueprintPath, '.json'),
       configPath: blueprintPath,
+      relativeConfigPath,
       scriptPath: this._getScriptPath(appName),
       createdAt: typeof blueprint.createdAt === 'string' ? blueprint.createdAt : existingInfo?.createdAt || null,
       scriptKey: scriptKey || '',
       keep: blueprint.keep === true,
+      identitySignature,
     }
     if (index) index.set(blueprint.id, nextInfo)
     this.localBlueprintPathIndex.set(blueprintPath, nextInfo)
     if (existingConfigPath && existingConfigPath !== blueprintPath) {
       this.localBlueprintPathIndex.delete(existingConfigPath)
     }
+    this._syncBlueprintIdentityIndex(index)
 
     const resolvedScriptRoot = scriptRoot || this._resolveRemoteScriptRootBlueprint(blueprint)
     if (resolvedScriptRoot) {
@@ -4597,6 +5003,8 @@ export class DirectAppServer {
     const existingCreatedAt = typeof existing?.createdAt === 'string' ? existing.createdAt : null
     const createdAt = typeof blueprint.createdAt === 'string' ? blueprint.createdAt : existingCreatedAt
     if (typeof blueprint.id === 'string' && blueprint.id) output.id = blueprint.id
+    const uid = normalizeSyncString(blueprint?.uid) || normalizeSyncString(existing?.uid)
+    if (uid) output.uid = uid
     const name = normalizeSyncString(blueprint?.name) || normalizeSyncString(existing?.name)
     if (name) output.name = name
     const scope = getBlueprintScopeValue(blueprint) || normalizeScopeValue(existing?.scope)
