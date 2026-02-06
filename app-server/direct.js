@@ -37,6 +37,38 @@ const SHARED_IMPORT_PREFIX = '@shared/'
 const SHARED_IMPORT_ALIAS = 'shared/'
 const CHANGEFEED_PAGE_LIMIT = 500
 const CHANGEFEED_MAX_PAGES = 20
+const MAX_SYNC_CONFLICT_SNAPSHOTS = 25
+const MAX_SYNC_CONFLICT_ARTIFACTS = 100
+
+const OWNERSHIP_LOCAL = 'local'
+const OWNERSHIP_REMOTE = 'runtime'
+const OWNERSHIP_SHARED = 'shared'
+
+const BLUEPRINT_SCRIPT_FIELDS = ['script', 'scriptEntry', 'scriptFiles', 'scriptFormat', 'scriptRef']
+const BLUEPRINT_METADATA_FIELDS = ['name', ...BLUEPRINT_FIELDS.filter(field => field !== 'props')]
+const ENTITY_TRANSFORM_FIELDS = ['blueprint', 'position', 'quaternion', 'scale', 'pinned']
+
+const DEFAULT_SYNC_POLICY = {
+  blueprints: {
+    script: OWNERSHIP_LOCAL,
+    metadata: OWNERSHIP_SHARED,
+    props: OWNERSHIP_SHARED,
+  },
+  entities: {
+    transform: OWNERSHIP_SHARED,
+    props: OWNERSHIP_SHARED,
+    state: OWNERSHIP_REMOTE,
+  },
+  world: {
+    settings: {
+      '*': OWNERSHIP_SHARED,
+    },
+    spawn: {
+      position: OWNERSHIP_SHARED,
+      quaternion: OWNERSHIP_SHARED,
+    },
+  },
+}
 
 function sha256(buffer) {
   return crypto.createHash('sha256').update(buffer).digest('hex')
@@ -132,6 +164,19 @@ function stableStringify(value) {
   return JSON.stringify(sortObjectKeysDeep(value))
 }
 
+function cloneJson(value) {
+  if (value === undefined) return undefined
+  try {
+    return JSON.parse(JSON.stringify(value))
+  } catch {
+    return value
+  }
+}
+
+function isPlainObject(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
 function normalizeSyncString(value) {
   if (typeof value !== 'string') return null
   const trimmed = value.trim()
@@ -142,6 +187,102 @@ function normalizeSyncCursor(value) {
   if (typeof value === 'number' && Number.isFinite(value)) return value
   const normalized = normalizeSyncString(value)
   return normalized || null
+}
+
+function normalizeOwnershipValue(value, fallback = OWNERSHIP_SHARED) {
+  if (typeof value !== 'string') return fallback
+  const normalized = value.trim().toLowerCase()
+  if (normalized === OWNERSHIP_LOCAL) return OWNERSHIP_LOCAL
+  if (normalized === OWNERSHIP_REMOTE || normalized === 'remote') return OWNERSHIP_REMOTE
+  if (normalized === OWNERSHIP_SHARED) return OWNERSHIP_SHARED
+  return fallback
+}
+
+function resolveThreeWayValue({ base, local, remote, ownership = OWNERSHIP_SHARED } = {}) {
+  const normalizedOwnership = normalizeOwnershipValue(ownership)
+  if (isEqual(local, remote)) {
+    return { ok: true, value: cloneJson(local), resolution: 'equal' }
+  }
+  const localChanged = !isEqual(local, base)
+  const remoteChanged = !isEqual(remote, base)
+  if (!localChanged && !remoteChanged) {
+    return { ok: true, value: cloneJson(base), resolution: 'unchanged' }
+  }
+  if (localChanged && !remoteChanged) {
+    return { ok: true, value: cloneJson(local), resolution: 'local-only' }
+  }
+  if (!localChanged && remoteChanged) {
+    return { ok: true, value: cloneJson(remote), resolution: 'remote-only' }
+  }
+  if (normalizedOwnership === OWNERSHIP_LOCAL) {
+    return { ok: true, value: cloneJson(local), resolution: 'local-policy' }
+  }
+  if (normalizedOwnership === OWNERSHIP_REMOTE) {
+    return { ok: true, value: cloneJson(remote), resolution: 'remote-policy' }
+  }
+  return { ok: false, resolution: 'conflict' }
+}
+
+function reconcileObjectByKeys({
+  base,
+  local,
+  remote,
+  ownershipForKey = null,
+  defaultOwnership = OWNERSHIP_SHARED,
+  pathPrefix = '',
+} = {}) {
+  const baseObject = isPlainObject(base) ? base : {}
+  const localObject = isPlainObject(local) ? local : {}
+  const remoteObject = isPlainObject(remote) ? remote : {}
+  const keys = new Set([...Object.keys(baseObject), ...Object.keys(localObject), ...Object.keys(remoteObject)])
+  const merged = {}
+  const conflicts = []
+  const autoResolved = []
+
+  for (const key of keys) {
+    const baseValue = baseObject[key]
+    const localValue = localObject[key]
+    const remoteValue = remoteObject[key]
+    const ownership = normalizeOwnershipValue(
+      typeof ownershipForKey === 'function' ? ownershipForKey(key) : defaultOwnership,
+      defaultOwnership
+    )
+    const result = resolveThreeWayValue({
+      base: baseValue,
+      local: localValue,
+      remote: remoteValue,
+      ownership,
+    })
+    const path = pathPrefix ? `${pathPrefix}.${key}` : key
+    if (result.ok) {
+      if (result.value !== undefined) {
+        merged[key] = cloneJson(result.value)
+      }
+      if (result.resolution === 'local-policy' || result.resolution === 'remote-policy') {
+        autoResolved.push({
+          path,
+          ownership,
+          resolution: result.resolution,
+          value: cloneJson(result.value),
+        })
+      }
+      continue
+    }
+    conflicts.push({
+      path,
+      ownership,
+      base: cloneJson(baseValue),
+      local: cloneJson(localValue),
+      remote: cloneJson(remoteValue),
+    })
+    if (localValue !== undefined) {
+      merged[key] = cloneJson(localValue)
+    } else if (remoteValue !== undefined) {
+      merged[key] = cloneJson(remoteValue)
+    }
+  }
+
+  return { merged, conflicts, autoResolved }
 }
 
 function ensureDir(dirPath) {
@@ -1003,6 +1144,8 @@ export class DirectAppServer {
     this.sharedDir = path.join(this.rootDir, SHARED_DIR_NAME)
     this.worldFile = path.join(this.rootDir, 'world.json')
     this.syncStateFile = path.join(this.lobbyDir, 'sync-state.json')
+    this.conflictsDir = path.join(this.lobbyDir, 'conflicts')
+    this.syncPolicyFile = path.join(this.lobbyDir, 'sync-policy.json')
     this.manifest = new WorldManifest(this.worldFile)
 
     this.client = new WorldAdminClient({
@@ -1021,6 +1164,7 @@ export class DirectAppServer {
     this.assetsUrl = null
     this.snapshot = null
     this.syncState = this._readSyncState()
+    this.syncPolicy = this._readSyncPolicy()
     this.deferSyncStateWrites = false
     this.loggedTarget = false
     this.loggedChangefeedWarning = false
@@ -1098,6 +1242,97 @@ export class DirectAppServer {
     return state
   }
 
+  _readSyncPolicy() {
+    const defaults = cloneJson(DEFAULT_SYNC_POLICY)
+    const configured = readJson(this.syncPolicyFile)
+    if (!configured || typeof configured !== 'object') return defaults
+
+    if (configured.blueprints && typeof configured.blueprints === 'object') {
+      defaults.blueprints.script = normalizeOwnershipValue(
+        configured.blueprints.script,
+        defaults.blueprints.script
+      )
+      defaults.blueprints.metadata = normalizeOwnershipValue(
+        configured.blueprints.metadata,
+        defaults.blueprints.metadata
+      )
+      defaults.blueprints.props = normalizeOwnershipValue(configured.blueprints.props, defaults.blueprints.props)
+    }
+
+    if (configured.entities && typeof configured.entities === 'object') {
+      defaults.entities.transform = normalizeOwnershipValue(
+        configured.entities.transform,
+        defaults.entities.transform
+      )
+      defaults.entities.props = normalizeOwnershipValue(configured.entities.props, defaults.entities.props)
+      defaults.entities.state = normalizeOwnershipValue(configured.entities.state, defaults.entities.state)
+    }
+
+    if (configured.world && typeof configured.world === 'object') {
+      if (configured.world.settings && typeof configured.world.settings === 'object') {
+        const nextSettings = { ...defaults.world.settings }
+        for (const [key, value] of Object.entries(configured.world.settings)) {
+          nextSettings[key] = normalizeOwnershipValue(value, nextSettings[key] || OWNERSHIP_SHARED)
+        }
+        defaults.world.settings = nextSettings
+      }
+      if (configured.world.spawn && typeof configured.world.spawn === 'object') {
+        defaults.world.spawn.position = normalizeOwnershipValue(
+          configured.world.spawn.position,
+          defaults.world.spawn.position
+        )
+        defaults.world.spawn.quaternion = normalizeOwnershipValue(
+          configured.world.spawn.quaternion,
+          defaults.world.spawn.quaternion
+        )
+      }
+    }
+
+    return defaults
+  }
+
+  _getBlueprintScriptOwnership() {
+    return normalizeOwnershipValue(this.syncPolicy?.blueprints?.script, OWNERSHIP_LOCAL)
+  }
+
+  _getBlueprintMetadataOwnership() {
+    return normalizeOwnershipValue(this.syncPolicy?.blueprints?.metadata, OWNERSHIP_SHARED)
+  }
+
+  _getBlueprintPropsOwnership() {
+    return normalizeOwnershipValue(this.syncPolicy?.blueprints?.props, OWNERSHIP_SHARED)
+  }
+
+  _getEntityTransformOwnership() {
+    return normalizeOwnershipValue(this.syncPolicy?.entities?.transform, OWNERSHIP_SHARED)
+  }
+
+  _getEntityPropsOwnership() {
+    return normalizeOwnershipValue(this.syncPolicy?.entities?.props, OWNERSHIP_SHARED)
+  }
+
+  _getEntityStateOwnership(fallback = OWNERSHIP_REMOTE) {
+    return normalizeOwnershipValue(this.syncPolicy?.entities?.state, fallback)
+  }
+
+  _getWorldSettingsOwnership(key) {
+    const settingsPolicy = this.syncPolicy?.world?.settings
+    if (!settingsPolicy || typeof settingsPolicy !== 'object') {
+      return OWNERSHIP_SHARED
+    }
+    const specific = normalizeOwnershipValue(settingsPolicy[key], null)
+    if (specific) return specific
+    return normalizeOwnershipValue(settingsPolicy['*'], OWNERSHIP_SHARED)
+  }
+
+  _getSpawnOwnership(key) {
+    const spawnPolicy = this.syncPolicy?.world?.spawn
+    if (!spawnPolicy || typeof spawnPolicy !== 'object') {
+      return OWNERSHIP_SHARED
+    }
+    return normalizeOwnershipValue(spawnPolicy[key], OWNERSHIP_SHARED)
+  }
+
   _extractSyncRevision(item) {
     if (!item || typeof item !== 'object') return null
     if (typeof item.version === 'number' && Number.isFinite(item.version)) {
@@ -1129,7 +1364,8 @@ export class DirectAppServer {
       const uid = normalizeSyncString(item.uid)
       const key = uid || id
       if (!key) continue
-      const hash = this._hashSyncObject(kind, item)
+      const normalizedValue = this._normalizeSyncObjectForHash(kind, item)
+      const hash = normalizedValue ? hashSyncValue(normalizedValue) : null
       if (!hash) continue
       const lastSyncedRevision = this._extractSyncRevision(item)
       const existing = previous[key]
@@ -1138,6 +1374,7 @@ export class DirectAppServer {
         id: id || null,
         uid: uid || null,
         hash,
+        value: cloneJson(normalizedValue),
         lastSyncedRevision,
         lastSyncedAt: unchanged && normalizeSyncString(existing?.lastSyncedAt) ? existing.lastSyncedAt : nowIso,
         lastOpId: normalizeSyncString(item.lastOpId) || null,
@@ -1153,6 +1390,7 @@ export class DirectAppServer {
     const unchanged = existing?.hash === hash
     return {
       hash,
+      value: cloneJson(hashInput),
       lastSyncedAt: unchanged && normalizeSyncString(existing?.lastSyncedAt) ? existing.lastSyncedAt : nowIso,
     }
   }
@@ -1314,6 +1552,461 @@ export class DirectAppServer {
     return byId
   }
 
+  _buildManifestEntityStateOwnershipIndex(manifest) {
+    const byId = new Map()
+    const entities = Array.isArray(manifest?.entities) ? manifest.entities : []
+    const defaultOwnership = this._getEntityStateOwnership(OWNERSHIP_REMOTE)
+    for (const entity of entities) {
+      const id = normalizeSyncString(entity?.id)
+      if (!id) continue
+      const direct = normalizeOwnershipValue(entity?.stateOwnership, null)
+      const nested = normalizeOwnershipValue(entity?.sync?.state, null)
+      byId.set(id, direct || nested || defaultOwnership)
+    }
+    return byId
+  }
+
+  _normalizeBaselineSyncValue(kind, entry) {
+    if (!entry || typeof entry !== 'object') return null
+    if (!Object.prototype.hasOwnProperty.call(entry, 'value')) return null
+    if (kind === 'settings') return normalizeSettingsForCompare(entry.value)
+    if (kind === 'spawn') return normalizeSpawnForCompare(entry.value)
+    return this._normalizeSyncObjectForHash(kind, entry.value)
+  }
+
+  _createSyncConflict({
+    kind,
+    id,
+    uid,
+    baselineHash,
+    localHash,
+    remoteHash,
+    base,
+    local,
+    remote,
+    merged = null,
+    unresolvedFields = [],
+    autoResolvedFields = [],
+  } = {}) {
+    return {
+      kind: normalizeSyncString(kind) || 'unknown',
+      id: normalizeSyncString(id) || null,
+      uid: normalizeSyncString(uid) || normalizeSyncString(remote?.uid) || normalizeSyncString(base?.uid) || null,
+      baselineHash: normalizeSyncString(baselineHash),
+      localHash: normalizeSyncString(localHash),
+      remoteHash: normalizeSyncString(remoteHash),
+      base: cloneJson(base),
+      local: cloneJson(local),
+      remote: cloneJson(remote),
+      merged: cloneJson(merged),
+      unresolvedFields: Array.isArray(unresolvedFields) ? unresolvedFields : [],
+      autoResolvedFields: Array.isArray(autoResolvedFields) ? autoResolvedFields : [],
+    }
+  }
+
+  _resolveBlueprintField({
+    field,
+    base,
+    local,
+    remote,
+    ownership,
+    merged,
+    unresolvedFields,
+    autoResolvedFields,
+  }) {
+    const result = resolveThreeWayValue({
+      base: base?.[field],
+      local: local?.[field],
+      remote: remote?.[field],
+      ownership,
+    })
+    if (!result.ok) {
+      unresolvedFields.push({
+        path: field,
+        ownership,
+        base: cloneJson(base?.[field]),
+        local: cloneJson(local?.[field]),
+        remote: cloneJson(remote?.[field]),
+      })
+      if (local?.[field] !== undefined) merged[field] = cloneJson(local[field])
+      else if (remote?.[field] !== undefined) merged[field] = cloneJson(remote[field])
+      return
+    }
+    if (result.value !== undefined) {
+      merged[field] = cloneJson(result.value)
+    }
+    if (result.resolution === 'local-policy' || result.resolution === 'remote-policy') {
+      autoResolvedFields.push({
+        path: field,
+        ownership,
+        resolution: result.resolution,
+        value: cloneJson(result.value),
+      })
+    }
+  }
+
+  _reconcileBlueprint({
+    id,
+    uid,
+    baselineHash,
+    localHash,
+    remoteHash,
+    base,
+    local,
+    remote,
+  }) {
+    const baseValue = normalizeBlueprintForCompare(base)
+    const localValue = normalizeBlueprintForCompare(local)
+    const remoteValue = normalizeBlueprintForCompare(remote)
+    const scriptOwnership = this._getBlueprintScriptOwnership()
+    const metadataOwnership = this._getBlueprintMetadataOwnership()
+    const propsOwnership = this._getBlueprintPropsOwnership()
+
+    if (!localValue || !remoteValue) {
+      const result = resolveThreeWayValue({
+        base: baseValue,
+        local: localValue,
+        remote: remoteValue,
+        ownership: OWNERSHIP_SHARED,
+      })
+      if (result.ok) {
+        return { merged: result.value }
+      }
+      return {
+        conflict: this._createSyncConflict({
+          kind: 'blueprint',
+          id,
+          uid,
+          baselineHash,
+          localHash,
+          remoteHash,
+          base: baseValue,
+          local: localValue,
+          remote: remoteValue,
+          unresolvedFields: [
+            {
+              path: '$object',
+              ownership: OWNERSHIP_SHARED,
+              base: cloneJson(baseValue),
+              local: cloneJson(localValue),
+              remote: cloneJson(remoteValue),
+            },
+          ],
+        }),
+      }
+    }
+
+    const merged = { id }
+    const unresolvedFields = []
+    const autoResolvedFields = []
+
+    for (const field of BLUEPRINT_SCRIPT_FIELDS) {
+      this._resolveBlueprintField({
+        field,
+        base: baseValue,
+        local: localValue,
+        remote: remoteValue,
+        ownership: scriptOwnership,
+        merged,
+        unresolvedFields,
+        autoResolvedFields,
+      })
+    }
+
+    for (const field of BLUEPRINT_METADATA_FIELDS) {
+      this._resolveBlueprintField({
+        field,
+        base: baseValue,
+        local: localValue,
+        remote: remoteValue,
+        ownership: metadataOwnership,
+        merged,
+        unresolvedFields,
+        autoResolvedFields,
+      })
+    }
+
+    const propsResult = reconcileObjectByKeys({
+      base: baseValue?.props,
+      local: localValue?.props,
+      remote: remoteValue?.props,
+      defaultOwnership: propsOwnership,
+      pathPrefix: 'props',
+    })
+    if (Object.keys(propsResult.merged).length > 0 || localValue.props !== undefined || remoteValue.props !== undefined) {
+      merged.props = propsResult.merged
+    }
+    unresolvedFields.push(...propsResult.conflicts)
+    autoResolvedFields.push(...propsResult.autoResolved)
+
+    if (unresolvedFields.length > 0) {
+      return {
+        conflict: this._createSyncConflict({
+          kind: 'blueprint',
+          id,
+          uid,
+          baselineHash,
+          localHash,
+          remoteHash,
+          base: baseValue,
+          local: localValue,
+          remote: remoteValue,
+          merged,
+          unresolvedFields,
+          autoResolvedFields,
+        }),
+      }
+    }
+
+    return { merged }
+  }
+
+  _resolveEntityField({
+    field,
+    base,
+    local,
+    remote,
+    ownership,
+    merged,
+    unresolvedFields,
+    autoResolvedFields,
+  }) {
+    const result = resolveThreeWayValue({
+      base: base?.[field],
+      local: local?.[field],
+      remote: remote?.[field],
+      ownership,
+    })
+    if (!result.ok) {
+      unresolvedFields.push({
+        path: field,
+        ownership,
+        base: cloneJson(base?.[field]),
+        local: cloneJson(local?.[field]),
+        remote: cloneJson(remote?.[field]),
+      })
+      merged[field] = cloneJson(local?.[field])
+      return
+    }
+    merged[field] = cloneJson(result.value)
+    if (result.resolution === 'local-policy' || result.resolution === 'remote-policy') {
+      autoResolvedFields.push({
+        path: field,
+        ownership,
+        resolution: result.resolution,
+        value: cloneJson(result.value),
+      })
+    }
+  }
+
+  _reconcileEntity({
+    id,
+    uid,
+    baselineHash,
+    localHash,
+    remoteHash,
+    base,
+    local,
+    remote,
+    stateOwnership = OWNERSHIP_REMOTE,
+  }) {
+    const baseValue = normalizeEntityForCompare(base)
+    const localValue = normalizeEntityForCompare(local)
+    const remoteValue = normalizeEntityForCompare(remote)
+    const transformOwnership = this._getEntityTransformOwnership()
+    const propsOwnership = this._getEntityPropsOwnership()
+    const normalizedStateOwnership = normalizeOwnershipValue(stateOwnership, this._getEntityStateOwnership())
+
+    if (!localValue || !remoteValue) {
+      const result = resolveThreeWayValue({
+        base: baseValue,
+        local: localValue,
+        remote: remoteValue,
+        ownership: OWNERSHIP_SHARED,
+      })
+      if (result.ok) {
+        return { merged: result.value }
+      }
+      return {
+        conflict: this._createSyncConflict({
+          kind: 'entity',
+          id,
+          uid,
+          baselineHash,
+          localHash,
+          remoteHash,
+          base: baseValue,
+          local: localValue,
+          remote: remoteValue,
+          unresolvedFields: [
+            {
+              path: '$object',
+              ownership: OWNERSHIP_SHARED,
+              base: cloneJson(baseValue),
+              local: cloneJson(localValue),
+              remote: cloneJson(remoteValue),
+            },
+          ],
+        }),
+      }
+    }
+
+    const merged = {
+      id,
+      type: remoteValue.type || localValue.type || 'app',
+    }
+    const unresolvedFields = []
+    const autoResolvedFields = []
+
+    for (const field of ENTITY_TRANSFORM_FIELDS) {
+      this._resolveEntityField({
+        field,
+        base: baseValue,
+        local: localValue,
+        remote: remoteValue,
+        ownership: transformOwnership,
+        merged,
+        unresolvedFields,
+        autoResolvedFields,
+      })
+    }
+
+    const propsResult = reconcileObjectByKeys({
+      base: baseValue?.props,
+      local: localValue?.props,
+      remote: remoteValue?.props,
+      defaultOwnership: propsOwnership,
+      pathPrefix: 'props',
+    })
+    merged.props = propsResult.merged
+    unresolvedFields.push(...propsResult.conflicts)
+    autoResolvedFields.push(...propsResult.autoResolved)
+
+    this._resolveEntityField({
+      field: 'state',
+      base: baseValue,
+      local: localValue,
+      remote: remoteValue,
+      ownership: normalizedStateOwnership,
+      merged,
+      unresolvedFields,
+      autoResolvedFields,
+    })
+
+    if (unresolvedFields.length > 0) {
+      return {
+        conflict: this._createSyncConflict({
+          kind: 'entity',
+          id,
+          uid,
+          baselineHash,
+          localHash,
+          remoteHash,
+          base: baseValue,
+          local: localValue,
+          remote: remoteValue,
+          merged,
+          unresolvedFields,
+          autoResolvedFields,
+        }),
+      }
+    }
+
+    return { merged }
+  }
+
+  _reconcileSettings({ baselineHash, localHash, remoteHash, base, local, remote }) {
+    const baseValue = normalizeSettingsForCompare(base)
+    const localValue = normalizeSettingsForCompare(local)
+    const remoteValue = normalizeSettingsForCompare(remote)
+    const result = reconcileObjectByKeys({
+      base: baseValue,
+      local: localValue,
+      remote: remoteValue,
+      ownershipForKey: key => this._getWorldSettingsOwnership(key),
+      defaultOwnership: OWNERSHIP_SHARED,
+      pathPrefix: 'settings',
+    })
+
+    if (result.conflicts.length > 0) {
+      return {
+        conflict: this._createSyncConflict({
+          kind: 'settings',
+          id: '$world.settings',
+          baselineHash,
+          localHash,
+          remoteHash,
+          base: baseValue,
+          local: localValue,
+          remote: remoteValue,
+          merged: result.merged,
+          unresolvedFields: result.conflicts,
+          autoResolvedFields: result.autoResolved,
+        }),
+      }
+    }
+    return { merged: result.merged }
+  }
+
+  _reconcileSpawn({ baselineHash, localHash, remoteHash, base, local, remote }) {
+    const baseValue = normalizeSpawnForCompare(base)
+    const localValue = normalizeSpawnForCompare(local)
+    const remoteValue = normalizeSpawnForCompare(remote)
+    const merged = {}
+    const unresolvedFields = []
+    const autoResolvedFields = []
+
+    for (const field of ['position', 'quaternion']) {
+      const ownership = this._getSpawnOwnership(field)
+      const result = resolveThreeWayValue({
+        base: baseValue?.[field],
+        local: localValue?.[field],
+        remote: remoteValue?.[field],
+        ownership,
+      })
+      if (!result.ok) {
+        unresolvedFields.push({
+          path: `spawn.${field}`,
+          ownership,
+          base: cloneJson(baseValue?.[field]),
+          local: cloneJson(localValue?.[field]),
+          remote: cloneJson(remoteValue?.[field]),
+        })
+        merged[field] = cloneJson(localValue?.[field])
+        continue
+      }
+      merged[field] = cloneJson(result.value)
+      if (result.resolution === 'local-policy' || result.resolution === 'remote-policy') {
+        autoResolvedFields.push({
+          path: `spawn.${field}`,
+          ownership,
+          resolution: result.resolution,
+          value: cloneJson(result.value),
+        })
+      }
+    }
+
+    if (unresolvedFields.length > 0) {
+      return {
+        conflict: this._createSyncConflict({
+          kind: 'spawn',
+          id: '$world.spawn',
+          baselineHash,
+          localHash,
+          remoteHash,
+          base: baseValue,
+          local: localValue,
+          remote: remoteValue,
+          merged,
+          unresolvedFields,
+          autoResolvedFields,
+        }),
+      }
+    }
+
+    return { merged }
+  }
+
   _normalizeSnapshotCollection(items) {
     if (Array.isArray(items)) return items
     if (items instanceof Map) return Array.from(items.values())
@@ -1367,6 +2060,7 @@ export class DirectAppServer {
         localOnlyRemovals: [],
         remoteOnlyUpserts: [],
         remoteOnlyRemovals: [],
+        mergedActions: [],
       },
       manifest: {
         localOnly: false,
@@ -1383,6 +2077,7 @@ export class DirectAppServer {
     const baselineEntities = this._syncEntriesById(this.syncState?.objects?.entities)
     const remoteBlueprints = this.snapshot?.blueprints || new Map()
     const localEntities = this._buildManifestEntityIndex(manifest)
+    const localEntityStateOwnership = this._buildManifestEntityStateOwnershipIndex(manifest)
     const remoteEntities = new Map()
     for (const entity of this.snapshot?.entities?.values() || []) {
       if (entity?.type !== 'app' || !entity?.id) continue
@@ -1393,7 +2088,9 @@ export class DirectAppServer {
 
     const localSettings = normalizeSettingsForCompare(manifest?.settings)
     const remoteSettings = normalizeSettingsForCompare(this.snapshot?.settings)
-    const baselineSettingsHash = normalizeSyncString(this.syncState?.world?.settings?.hash)
+    const baselineSettingsEntry = this.syncState?.world?.settings
+    const baselineSettingsHash = normalizeSyncString(baselineSettingsEntry?.hash)
+    const baselineSettingsValue = this._normalizeBaselineSyncValue('settings', baselineSettingsEntry)
     const localSettingsHash = hashSyncValue(localSettings)
     const remoteSettingsHash = hashSyncValue(remoteSettings)
     const settingsMode = classifySyncDiff({
@@ -1408,18 +2105,33 @@ export class DirectAppServer {
     } else if (settingsMode === 'local-only') {
       plan.manifest.localOnly = true
     } else if (settingsMode === 'concurrent') {
-      plan.conflicts.push({
-        kind: 'settings',
-        id: '$world.settings',
+      const reconciliation = this._reconcileSettings({
         baselineHash: baselineSettingsHash,
         localHash: localSettingsHash,
         remoteHash: remoteSettingsHash,
+        base: baselineSettingsValue,
+        local: localSettings,
+        remote: remoteSettings,
       })
+      if (reconciliation.conflict) {
+        plan.conflicts.push(reconciliation.conflict)
+      } else {
+        const merged = normalizeSettingsForCompare(reconciliation.merged)
+        plan.mergedManifest.settings = merged
+        if (!isEqual(merged, localSettings)) {
+          plan.manifest.remoteOnly = true
+        }
+        if (!isEqual(merged, remoteSettings)) {
+          plan.manifest.localOnly = true
+        }
+      }
     }
 
     const localSpawn = normalizeSpawnForCompare(manifest?.spawn)
     const remoteSpawn = normalizeSpawnForCompare(this.snapshot?.spawn)
-    const baselineSpawnHash = normalizeSyncString(this.syncState?.world?.spawn?.hash)
+    const baselineSpawnEntry = this.syncState?.world?.spawn
+    const baselineSpawnHash = normalizeSyncString(baselineSpawnEntry?.hash)
+    const baselineSpawnValue = this._normalizeBaselineSyncValue('spawn', baselineSpawnEntry)
     const localSpawnHash = hashSyncValue(localSpawn)
     const remoteSpawnHash = hashSyncValue(remoteSpawn)
     const spawnMode = classifySyncDiff({
@@ -1434,19 +2146,34 @@ export class DirectAppServer {
     } else if (spawnMode === 'local-only') {
       plan.manifest.localOnly = true
     } else if (spawnMode === 'concurrent') {
-      plan.conflicts.push({
-        kind: 'spawn',
-        id: '$world.spawn',
+      const reconciliation = this._reconcileSpawn({
         baselineHash: baselineSpawnHash,
         localHash: localSpawnHash,
         remoteHash: remoteSpawnHash,
+        base: baselineSpawnValue,
+        local: localSpawn,
+        remote: remoteSpawn,
       })
+      if (reconciliation.conflict) {
+        plan.conflicts.push(reconciliation.conflict)
+      } else {
+        const merged = normalizeSpawnForCompare(reconciliation.merged)
+        plan.mergedManifest.spawn = merged
+        if (!isEqual(merged, localSpawn)) {
+          plan.manifest.remoteOnly = true
+        }
+        if (!isEqual(merged, remoteSpawn)) {
+          plan.manifest.localOnly = true
+        }
+      }
     }
 
     const mergedEntities = new Map(localEntities)
     const entityIds = new Set([...baselineEntities.keys(), ...localEntities.keys(), ...remoteEntities.keys()])
     for (const id of entityIds) {
-      const baselineHash = normalizeSyncString(baselineEntities.get(id)?.hash)
+      const baselineEntry = baselineEntities.get(id)
+      const baselineHash = normalizeSyncString(baselineEntry?.hash)
+      const baselineValue = this._normalizeBaselineSyncValue('entities', baselineEntry)
       const localEntity = localEntities.get(id) || null
       const remoteEntity = remoteEntities.get(id) || null
       const localHash = localEntity ? hashSyncValue(localEntity) : null
@@ -1465,27 +2192,52 @@ export class DirectAppServer {
         continue
       }
       if (mode === 'concurrent') {
-        plan.conflicts.push({
-          kind: 'entity',
+        const reconciliation = this._reconcileEntity({
           id,
+          uid: normalizeSyncString(remoteEntity?.uid) || normalizeSyncString(baselineEntry?.uid) || null,
           baselineHash,
           localHash,
           remoteHash,
+          base: baselineValue,
+          local: localEntity,
+          remote: remoteEntity,
+          stateOwnership: localEntityStateOwnership.get(id) || this._getEntityStateOwnership(),
         })
+        if (reconciliation.conflict) {
+          plan.conflicts.push(reconciliation.conflict)
+          continue
+        }
+        const merged = reconciliation.merged
+        if (merged) {
+          mergedEntities.set(id, merged)
+        } else {
+          mergedEntities.delete(id)
+        }
+        if (!isEqual(merged, localEntity)) {
+          plan.manifest.remoteOnly = true
+          plan.manifest.remoteOnlyEntities.push(id)
+        }
+        if (!isEqual(merged, remoteEntity)) {
+          plan.manifest.localOnly = true
+          plan.manifest.localOnlyEntities.push(id)
+        }
       }
     }
     plan.mergedManifest.entities = Array.from(mergedEntities.values())
 
     const blueprintIds = new Set([...baselineBlueprints.keys(), ...localBlueprints.keys(), ...remoteBlueprints.keys()])
     for (const id of blueprintIds) {
-      const baselineHash = normalizeSyncString(baselineBlueprints.get(id)?.hash)
-      const localBlueprint = localBlueprints.get(id) || null
-      const remoteBlueprint = remoteBlueprints.get(id) || null
-      const localHash = localBlueprint ? this._hashSyncObject('blueprints', localBlueprint) : null
-      const remoteHash = remoteBlueprint ? this._hashSyncObject('blueprints', remoteBlueprint) : null
+      const baselineEntry = baselineBlueprints.get(id)
+      const baselineHash = normalizeSyncString(baselineEntry?.hash)
+      const baselineValue = this._normalizeBaselineSyncValue('blueprints', baselineEntry)
+      const localBlueprint = normalizeBlueprintForCompare(localBlueprints.get(id) || null)
+      const remoteBlueprintRaw = remoteBlueprints.get(id) || null
+      const remoteBlueprint = normalizeBlueprintForCompare(remoteBlueprintRaw)
+      const localHash = localBlueprint ? hashSyncValue(localBlueprint) : null
+      const remoteHash = remoteBlueprint ? hashSyncValue(remoteBlueprint) : null
       const mode = classifySyncDiff({ baselineHash, localHash, remoteHash })
       if (mode === 'remote-only') {
-        if (remoteBlueprint) plan.blueprints.remoteOnlyUpserts.push(id)
+        if (remoteBlueprintRaw) plan.blueprints.remoteOnlyUpserts.push(id)
         else plan.blueprints.remoteOnlyRemovals.push(id)
         continue
       }
@@ -1495,15 +2247,36 @@ export class DirectAppServer {
         continue
       }
       if (mode === 'concurrent') {
-        plan.conflicts.push({
-          kind: 'blueprint',
+        const reconciliation = this._reconcileBlueprint({
           id,
+          uid: normalizeSyncString(remoteBlueprintRaw?.uid) || normalizeSyncString(baselineEntry?.uid) || null,
           baselineHash,
           localHash,
           remoteHash,
+          base: baselineValue,
+          local: localBlueprint,
+          remote: remoteBlueprint,
         })
+        if (reconciliation.conflict) {
+          plan.conflicts.push(reconciliation.conflict)
+          continue
+        }
+        const merged = reconciliation.merged
+        const localNeedsUpdate = !isEqual(merged, localBlueprint)
+        const remoteNeedsUpdate = !isEqual(merged, remoteBlueprint)
+        if (localNeedsUpdate || remoteNeedsUpdate) {
+          plan.blueprints.mergedActions.push({
+            id,
+            merged,
+            localNeedsUpdate,
+            remoteNeedsUpdate,
+          })
+        }
       }
     }
+
+    plan.manifest.localOnlyEntities = Array.from(new Set(plan.manifest.localOnlyEntities))
+    plan.manifest.remoteOnlyEntities = Array.from(new Set(plan.manifest.remoteOnlyEntities))
 
     return plan
   }
@@ -1566,22 +2339,165 @@ export class DirectAppServer {
     }
   }
 
+  async _applyMergedBlueprintChanges(plan, localIndex) {
+    const actions = Array.isArray(plan?.blueprints?.mergedActions) ? plan.blueprints.mergedActions : []
+    for (const action of actions) {
+      const id = normalizeSyncString(action?.id)
+      if (!id) continue
+      const merged = action && Object.prototype.hasOwnProperty.call(action, 'merged') ? action.merged : null
+      const localNeedsUpdate = action?.localNeedsUpdate === true
+      const remoteNeedsUpdate = action?.remoteNeedsUpdate === true
+
+      if (localNeedsUpdate) {
+        if (merged) {
+          const result = await this._writeBlueprintToDisk({
+            blueprint: merged,
+            force: true,
+            includeBuiltScripts: false,
+            includeScriptSources: false,
+            pruneScriptSources: false,
+            localIndex,
+          })
+          if (result?.appName) {
+            this._watchAppDir(result.appName)
+          }
+        } else {
+          this._removeLocalBlueprintFromDisk(id, { localIndex })
+        }
+      }
+
+      if (!remoteNeedsUpdate) continue
+
+      if (merged) {
+        await this._deployBlueprintById(id)
+      } else {
+        await this._removeBlueprintsAndEntities([id])
+      }
+    }
+  }
+
+  _listSyncConflictArtifactPaths() {
+    if (!fs.existsSync(this.conflictsDir)) return []
+    const files = fs
+      .readdirSync(this.conflictsDir, { withFileTypes: true })
+      .filter(entry => entry.isFile() && entry.name.endsWith('.json'))
+      .map(entry => path.join(this.conflictsDir, entry.name))
+    files.sort((a, b) => {
+      const aId = path.basename(a)
+      const bId = path.basename(b)
+      return aId.localeCompare(bId)
+    })
+    return files
+  }
+
+  listSyncConflictArtifacts({ includeResolved = false } = {}) {
+    const artifacts = []
+    for (const artifactPath of this._listSyncConflictArtifactPaths()) {
+      const artifact = readJson(artifactPath)
+      if (!artifact || typeof artifact !== 'object') continue
+      if (!includeResolved && normalizeSyncString(artifact.status) === 'resolved') continue
+      artifacts.push({
+        ...artifact,
+        filePath: artifactPath,
+      })
+    }
+    artifacts.sort((a, b) => {
+      const aTs = Date.parse(a.createdAt || 0) || 0
+      const bTs = Date.parse(b.createdAt || 0) || 0
+      return bTs - aTs
+    })
+    return artifacts
+  }
+
+  getSyncConflictArtifact(conflictId) {
+    const id = normalizeSyncString(conflictId)
+    if (!id) return null
+    const artifactPath = path.join(this.conflictsDir, `${id}.json`)
+    const artifact = readJson(artifactPath)
+    if (!artifact || typeof artifact !== 'object') return null
+    return {
+      ...artifact,
+      filePath: artifactPath,
+    }
+  }
+
+  _pruneSyncConflictArtifacts(maxArtifacts = MAX_SYNC_CONFLICT_ARTIFACTS) {
+    const paths = this._listSyncConflictArtifactPaths()
+    if (paths.length <= maxArtifacts) return
+    const byAge = paths
+      .map(filePath => {
+        const data = readJson(filePath)
+        const ts = Date.parse(data?.createdAt || data?.resolvedAt || 0) || 0
+        return { filePath, ts }
+      })
+      .sort((a, b) => a.ts - b.ts)
+    for (const item of byAge.slice(0, Math.max(0, byAge.length - maxArtifacts))) {
+      try {
+        this._deleteFileAtomic(item.filePath)
+      } catch {}
+    }
+  }
+
+  _writeSyncConflictArtifacts(conflicts, { cursor, reason = 'startup', at } = {}) {
+    if (!Array.isArray(conflicts) || conflicts.length === 0) return []
+    ensureDir(this.conflictsDir)
+    const nowIso = normalizeSyncString(at) || new Date().toISOString()
+    const summaries = []
+    for (const conflict of conflicts) {
+      const artifactId = uuid()
+      const artifact = {
+        formatVersion: 1,
+        id: artifactId,
+        status: 'open',
+        createdAt: nowIso,
+        resolvedAt: null,
+        resolvedWith: null,
+        worldId: normalizeSyncString(this.snapshot?.worldId) || normalizeSyncString(this.syncState?.worldId),
+        reason,
+        cursor: normalizeSyncCursor(cursor),
+        kind: normalizeSyncString(conflict?.kind) || 'unknown',
+        objectType: normalizeSyncString(conflict?.kind) || 'unknown',
+        objectId: normalizeSyncString(conflict?.id) || null,
+        objectUid: normalizeSyncString(conflict?.uid) || null,
+        baselineHash: normalizeSyncString(conflict?.baselineHash),
+        localHash: normalizeSyncString(conflict?.localHash),
+        remoteHash: normalizeSyncString(conflict?.remoteHash),
+        base: cloneJson(conflict?.base),
+        local: cloneJson(conflict?.local),
+        remote: cloneJson(conflict?.remote),
+        merged: cloneJson(conflict?.merged),
+        unresolvedFields: Array.isArray(conflict?.unresolvedFields) ? conflict.unresolvedFields : [],
+        autoResolvedFields: Array.isArray(conflict?.autoResolvedFields) ? conflict.autoResolvedFields : [],
+      }
+      const artifactPath = path.join(this.conflictsDir, `${artifactId}.json`)
+      this._writeFileAtomic(artifactPath, JSON.stringify(artifact, null, 2) + '\n')
+      summaries.push({
+        artifactId,
+        kind: artifact.kind,
+        id: artifact.objectId,
+        uid: artifact.objectUid,
+        baselineHash: artifact.baselineHash,
+        localHash: artifact.localHash,
+        remoteHash: artifact.remoteHash,
+        unresolvedCount: artifact.unresolvedFields.length,
+        autoResolvedCount: artifact.autoResolvedFields.length,
+      })
+    }
+    this._pruneSyncConflictArtifacts()
+    return summaries
+  }
+
   _recordSyncConflicts(conflicts, { cursor, reason = 'startup' } = {}) {
     if (!Array.isArray(conflicts) || !conflicts.length) return
     const previous = this.syncState && typeof this.syncState === 'object' ? this.syncState : {}
     const nowIso = new Date().toISOString()
+    const summaries = this._writeSyncConflictArtifacts(conflicts, { cursor, reason, at: nowIso })
     const entry = {
       id: uuid(),
       at: nowIso,
       reason,
       cursor: normalizeSyncCursor(cursor),
-      conflicts: conflicts.map(conflict => ({
-        kind: normalizeSyncString(conflict?.kind) || 'unknown',
-        id: normalizeSyncString(conflict?.id) || null,
-        baselineHash: normalizeSyncString(conflict?.baselineHash),
-        localHash: normalizeSyncString(conflict?.localHash),
-        remoteHash: normalizeSyncString(conflict?.remoteHash),
-      })),
+      conflicts: summaries,
     }
     const next = {
       formatVersion: typeof previous.formatVersion === 'number' ? previous.formatVersion : 1,
@@ -1589,11 +2505,325 @@ export class DirectAppServer {
       cursor: normalizeSyncCursor(previous.cursor),
       world: previous.world && typeof previous.world === 'object' ? previous.world : {},
       objects: previous.objects && typeof previous.objects === 'object' ? previous.objects : {},
-      lastConflictSnapshots: [entry, ...(Array.isArray(previous.lastConflictSnapshots) ? previous.lastConflictSnapshots : [])].slice(0, 25),
+      lastConflictSnapshots: [entry, ...(Array.isArray(previous.lastConflictSnapshots) ? previous.lastConflictSnapshots : [])].slice(
+        0,
+        MAX_SYNC_CONFLICT_SNAPSHOTS
+      ),
       updatedAt: nowIso,
     }
     this.syncState = next
     this._writeFileAtomic(this.syncStateFile, JSON.stringify(next, null, 2) + '\n')
+  }
+
+  _markSyncConflictResolvedInState(conflictId, { use, at }) {
+    const normalizedId = normalizeSyncString(conflictId)
+    if (!normalizedId) return
+    const previous = this.syncState && typeof this.syncState === 'object' ? this.syncState : null
+    if (!previous || !Array.isArray(previous.lastConflictSnapshots)) return
+    const resolvedAt = normalizeSyncString(at) || new Date().toISOString()
+    let changed = false
+    const nextSnapshots = previous.lastConflictSnapshots.map(snapshot => {
+      if (!snapshot || typeof snapshot !== 'object' || !Array.isArray(snapshot.conflicts)) return snapshot
+      let localChanged = false
+      const nextConflicts = snapshot.conflicts.map(item => {
+        if (!item || typeof item !== 'object') return item
+        if (normalizeSyncString(item.artifactId) !== normalizedId) return item
+        localChanged = true
+        return {
+          ...item,
+          status: 'resolved',
+          resolvedAt,
+          resolvedWith: use,
+        }
+      })
+      if (!localChanged) return snapshot
+      changed = true
+      return {
+        ...snapshot,
+        conflicts: nextConflicts,
+      }
+    })
+    if (!changed) return
+    const next = {
+      ...previous,
+      lastConflictSnapshots: nextSnapshots,
+      updatedAt: resolvedAt,
+    }
+    this.syncState = next
+    this._writeFileAtomic(this.syncStateFile, JSON.stringify(next, null, 2) + '\n')
+  }
+
+  _markSyncConflictArtifactResolved(conflictId, { use, summary } = {}) {
+    const id = normalizeSyncString(conflictId)
+    if (!id) return null
+    const artifactPath = path.join(this.conflictsDir, `${id}.json`)
+    const existing = readJson(artifactPath)
+    if (!existing || typeof existing !== 'object') return null
+    const resolvedAt = new Date().toISOString()
+    const next = {
+      ...existing,
+      status: 'resolved',
+      resolvedAt,
+      resolvedWith: normalizeSyncString(use) || null,
+      resolutionSummary: summary || null,
+    }
+    this._writeFileAtomic(artifactPath, JSON.stringify(next, null, 2) + '\n')
+    this._markSyncConflictResolvedInState(id, { use, at: resolvedAt })
+    return next
+  }
+
+  _readManifestForSyncResolve() {
+    const manifest = this.manifest.read()
+    if (manifest) return manifest
+    return this.manifest.createEmpty()
+  }
+
+  _upsertManifestEntity(manifest, entity) {
+    const next = manifest && typeof manifest === 'object' ? manifest : this.manifest.createEmpty()
+    const entities = Array.isArray(next.entities) ? next.entities.slice() : []
+    const id = normalizeSyncString(entity?.id)
+    if (!id) return next
+    const index = entities.findIndex(item => item?.id === id)
+    if (index >= 0) {
+      entities[index] = entity
+    } else {
+      entities.push(entity)
+    }
+    next.entities = entities
+    return next
+  }
+
+  _removeManifestEntity(manifest, entityId) {
+    const next = manifest && typeof manifest === 'object' ? manifest : this.manifest.createEmpty()
+    const id = normalizeSyncString(entityId)
+    if (!id) return next
+    next.entities = (Array.isArray(next.entities) ? next.entities : []).filter(item => item?.id !== id)
+    return next
+  }
+
+  async _applyResolvedSettingsToRuntime(settings) {
+    const current = normalizeSettingsForCompare(this.snapshot?.settings)
+    const desired = normalizeSettingsForCompare(settings)
+    const keys = new Set([...Object.keys(current), ...Object.keys(desired)])
+    for (const key of keys) {
+      if (isEqual(current[key], desired[key])) continue
+      await this.client.request('settings_modify', { key, value: desired[key] })
+    }
+    this.snapshot.settings = cloneJson(desired)
+  }
+
+  async _applyResolvedSpawnToRuntime(spawn) {
+    const desired = normalizeSpawnForCompare(spawn)
+    const current = normalizeSpawnForCompare(this.snapshot?.spawn)
+    if (!isEqual(current.position, desired.position) || !isEqual(current.quaternion, desired.quaternion)) {
+      await this.client.setSpawn({
+        position: desired.position,
+        quaternion: desired.quaternion,
+      })
+    }
+    this.snapshot.spawn = cloneJson(desired)
+  }
+
+  async _applyResolvedEntityToRuntime(id, entity) {
+    const entityId = normalizeSyncString(id)
+    if (!entityId) return
+    const desired = entity ? normalizeEntityForCompare(entity) : null
+    const existingRaw = this.snapshot?.entities?.get(entityId) || null
+    const existing = normalizeEntityForCompare(existingRaw)
+
+    if (!desired) {
+      if (existingRaw) {
+        await this.client.request('entity_remove', { id: entityId })
+        this.snapshot.entities.delete(entityId)
+      }
+      return
+    }
+
+    if (!existingRaw) {
+      const data = {
+        id: entityId,
+        type: 'app',
+        blueprint: desired.blueprint,
+        position: desired.position,
+        quaternion: desired.quaternion,
+        scale: desired.scale,
+        mover: null,
+        uploader: null,
+        pinned: desired.pinned,
+        props: desired.props,
+        state: desired.state,
+      }
+      await this.client.request('entity_add', { entity: data })
+      this.snapshot.entities.set(entityId, data)
+      return
+    }
+
+    const change = { id: entityId }
+    if (!isEqual(existing.blueprint, desired.blueprint)) change.blueprint = desired.blueprint
+    if (!isEqual(existing.position, desired.position)) change.position = desired.position
+    if (!isEqual(existing.quaternion, desired.quaternion)) change.quaternion = desired.quaternion
+    if (!isEqual(existing.scale, desired.scale)) change.scale = desired.scale
+    if (!isEqual(existing.pinned, desired.pinned)) change.pinned = desired.pinned
+    if (!isEqual(existing.props, desired.props)) change.props = desired.props
+    if (!isEqual(existing.state, desired.state)) change.state = desired.state
+
+    if (Object.keys(change).length > 1) {
+      await this.client.request('entity_modify', { change })
+      this.snapshot.entities.set(entityId, { ...existingRaw, ...change })
+    }
+  }
+
+  async _applyResolvedBlueprintToLocal({ id, blueprint, localIndex, includeScriptSources = false } = {}) {
+    const blueprintId = normalizeSyncString(id)
+    if (!blueprintId) return
+    if (!blueprint) {
+      this._removeLocalBlueprintFromDisk(blueprintId, { localIndex })
+      return
+    }
+    const payload = normalizeBlueprintForCompare(blueprint)
+    if (!payload) return
+    await this._writeBlueprintToDisk({
+      blueprint: payload,
+      force: true,
+      includeBuiltScripts: false,
+      includeScriptSources,
+      pruneScriptSources: false,
+      localIndex,
+    })
+  }
+
+  async resolveSyncConflict(conflictId, { use = 'local' } = {}) {
+    const choice = normalizeSyncString(use)
+    if (!['local', 'remote', 'merged'].includes(choice)) {
+      throw new Error('invalid_resolve_mode')
+    }
+    const artifact = this.getSyncConflictArtifact(conflictId)
+    if (!artifact) {
+      throw new Error(`conflict_not_found:${conflictId}`)
+    }
+    if (normalizeSyncString(artifact.status) === 'resolved') {
+      return { conflictId: artifact.id, alreadyResolved: true }
+    }
+
+    const objectId = normalizeSyncString(artifact.objectId)
+    const localValue = cloneJson(artifact.local)
+    const remoteValue = cloneJson(artifact.remote)
+    const mergedValue = cloneJson(artifact.merged)
+    let selectedValue = null
+    if (choice === 'local') selectedValue = localValue
+    if (choice === 'remote') selectedValue = remoteValue
+    if (choice === 'merged') selectedValue = mergedValue
+    if (choice === 'merged' && selectedValue == null) {
+      throw new Error('conflict_missing_merged_value')
+    }
+
+    const localIndex = this._indexLocalBlueprints()
+    let manifest = null
+
+    switch (artifact.kind) {
+      case 'settings': {
+        const desired = normalizeSettingsForCompare(selectedValue)
+        manifest = this._readManifestForSyncResolve()
+        manifest.settings = desired
+        this._writeWorldFile(manifest)
+        if (choice !== 'remote') {
+          await this._applyResolvedSettingsToRuntime(desired)
+        }
+        break
+      }
+      case 'spawn': {
+        const desired = normalizeSpawnForCompare(selectedValue)
+        manifest = this._readManifestForSyncResolve()
+        manifest.spawn = desired
+        this._writeWorldFile(manifest)
+        if (choice !== 'remote') {
+          await this._applyResolvedSpawnToRuntime(desired)
+        }
+        break
+      }
+      case 'entity': {
+        const entityId = objectId || normalizeSyncString(selectedValue?.id)
+        if (!entityId) throw new Error('conflict_missing_entity_id')
+        const desired = selectedValue ? normalizeEntityForCompare(selectedValue) : null
+        manifest = this._readManifestForSyncResolve()
+        if (desired) {
+          manifest = this._upsertManifestEntity(manifest, desired)
+        } else {
+          manifest = this._removeManifestEntity(manifest, entityId)
+        }
+        this._writeWorldFile(manifest)
+        if (choice !== 'remote') {
+          await this._applyResolvedEntityToRuntime(entityId, desired)
+        }
+        if (choice === 'remote') {
+          if (desired) this.snapshot.entities.set(entityId, desired)
+          else this.snapshot.entities.delete(entityId)
+        }
+        break
+      }
+      case 'blueprint': {
+        const blueprintId = objectId || normalizeSyncString(selectedValue?.id)
+        if (!blueprintId) throw new Error('conflict_missing_blueprint_id')
+        if (choice === 'remote') {
+          await this._applyResolvedBlueprintToLocal({
+            id: blueprintId,
+            blueprint: remoteValue,
+            localIndex,
+            includeScriptSources: true,
+          })
+          if (remoteValue) this.snapshot.blueprints.set(blueprintId, remoteValue)
+          else this.snapshot.blueprints.delete(blueprintId)
+        } else if (choice === 'local') {
+          if (localValue) {
+            if (!localIndex.has(blueprintId)) {
+              await this._applyResolvedBlueprintToLocal({
+                id: blueprintId,
+                blueprint: localValue,
+                localIndex,
+                includeScriptSources: false,
+              })
+            }
+            await this._deployBlueprintById(blueprintId)
+          } else {
+            this._removeLocalBlueprintFromDisk(blueprintId, { localIndex })
+            await this._removeBlueprintsAndEntities([blueprintId])
+          }
+        } else {
+          await this._applyResolvedBlueprintToLocal({
+            id: blueprintId,
+            blueprint: mergedValue,
+            localIndex,
+            includeScriptSources: false,
+          })
+          if (mergedValue) {
+            await this._deployBlueprintById(blueprintId)
+          } else {
+            await this._removeBlueprintsAndEntities([blueprintId])
+          }
+        }
+        break
+      }
+      default:
+        throw new Error(`unsupported_conflict_kind:${artifact.kind}`)
+    }
+
+    const finalCursor = await this._getRuntimeHeadCursor({ fallback: this.syncState?.cursor })
+    const next = this._buildSyncStateSnapshot({ cursor: finalCursor })
+    this._writeSyncState(next)
+    this._markSyncConflictArtifactResolved(artifact.id, {
+      use: choice,
+      summary: {
+        kind: artifact.kind,
+        objectId: artifact.objectId,
+      },
+    })
+
+    return {
+      conflictId: artifact.id,
+      kind: artifact.kind,
+      objectId: artifact.objectId,
+      use: choice,
+    }
   }
 
   async _runStartupHandshake(manifest, { reason = 'startup' } = {}) {
@@ -1608,11 +2838,11 @@ export class DirectAppServer {
         const conflictKinds = Array.from(new Set(plan.conflicts.map(conflict => conflict.kind))).join(', ')
         throw new Error(
           `Sync conflict detected (${plan.conflicts.length} object${plan.conflicts.length === 1 ? '' : 's'}: ${conflictKinds}). ` +
-            'Resolve manually or run "gamedev world export", then retry.'
+            'Inspect with "gamedev sync conflicts" and resolve via "gamedev sync resolve <id> --use ...".'
         )
       }
       console.warn(
-        `⚠️  Sync conflicts detected (${plan.conflicts.length}); SYNC_STRICT_CONFLICTS=false so local changes will be applied.`
+        `⚠️  Sync conflicts detected (${plan.conflicts.length}); unresolved objects were skipped and written to .lobby/conflicts/.`
       )
     }
 
@@ -1621,14 +2851,12 @@ export class DirectAppServer {
         await this._applyRemoteOnlyBlueprintChanges(plan, localIndex)
       }
 
-      if (plan.manifest.remoteOnly) {
-        this._writeWorldFile(plan.mergedManifest)
+      if (plan.blueprints.mergedActions.length) {
+        await this._applyMergedBlueprintChanges(plan, localIndex)
       }
 
-      if (plan.conflicts.length > 0 && !this._isStrictSyncConflictsEnabled()) {
-        await this._deployAllBlueprints()
-        await this._applyManifestToWorld(manifest)
-        return
+      if (plan.manifest.remoteOnly) {
+        this._writeWorldFile(plan.mergedManifest)
       }
 
       if (plan.blueprints.localOnlyUpserts.length || plan.blueprints.localOnlyRemovals.length) {
