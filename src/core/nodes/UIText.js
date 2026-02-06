@@ -23,7 +23,7 @@ const defaults = {
   color: '#000000',
   lineHeight: 1.2,
   textAlign: 'left',
-  fontFamily: 'Rubik',
+  fontFamily: 'Space Mono',
   fontWeight: 'normal',
   flexBasis: 'auto',
   flexGrow: 0,
