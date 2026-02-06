@@ -5085,6 +5085,54 @@ export class DirectAppServer {
     return output
   }
 
+  _findLocalAssetByHash(hash, { preferredExt = null } = {}) {
+    const normalizedHash = normalizeSyncString(hash)?.toLowerCase()
+    if (!normalizedHash) return null
+    if (!fs.existsSync(this.assetsDir)) return null
+
+    let entries = []
+    try {
+      entries = fs.readdirSync(this.assetsDir, { withFileTypes: true })
+    } catch {
+      return null
+    }
+
+    const normalizedExt = typeof preferredExt === 'string' ? preferredExt.toLowerCase() : null
+    const matches = []
+
+    for (const entry of entries) {
+      if (!entry.isFile()) continue
+      const filename = entry.name
+      const absPath = path.join(this.assetsDir, filename)
+      const ext = path.extname(filename).toLowerCase()
+      const hashNamed = isHashedAssetFilename(filename)
+      let fileHash = null
+      if (hashNamed) {
+        fileHash = filename.slice(0, -ext.length).toLowerCase()
+      } else {
+        try {
+          fileHash = sha256(fs.readFileSync(absPath))
+        } catch {
+          continue
+        }
+      }
+      if (fileHash !== normalizedHash) continue
+      matches.push({
+        relPath: path.posix.join('assets', filename),
+        extMatches: normalizedExt ? ext === normalizedExt : false,
+        hashNamed,
+      })
+    }
+
+    if (!matches.length) return null
+    matches.sort((a, b) => {
+      if (a.extMatches !== b.extMatches) return a.extMatches ? -1 : 1
+      if (a.hashNamed !== b.hashNamed) return a.hashNamed ? 1 : -1
+      return a.relPath.localeCompare(b.relPath)
+    })
+    return matches[0].relPath
+  }
+
   async _maybeDownloadAsset(appName, url, suggestedName, { existingUrl } = {}) {
     if (typeof url !== 'string') return url
     if (url.startsWith('assets/')) return url
@@ -5110,6 +5158,10 @@ export class DirectAppServer {
         }
       }
     }
+    if (expectedHash) {
+      const existingByHash = this._findLocalAssetByHash(expectedHash, { preferredExt: ext })
+      if (existingByHash) return existingByHash
+    }
 
     let buffer = null
     const maxAttempts = 4
@@ -5134,6 +5186,8 @@ export class DirectAppServer {
     if (expectedHash && hash !== expectedHash) {
       throw new Error(`asset_hash_mismatch:${filename}`)
     }
+    const existingByHash = this._findLocalAssetByHash(hash, { preferredExt: ext })
+    if (existingByHash) return existingByHash
 
     const base = sanitizeFileBaseName(path.basename(suggestedName, ext) || `${appName}${ext}`)
     for (let idx = 0; idx < 10000; idx += 1) {

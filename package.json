@@ -48,7 +48,8 @@
   ],
   "scripts": {
     "dev:runtime": "node scripts/build.mjs --dev",
-    "dev": "bash -c 'npm run dev:runtime & node bin/gamedev.mjs app-server & wait'",
+    "dev:app-server": "bash -c 'mkdir -p project; if [ ! -f project/.env ]; then if [ -f .env ]; then cp .env project/.env; elif [ -f .env.example ]; then cp .env.example project/.env; fi; fi; (cd project && node ../bin/gamedev.mjs app-server)'",
+    "dev": "bash -c 'npm run dev:runtime & npm run dev:app-server & wait'",
     "build": "node scripts/build.mjs",
     "start": "node build/index.js",
     "prepublishOnly": "npm run build",
