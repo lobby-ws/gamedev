@@ -67,7 +67,7 @@ pre {
 html,
 body {
   -webkit-font-smoothing: antialiased;
-  font-family: 'Rubik', sans-serif;
+  font-family: 'Space Mono', monospace;
   font-optical-sizing: auto;
   font-size: 16px;
   font-weight: 400;
@@ -103,11 +103,11 @@ a {
 
 /* font (latin) */
 @font-face {
-  font-family: 'Rubik';
+  font-family: 'Space Mono';
   font-style: normal;
-  font-weight: 300 900;
+  font-weight: 400;
   font-display: swap;
-  src: url(/rubik.woff2) format('woff2');
+  src: url(/SpaceMono-regular.woff2) format('woff2');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
     U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
@@ -160,7 +160,7 @@ pre {
 html,
 body {
   -webkit-font-smoothing: antialiased;
-  font-family: 'Rubik', sans-serif;
+  font-family: 'Space Mono', monospace;
   font-optical-sizing: auto;
   font-size: 16px;
   font-weight: 400;
