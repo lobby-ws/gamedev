@@ -147,6 +147,72 @@ test('drag-drop .hyp import converts legacy script into module files', async () 
   assert.match(scriptText, /export default/)
 })
 
+test('drag-drop .glb creates app with blank module script files', async () => {
+  const addedBlueprints = []
+  const insertedAssets = []
+  const uploadedFiles = []
+
+  const stubWorld = {
+    network: { id: 'test', maxUploadSize: null },
+    loader: {
+      insert: (type, url, file) => insertedAssets.push({ type, url, file }),
+    },
+    blueprints: {
+      add: blueprint => addedBlueprints.push(blueprint),
+      remove: () => {},
+    },
+    entities: {
+      add: data => ({
+        data,
+        onUploaded: () => {},
+        destroy: () => {},
+      }),
+    },
+    admin: {
+      acquireDeployLock: async () => ({ token: 'lock' }),
+      deployLockToken: 'lock',
+      upload: async file => uploadedFiles.push(file),
+      blueprintAdd: async () => {},
+      entityAdd: async () => {},
+      releaseDeployLock: async () => {},
+      blueprintRemove: async () => {},
+    },
+    emit: () => {},
+  }
+
+  const builder = {
+    world: stubWorld,
+    ensureAdminReady: () => true,
+    handleAdminError: err => {
+      throw err
+    },
+  }
+
+  const modelFile = new File([new Uint8Array([1, 2, 3, 4])], 'MyModel.glb', { type: 'model/gltf-binary' })
+
+  await ClientBuilder.prototype.addModel.call(builder, modelFile, {
+    position: [0, 0, 0],
+    quaternion: [0, 0, 0, 1],
+  })
+
+  assert.equal(addedBlueprints.length, 1)
+  const blueprint = addedBlueprints[0]
+  assert.equal(blueprint.name, 'MyModel')
+  assert.equal(blueprint.scope, blueprint.id)
+  assert.equal(blueprint.scriptEntry, 'index.js')
+  assert.equal(blueprint.scriptFormat, 'module')
+  assert.equal(typeof blueprint.script, 'string')
+  assert.deepEqual(Object.keys(blueprint.scriptFiles), ['index.js'])
+  assert.equal(blueprint.scriptFiles['index.js'], blueprint.script)
+
+  const insertedScript = insertedAssets.find(asset => asset.type === 'script' && asset.url === blueprint.script)
+  assert.ok(insertedScript?.file)
+  const insertedScriptText = await insertedScript.file.text()
+  assert.match(insertedScriptText, /export default/)
+
+  assert.equal(uploadedFiles.length, 2)
+})
+
 test('drag-drop .hyp import rewrites single hashed entry path to index.js', async () => {
   const files = new Map()
   const addFile = (url, contents, name, type) => {

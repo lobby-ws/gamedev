@@ -56,7 +56,6 @@ import { hashFile } from '../../core/utils-client'
 import { areBlueprintsTwinUnique, buildScriptGroups, getScriptGroupMain } from '../../core/extras/blueprintGroups'
 import { cloneDeep, isArray, isBoolean, isEqual, merge, sortBy } from 'lodash-es'
 import { storage } from '../../core/storage'
-import { ScriptEditor } from './ScriptEditor'
 import { ScriptFilesEditor } from './ScriptFilesEditor'
 import { NodeHierarchy } from './NodeHierarchy'
 import { AppsList } from './AppsList'
@@ -3924,11 +3923,7 @@ function Script({ world, hidden }) {
           )}
         </div>
       )}
-      {moduleRoot ? (
-        <ScriptFilesEditor scriptRoot={moduleRoot} world={world} onHandle={setHandle} />
-      ) : (
-        <ScriptEditor key={app.data.id} app={app} onHandle={setHandle} />
-      )}
+      <ScriptFilesEditor scriptRoot={moduleRoot} world={world} onHandle={setHandle} />
       <div className='script-resizer' ref={resizeRef} />
     </div>
   )

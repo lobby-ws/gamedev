@@ -75,6 +75,12 @@ const SCRIPT_BLUEPRINT_FIELDS = new Set([
   'scriptRef',
 ])
 
+const DEFAULT_MODULE_SCRIPT_ENTRY = 'index.js'
+const DEFAULT_MODULE_SCRIPT_SOURCE = `export default (world, app, fetch, props, setTimeout) => {
+
+}
+`
+
 function hasScriptFields(data) {
   if (!data || typeof data !== 'object') return false
   for (const field of SCRIPT_BLUEPRINT_FIELDS) {
@@ -1493,18 +1499,33 @@ export class ClientBuilder extends System {
     const filename = `${hash}.glb`
     // canonical url to this file
     const url = `asset://${filename}`
+    // create a blank module script entry
+    const scriptFile = new File([DEFAULT_MODULE_SCRIPT_SOURCE], DEFAULT_MODULE_SCRIPT_ENTRY, {
+      type: 'text/javascript',
+    })
+    const scriptHash = await hashFile(scriptFile)
+    const scriptUrl = `asset://${scriptHash}.js`
     // cache file locally so this client can insta-load it
     this.world.loader.insert('model', url, file)
+    this.world.loader.insert('script', scriptUrl, scriptFile)
     // make blueprint
     const blueprint = {
       id: uuid(),
       version: 0,
+      scope: null,
       name: file.name.split('.')[0],
       image: null,
       author: null,
       url: null,
       desc: null,
       model: url,
+      script: scriptUrl,
+      scriptEntry: DEFAULT_MODULE_SCRIPT_ENTRY,
+      scriptFiles: {
+        [DEFAULT_MODULE_SCRIPT_ENTRY]: scriptUrl,
+      },
+      scriptFormat: 'module',
+      scriptRef: null,
       props: {},
       preload: false,
       public: false,
@@ -1513,12 +1534,29 @@ export class ClientBuilder extends System {
       scene: false,
       disabled: false,
     }
+    if (hasScriptFields(blueprint) && !normalizeScope(blueprint.scope)) {
+      blueprint.scope = blueprint.id
+    }
     let app = null
+    let lockToken = null
+    let lockScope = null
     try {
+      if (hasScriptFields(blueprint)) {
+        lockScope = normalizeScope(blueprint.scope)
+        if (!lockScope) {
+          throw new Error('scope_unknown')
+        }
+        const result = await this.world.admin.acquireDeployLock({
+          owner: this.world.network.id,
+          scope: lockScope,
+        })
+        lockToken = result?.token || this.world.admin.deployLockToken
+      }
       // register blueprint
       this.world.blueprints.add(blueprint)
       await this.world.admin.blueprintAdd(blueprint, {
         ignoreNetworkId: this.world.network.id,
+        lockToken,
         request: true,
       })
       // spawn the app moving
@@ -1539,8 +1577,8 @@ export class ClientBuilder extends System {
       }
       app = this.world.entities.add(data)
       await this.world.admin.entityAdd(data, { ignoreNetworkId: this.world.network.id, request: true })
-      // upload the glb
-      await this.world.admin.upload(file)
+      // upload the model + blank module script
+      await Promise.all([this.world.admin.upload(file), this.world.admin.upload(scriptFile)])
       // mark as uploaded so other clients can load it in
       app.onUploaded()
     } catch (err) {
@@ -1554,6 +1592,14 @@ export class ClientBuilder extends System {
           .catch(removeErr => console.error('failed to remove blueprint', removeErr))
       }
       this.handleAdminError(err, 'Import failed')
+    } finally {
+      if (lockToken && this.world.admin?.releaseDeployLock) {
+        try {
+          await this.world.admin.releaseDeployLock(lockToken, lockScope)
+        } catch (releaseErr) {
+          console.error('failed to release deploy lock', releaseErr)
+        }
+      }
     }
   }
 
