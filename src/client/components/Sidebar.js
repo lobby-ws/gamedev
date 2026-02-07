@@ -63,6 +63,7 @@ import { AppsList } from './AppsList'
 import { DEG2RAD, RAD2DEG } from '../../core/extras/general'
 import * as THREE from '../../core/extras/three'
 import { isTouch } from '../utils'
+import { BUILTIN_APP_TEMPLATES } from '../builtinApps'
 import { uuid } from '../../core/utils'
 import { useRank } from './useRank'
 import { Ranks } from '../../core/extras/ranks'
@@ -70,6 +71,16 @@ import { Ranks } from '../../core/extras/ranks'
 const mainSectionPanes = ['prefs']
 const worldSectionPanes = ['world', 'docs', 'apps', 'add']
 const appSectionPanes = ['app', 'script', 'nodes', 'meta']
+const CLIENT_BUILTIN_TEMPLATES = BUILTIN_APP_TEMPLATES.map(template => ({
+  ...template,
+  id: template.name,
+  __builtinTemplate: true,
+  __templateKey: `$builtin:${template.name}`,
+  keep: true,
+  unique: false,
+  scene: false,
+}))
+const LEGACY_BUILTIN_TEMPLATE_IDS = new Set(CLIENT_BUILTIN_TEMPLATES.map(template => template.id))
 
 const e1 = new THREE.Euler(0, 0, 0, 'YXZ')
 const q1 = new THREE.Quaternion()
@@ -931,8 +942,11 @@ function Add({ world, hidden }) {
   const [createMention, setCreateMention] = useState(null)
   const [createScriptRoot, setCreateScriptRoot] = useState(null)
   const createPromptRef = useRef(null)
+  const isBuiltinTemplate = blueprint => blueprint?.__builtinTemplate === true
   const buildTemplates = () => {
-    const items = Array.from(world.blueprints.items.values()).filter(bp => !bp.scene)
+    const items = Array.from(world.blueprints.items.values()).filter(
+      bp => !bp.scene && !LEGACY_BUILTIN_TEMPLATE_IDS.has(bp.id)
+    )
     const groups = buildScriptGroups(world.blueprints.items)
     const mainIds = new Set()
     for (const group of groups.groups.values()) {
@@ -943,7 +957,7 @@ function Add({ world, hidden }) {
       if (!scriptKey) return true
       return mainIds.has(bp.id)
     })
-    return sortBy(mainsOnly, bp => (bp.name || bp.id || '').toLowerCase())
+    return sortBy([...CLIENT_BUILTIN_TEMPLATES, ...mainsOnly], bp => (bp.name || bp.id || '').toLowerCase())
   }
   const buildOrphans = () => {
     const used = new Set()
@@ -1249,7 +1263,10 @@ function Add({ world, hidden }) {
     world.builder.toggle(true)
     world.builder.control.pointer.lock()
     let spawnBlueprint = blueprint
-    if (blueprint.unique) {
+    if (isBuiltinTemplate(blueprint)) {
+      spawnBlueprint = await world.builder.forkTemplateFromBlueprint(blueprint, 'Add', null, { unique: false })
+      if (!spawnBlueprint) return
+    } else if (blueprint.unique) {
       spawnBlueprint = await world.builder.forkTemplateFromBlueprint(blueprint, 'Add')
       if (!spawnBlueprint) return
     }
@@ -1298,7 +1315,7 @@ function Add({ world, hidden }) {
   }
 
   const handleClick = blueprint => {
-    if (trashMode) {
+    if (trashMode && !isBuiltinTemplate(blueprint)) {
       remove(blueprint)
     } else {
       void add(blueprint)
@@ -1748,8 +1765,8 @@ function Add({ world, hidden }) {
                 const imageUrl = blueprint.image?.url || (typeof blueprint.image === 'string' ? blueprint.image : null)
                 return (
                   <div
-                    className={cls('add-item', { trash: trashMode })}
-                    key={blueprint.id}
+                    className={cls('add-item', { trash: trashMode && !isBuiltinTemplate(blueprint) })}
+                    key={blueprint.__templateKey || blueprint.id}
                     onClick={() => handleClick(blueprint)}
                   >
                     <div

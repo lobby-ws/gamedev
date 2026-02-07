@@ -294,12 +294,17 @@ export class ClientBuilder extends System {
   async forkTemplateFromBlueprint(sourceBlueprint, actionLabel = 'Template fork', mergedProps, overrides) {
     if (!this.ensureAdminReady(actionLabel)) return null
     const sourceScope = normalizeScope(sourceBlueprint.scope)
+    const sourceId =
+      typeof sourceBlueprint?.id === 'string' && sourceBlueprint.id.trim() ? sourceBlueprint.id.trim() : null
+    const sourceInWorld = sourceId ? this.world.blueprints.get(sourceId) : null
     const sourceScriptRef =
       typeof sourceBlueprint.scriptRef === 'string' && sourceBlueprint.scriptRef.trim()
         ? sourceBlueprint.scriptRef.trim()
         : null
-    const scriptRootId = sourceScriptRef || sourceBlueprint.id
-    const scriptRoot = this.world.blueprints.get(scriptRootId) || sourceBlueprint
+    const scriptRootId = sourceScriptRef || (sourceInWorld ? sourceId : null)
+    const scriptRoot =
+      (scriptRootId && this.world.blueprints.get(scriptRootId)) || sourceInWorld || sourceBlueprint
+    const shouldUseScriptRef = !!(scriptRootId && this.world.blueprints.get(scriptRootId))
     const sharedScript = typeof scriptRoot?.script === 'string' ? scriptRoot.script : sourceBlueprint.script
     const baseProps =
       sourceBlueprint.props &&
@@ -320,10 +325,13 @@ export class ClientBuilder extends System {
       desc: sourceBlueprint.desc,
       model: sourceBlueprint.model,
       script: sharedScript,
-      scriptEntry: null,
-      scriptFiles: null,
-      scriptFormat: null,
-      scriptRef: scriptRootId,
+      scriptEntry: shouldUseScriptRef ? null : scriptRoot?.scriptEntry ?? null,
+      scriptFiles:
+        shouldUseScriptRef || !scriptRoot?.scriptFiles || Array.isArray(scriptRoot.scriptFiles)
+          ? null
+          : cloneDeep(scriptRoot.scriptFiles),
+      scriptFormat: shouldUseScriptRef ? null : scriptRoot?.scriptFormat ?? null,
+      scriptRef: shouldUseScriptRef ? scriptRootId : null,
       scope: sourceScope,
       props: cloneDeep(props),
       preload: sourceBlueprint.preload,

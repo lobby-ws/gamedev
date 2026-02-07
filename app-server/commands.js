@@ -350,16 +350,27 @@ export class HyperfyCLI {
     }
 
     console.log(`🧩 Creating local app: ${appName}`)
-    const assetDest = path.join(this.assetsDir, 'Model.glb')
-    if (!fs.existsSync(assetDest)) {
-      const assetSrc = resolveBuiltinAssetPath('Model.glb')
+    const copiedAssets = []
+    const ensureBuiltinAsset = filename => {
+      const assetDest = path.join(this.assetsDir, filename)
+      if (fs.existsSync(assetDest)) return assetDest
+      const assetSrc = resolveBuiltinAssetPath(filename)
       if (!assetSrc) {
-        console.error('❌ Missing builtin asset Model.glb')
-        console.log(`💡 Expected Model.glb in build/world/assets or src/world/assets`)
-        return
+        throw new Error(`missing_builtin_asset:${filename}`)
       }
       fs.mkdirSync(this.assetsDir, { recursive: true })
       fs.copyFileSync(assetSrc, assetDest)
+      copiedAssets.push(assetDest)
+      return assetDest
+    }
+    try {
+      ensureBuiltinAsset('Model.glb')
+      ensureBuiltinAsset('Model.png')
+    } catch (error) {
+      const filename = String(error?.message || '').replace('missing_builtin_asset:', '')
+      console.error(`❌ Missing builtin asset ${filename}`)
+      console.log(`💡 Expected ${filename} in build/world/assets or src/world/assets`)
+      return
     }
 
     fs.mkdirSync(appDir, { recursive: true })
@@ -395,7 +406,9 @@ export class HyperfyCLI {
     console.log(`✅ Created ${appName}`)
     console.log(`   • ${blueprintPath}`)
     console.log(`   • ${scriptPath}`)
-    console.log(`   • ${assetDest}`)
+    for (const assetPath of copiedAssets) {
+      console.log(`   • ${assetPath}`)
+    }
   }
 
   async deploy(appName, options = {}) {

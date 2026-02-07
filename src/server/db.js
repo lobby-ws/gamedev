@@ -3,7 +3,7 @@ import moment from 'moment'
 import fs from 'fs-extra'
 import path from 'path'
 import { uuid } from '../core/utils'
-import { defaults } from 'lodash-es'
+import { defaults, isEqual } from 'lodash-es'
 import { Ranks } from '../core/extras/ranks'
 import { assets } from './assets'
 import { ensureBlueprintSyncMetadata, ensureEntitySyncMetadata } from './syncMetadata'
@@ -735,5 +735,242 @@ const migrations = [
       table.index(['kind'])
       table.index(['objectUid'])
     })
+  },
+  // remove legacy built-in template blueprints (defaults now live client-side)
+  async db => {
+    const builtinTemplates = new Map([
+      [
+        'Model',
+        {
+          id: 'Model',
+          name: 'Model',
+          image: { url: 'asset://Model.png' },
+          model: 'asset://Model.glb',
+          script: 'asset://Model.js',
+          scriptEntry: 'Model.js',
+          scriptFiles: { 'Model.js': 'asset://Model.js' },
+          scriptFormat: 'module',
+          props: { collision: true },
+        },
+      ],
+      [
+        'Image',
+        {
+          id: 'Image',
+          name: 'Image',
+          image: { url: 'asset://Image.png' },
+          model: 'asset://Image.glb',
+          script: 'asset://Image.js',
+          scriptEntry: 'Image.js',
+          scriptFiles: { 'Image.js': 'asset://Image.js' },
+          scriptFormat: 'module',
+          props: {
+            width: 0,
+            height: 2,
+            fit: 'cover',
+            image: null,
+            transparent: false,
+            lit: false,
+            shadows: true,
+            placeholder: {
+              type: 'image',
+              url: 'asset://Image.png',
+            },
+          },
+        },
+      ],
+      [
+        'Video',
+        {
+          id: 'Video',
+          name: 'Video',
+          image: { url: 'asset://Video.png' },
+          model: 'asset://Video.glb',
+          script: 'asset://Video.js',
+          scriptEntry: 'Video.js',
+          scriptFiles: { 'Video.js': 'asset://Video.js' },
+          scriptFormat: 'module',
+          props: {
+            width: 0,
+            height: 2,
+            fit: 'cover',
+            url: null,
+            loop: true,
+            autoplay: true,
+            transparent: false,
+            lit: false,
+            shadows: true,
+            placeholder: {
+              type: 'video',
+              url: 'asset://Video.mp4',
+            },
+          },
+        },
+      ],
+      [
+        'Text',
+        {
+          id: 'Text',
+          name: 'Text',
+          image: { url: 'asset://Text.png' },
+          model: 'asset://Text.glb',
+          script: 'asset://Text.js',
+          scriptEntry: 'Text.js',
+          scriptFiles: { 'Text.js': 'asset://Text.js' },
+          scriptFormat: 'module',
+          props: {
+            width: 200,
+            height: 200,
+            text: 'Enter text...',
+            fontSize: 20,
+            fontWeight: 'bold',
+            color: '#ffffff',
+            transparent: false,
+            lit: false,
+            shadows: true,
+          },
+        },
+      ],
+    ])
+    const builtinIds = Array.from(builtinTemplates.keys())
+
+    const normalizeScriptRef = value => {
+      if (typeof value !== 'string') return null
+      const trimmed = value.trim()
+      return trimmed || null
+    }
+
+    const extractComparable = data => ({
+      id: data?.id || null,
+      name: data?.name || null,
+      image: data?.image ?? null,
+      model: data?.model ?? null,
+      script: data?.script ?? null,
+      scriptEntry: data?.scriptEntry ?? null,
+      scriptFiles: data?.scriptFiles ?? null,
+      scriptFormat: data?.scriptFormat ?? null,
+      scriptRef: data?.scriptRef ?? null,
+      props: data?.props ?? {},
+      preload: !!data?.preload,
+      public: !!data?.public,
+      locked: !!data?.locked,
+      frozen: !!data?.frozen,
+      unique: !!data?.unique,
+      scene: !!data?.scene,
+      disabled: !!data?.disabled,
+      keep: data?.keep === undefined ? false : !!data.keep,
+      author: data?.author ?? null,
+      url: data?.url ?? null,
+      desc: data?.desc ?? null,
+    })
+
+    const isCanonicalBuiltin = (data, template) => {
+      const expected = {
+        id: template.id,
+        name: template.name,
+        image: template.image,
+        model: template.model,
+        script: template.script,
+        scriptEntry: template.scriptEntry,
+        scriptFiles: template.scriptFiles,
+        scriptFormat: template.scriptFormat,
+        scriptRef: null,
+        props: template.props,
+        preload: false,
+        public: false,
+        locked: false,
+        frozen: false,
+        unique: true,
+        scene: false,
+        disabled: false,
+        keep: true,
+        author: null,
+        url: null,
+        desc: null,
+      }
+      return isEqual(extractComparable(data), expected)
+    }
+
+    const builtinRows = await db('blueprints').whereIn('id', builtinIds)
+    if (!builtinRows.length) return
+    const builtinById = new Map()
+    for (const row of builtinRows) {
+      const template = builtinTemplates.get(row.id)
+      if (!template) continue
+      try {
+        const data = JSON.parse(row.data)
+        builtinById.set(row.id, { row, data, template })
+      } catch {}
+    }
+    if (!builtinById.size) return
+
+    // Inline script roots for legacy variants that still point at built-in scriptRef ids.
+    const allBlueprintRows = await db('blueprints')
+    for (const row of allBlueprintRows) {
+      if (builtinById.has(row.id)) continue
+      let data
+      try {
+        data = JSON.parse(row.data)
+      } catch {
+        continue
+      }
+      const scriptRef = normalizeScriptRef(data?.scriptRef)
+      if (!scriptRef || !builtinById.has(scriptRef)) continue
+      const builtin = builtinById.get(scriptRef)
+      if (!builtin?.template) continue
+
+      const next = { ...data, scriptRef: null }
+      if (typeof next.script !== 'string' || !next.script.trim()) {
+        next.script = builtin.template.script
+      }
+      if (typeof next.scriptEntry !== 'string' || !next.scriptEntry.trim()) {
+        next.scriptEntry = builtin.template.scriptEntry
+      }
+      if (!next.scriptFiles || typeof next.scriptFiles !== 'object' || Array.isArray(next.scriptFiles)) {
+        next.scriptFiles = builtin.template.scriptFiles
+      }
+      if (typeof next.scriptFormat !== 'string' || !next.scriptFormat.trim()) {
+        next.scriptFormat = builtin.template.scriptFormat
+      }
+
+      if (!isEqual(data, next)) {
+        await db('blueprints')
+          .where('id', row.id)
+          .update({
+            data: JSON.stringify(next),
+            updatedAt: row.updatedAt || moment().toISOString(),
+          })
+      }
+    }
+
+    const entityRows = await db('entities')
+    const builtinInUseByEntity = new Set()
+    for (const row of entityRows) {
+      try {
+        const data = JSON.parse(row.data)
+        if (typeof data?.blueprint === 'string' && builtinById.has(data.blueprint)) {
+          builtinInUseByEntity.add(data.blueprint)
+        }
+      } catch {}
+    }
+
+    const postRows = await db('blueprints')
+    const builtinInUseByScriptRef = new Set()
+    for (const row of postRows) {
+      try {
+        const data = JSON.parse(row.data)
+        const scriptRef = normalizeScriptRef(data?.scriptRef)
+        if (scriptRef && builtinById.has(scriptRef)) {
+          builtinInUseByScriptRef.add(scriptRef)
+        }
+      } catch {}
+    }
+
+    for (const [id, entry] of builtinById.entries()) {
+      if (builtinInUseByEntity.has(id)) continue
+      if (builtinInUseByScriptRef.has(id)) continue
+      if (!isCanonicalBuiltin(entry.data, entry.template)) continue
+      await db('blueprints').where('id', id).delete()
+    }
   },
 ]
