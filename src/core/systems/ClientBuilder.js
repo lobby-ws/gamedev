@@ -294,6 +294,13 @@ export class ClientBuilder extends System {
   async forkTemplateFromBlueprint(sourceBlueprint, actionLabel = 'Template fork', mergedProps, overrides) {
     if (!this.ensureAdminReady(actionLabel)) return null
     const sourceScope = normalizeScope(sourceBlueprint.scope)
+    const sourceScriptRef =
+      typeof sourceBlueprint.scriptRef === 'string' && sourceBlueprint.scriptRef.trim()
+        ? sourceBlueprint.scriptRef.trim()
+        : null
+    const scriptRootId = sourceScriptRef || sourceBlueprint.id
+    const scriptRoot = this.world.blueprints.get(scriptRootId) || sourceBlueprint
+    const sharedScript = typeof scriptRoot?.script === 'string' ? scriptRoot.script : sourceBlueprint.script
     const baseProps =
       sourceBlueprint.props &&
       typeof sourceBlueprint.props === 'object' &&
@@ -312,11 +319,11 @@ export class ClientBuilder extends System {
       url: sourceBlueprint.url,
       desc: sourceBlueprint.desc,
       model: sourceBlueprint.model,
-      script: sourceBlueprint.script,
-      scriptEntry: sourceBlueprint.scriptEntry,
-      scriptFiles: sourceBlueprint.scriptFiles ? cloneDeep(sourceBlueprint.scriptFiles) : sourceBlueprint.scriptFiles,
-      scriptFormat: sourceBlueprint.scriptFormat,
-      scriptRef: sourceBlueprint.scriptRef,
+      script: sharedScript,
+      scriptEntry: null,
+      scriptFiles: null,
+      scriptFormat: null,
+      scriptRef: scriptRootId,
       scope: sourceScope,
       props: cloneDeep(props),
       preload: sourceBlueprint.preload,

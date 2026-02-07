@@ -48,6 +48,46 @@ function normalizeMetadataString(value, fallback) {
   return fallback
 }
 
+function normalizeBlueprintFieldString(value) {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed || null
+}
+
+function resolveScriptRootBlueprint(scriptRef, currentBlueprint, world) {
+  if (!scriptRef) return null
+  const currentId = normalizeBlueprintFieldString(currentBlueprint?.id)
+  if (currentBlueprint && currentId === scriptRef) return currentBlueprint
+  return world?.blueprints?.get(scriptRef) || null
+}
+
+function normalizeScriptReferenceBlueprint(data, { currentBlueprint = null, world } = {}) {
+  if (!data || typeof data !== 'object') return data
+  const scriptRef = normalizeBlueprintFieldString(data.scriptRef)
+  if (!scriptRef) return data
+
+  const blueprintId = normalizeBlueprintFieldString(data.id) || normalizeBlueprintFieldString(currentBlueprint?.id)
+  if (blueprintId && blueprintId === scriptRef) {
+    return { ...data, scriptRef: null }
+  }
+
+  const normalized = {
+    ...data,
+    scriptRef,
+    scriptEntry: null,
+    scriptFiles: null,
+    scriptFormat: null,
+  }
+
+  const scriptRoot = resolveScriptRootBlueprint(scriptRef, currentBlueprint, world)
+  const rootScript = normalizeBlueprintFieldString(scriptRoot?.script)
+  if (rootScript) {
+    normalized.script = rootScript
+  }
+
+  return normalized
+}
+
 function applySyncMetadata(target, source) {
   if (!target || !source) return
   target.uid = source.uid
@@ -586,48 +626,50 @@ export class ServerNetwork extends System {
   applyBlueprintAdded(blueprint, { ignoreNetworkId, actor, source, lastOpId } = {}) {
     const now = moment().toISOString()
     const operation = this.createOperationMetadata({ actor, source, lastOpId }, now)
-    if (!blueprint.createdAt) {
-      blueprint.createdAt = now
+    const nextBlueprint = normalizeScriptReferenceBlueprint(blueprint, { world: this.world })
+    if (!nextBlueprint.createdAt) {
+      nextBlueprint.createdAt = now
     }
-    if (blueprint.keep === undefined) {
-      blueprint.keep = false
+    if (nextBlueprint.keep === undefined) {
+      nextBlueprint.keep = false
     }
-    ensureBlueprintSyncMetadata(blueprint, {
+    ensureBlueprintSyncMetadata(nextBlueprint, {
       touch: true,
       now,
       updatedBy: normalizeMetadataString(actor, 'runtime'),
       updateSource: normalizeMetadataString(source, 'runtime'),
       lastOpId: operation.opId,
     })
-    const validation = validateBlueprintScriptFields(blueprint)
+    const validation = validateBlueprintScriptFields(nextBlueprint)
     if (!validation.ok) return validation
-    this.world.blueprints.add(blueprint)
-    this.send('blueprintAdded', blueprint, ignoreNetworkId)
-    this.dirtyBlueprints.add(blueprint.id)
-    const added = this.world.blueprints.get(blueprint.id) || blueprint
+    this.world.blueprints.add(nextBlueprint)
+    this.send('blueprintAdded', nextBlueprint, ignoreNetworkId)
+    this.dirtyBlueprints.add(nextBlueprint.id)
+    const added = this.world.blueprints.get(nextBlueprint.id) || nextBlueprint
     this.emit('blueprintAdded', added)
     this.emitOperation({
       ...operation,
       kind: 'blueprint.add',
-      objectUid: added?.uid || added?.id || blueprint.id,
+      objectUid: added?.uid || added?.id || nextBlueprint.id,
       snapshot: added,
     })
     return { ok: true }
   }
 
   applyBlueprintModified(change, { ignoreNetworkId, actor, source, lastOpId } = {}) {
-    const validation = validateBlueprintScriptFields(change)
-    if (!validation.ok) return validation
     const blueprint = this.world.blueprints.get(change.id)
     if (!blueprint) {
       return { ok: false, error: 'not_found' }
     }
+    const normalizedChange = normalizeScriptReferenceBlueprint(change, { currentBlueprint: blueprint, world: this.world })
+    const validation = validateBlueprintScriptFields(normalizedChange)
+    if (!validation.ok) return validation
     // if new version is greater than current version, allow it
-    if (change.version > blueprint.version) {
+    if (normalizedChange.version > blueprint.version) {
       const now = moment().toISOString()
       const operation = this.createOperationMetadata({ actor, source, lastOpId }, now)
-      const createdAt = blueprint.createdAt || change.createdAt || moment().toISOString()
-      const nextChange = { ...change, createdAt }
+      const createdAt = blueprint.createdAt || normalizedChange.createdAt || moment().toISOString()
+      const nextChange = { ...normalizedChange, createdAt }
       if (blueprint.keep === undefined && nextChange.keep === undefined) {
         nextChange.keep = false
       }
@@ -643,14 +685,14 @@ export class ServerNetwork extends System {
       applySyncMetadata(nextChangeWithSync, merged)
       this.world.blueprints.modify(nextChangeWithSync)
       this.send('blueprintModified', nextChangeWithSync, ignoreNetworkId)
-      this.dirtyBlueprints.add(change.id)
-      const updated = this.world.blueprints.get(change.id)
+      this.dirtyBlueprints.add(normalizedChange.id)
+      const updated = this.world.blueprints.get(normalizedChange.id)
       if (updated) {
         this.emit('blueprintModified', updated)
         this.emitOperation({
           ...operation,
           kind: 'blueprint.update',
-          objectUid: updated.uid || updated.id || change.id,
+          objectUid: updated.uid || updated.id || normalizedChange.id,
           patch: nextChangeWithSync,
           snapshot: updated,
         })

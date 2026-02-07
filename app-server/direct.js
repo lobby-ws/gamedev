@@ -4113,6 +4113,11 @@ export class DirectAppServer {
       return payload
     }
     payload.scriptRef = rootId
+    // Variants reference shared script metadata from scriptRef root and should
+    // not carry their own stale script module fields.
+    payload.scriptEntry = null
+    payload.scriptFiles = null
+    payload.scriptFormat = null
     return payload
   }
 
@@ -4140,19 +4145,25 @@ export class DirectAppServer {
       }
     }
 
+    const scriptRef = normalizeSyncString(cfg?.scriptRef) || normalizeSyncString(current?.scriptRef)
     const script = normalizeSyncString(cfg?.script) ?? normalizeSyncString(current?.script) ?? ''
+    const payload = { script }
+    if (scriptRef) {
+      payload.scriptRef = scriptRef
+      payload.scriptEntry = null
+      payload.scriptFiles = null
+      payload.scriptFormat = null
+      return payload
+    }
     const scriptEntry = normalizeSyncString(current?.scriptEntry)
     const scriptFiles =
       current?.scriptFiles && typeof current.scriptFiles === 'object' && !Array.isArray(current.scriptFiles)
         ? current.scriptFiles
         : null
     const scriptFormat = normalizeScriptFormat(cfg?.scriptFormat) || normalizeScriptFormat(current?.scriptFormat)
-    const scriptRef = normalizeSyncString(current?.scriptRef)
-    const payload = { script }
     if (scriptEntry) payload.scriptEntry = scriptEntry
     if (scriptFiles) payload.scriptFiles = scriptFiles
     if (scriptFormat) payload.scriptFormat = scriptFormat
-    if (scriptRef) payload.scriptRef = scriptRef
     return payload
   }
 
@@ -4935,12 +4946,12 @@ export class DirectAppServer {
 
   _resolveRemoteScriptRootBlueprint(blueprint) {
     if (!blueprint || typeof blueprint !== 'object') return null
-    if (hasScriptFiles(blueprint)) return blueprint
     const scriptRef = typeof blueprint.scriptRef === 'string' ? blueprint.scriptRef.trim() : ''
     if (scriptRef) {
       const root = this.snapshot?.blueprints?.get(scriptRef)
       if (root && hasScriptFiles(root)) return root
     }
+    if (hasScriptFiles(blueprint)) return blueprint
     const parsed = parseBlueprintId(blueprint.id || '')
     if (parsed.appName && parsed.appName !== blueprint.id) {
       const base = this.snapshot?.blueprints?.get(parsed.appName)
