@@ -1,5 +1,6 @@
 import { css } from '@firebolt-dev/css'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { parse as acornParse } from 'acorn'
 import { cls } from './cls'
 import { loadMonaco } from './monaco'
 import { hashFile } from '../../core/utils-client'
@@ -90,6 +91,56 @@ function normalizeScope(value) {
   if (typeof value !== 'string') return null
   const trimmed = value.trim()
   return trimmed || null
+}
+
+function getExportedName(node) {
+  if (!node) return null
+  if (node.type === 'Identifier') return node.name
+  if (node.type === 'Literal') return String(node.value)
+  return null
+}
+
+function entryHasDefaultExport(sourceText) {
+  if (typeof sourceText !== 'string' || !sourceText.trim()) return false
+  let ast = null
+  try {
+    ast = acornParse(sourceText, {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      allowHashBang: true,
+    })
+  } catch {
+    // Fallback for parse failures (e.g. transient edits or TS syntax):
+    // detect common default-export forms to keep scriptFormat in sync.
+    return /\bexport\s+default\b/.test(sourceText) || /\bexport\s*\{[^}]*\bdefault\b[^}]*\}/.test(sourceText)
+  }
+  for (const node of ast.body) {
+    if (node.type === 'ExportDefaultDeclaration') return true
+    if (node.type === 'ExportNamedDeclaration' && Array.isArray(node.specifiers)) {
+      for (const spec of node.specifiers) {
+        if (spec.type !== 'ExportSpecifier') continue
+        const exported = getExportedName(spec.exported)
+        if (exported === 'default') return true
+      }
+    }
+  }
+  return false
+}
+
+function resolveScriptFormatForSave(scriptRoot, entryPath, fileStates, nextEntryText = null) {
+  const currentFormat = scriptRoot?.scriptFormat === 'legacy-body' ? 'legacy-body' : 'module'
+  if (!entryPath || !isValidScriptPath(entryPath)) return currentFormat
+  const entryState = fileStates?.get?.(entryPath)
+  const entryText =
+    typeof nextEntryText === 'string'
+      ? nextEntryText
+      : typeof entryState?.model?.getValue === 'function'
+      ? entryState.model.getValue()
+      : typeof entryState?.originalText === 'string'
+        ? entryState.originalText
+        : null
+  if (typeof entryText !== 'string') return currentFormat
+  return entryHasDefaultExport(entryText) ? 'module' : 'legacy-body'
 }
 
 function buildFileTree(paths) {
@@ -535,7 +586,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
           script: nextScriptFiles[entryPath],
           scriptEntry: entryPath,
           scriptFiles: nextScriptFiles,
-          scriptFormat: scriptRoot.scriptFormat || 'module',
+          scriptFormat: resolveScriptFormatForSave(scriptRoot, entryPath, fileStatesRef.current),
         }
         world.blueprints.modify(change)
         await world.admin.blueprintModify(change, {
@@ -1076,7 +1127,12 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         script: entryUrl,
         scriptEntry: entryPath,
         scriptFiles: nextScriptFiles,
-        scriptFormat: scriptRoot.scriptFormat || 'module',
+        scriptFormat: resolveScriptFormatForSave(
+          scriptRoot,
+          entryPath,
+          fileStatesRef.current,
+          path === entryPath ? text : null
+        ),
       }
 
       if (updateMode.mode === 'fork') {
@@ -1134,6 +1190,9 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
             id: sibling.id,
             version: (sibling.version || 0) + 1,
             script: entryUrl,
+            scriptEntry: null,
+            scriptFiles: null,
+            scriptFormat: scriptUpdate.scriptFormat,
             scriptRef: scriptRoot.id,
           }
           world.blueprints.modify(siblingChange)
@@ -1247,11 +1306,18 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
           updates.push({ path, text, assetUrl })
         }
         const entryUrl = nextScriptFiles[entryPath]
+        let nextEntryText = null
+        for (const update of updates) {
+          if (update.path === entryPath) {
+            nextEntryText = update.text
+            break
+          }
+        }
         const scriptUpdate = {
           script: entryUrl,
           scriptEntry: entryPath,
           scriptFiles: nextScriptFiles,
-          scriptFormat: scriptRoot.scriptFormat || 'module',
+          scriptFormat: resolveScriptFormatForSave(scriptRoot, entryPath, fileStatesRef.current, nextEntryText),
         }
 
         if (updateMode.mode === 'fork') {
@@ -1309,6 +1375,9 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
               id: sibling.id,
               version: (sibling.version || 0) + 1,
               script: entryUrl,
+              scriptEntry: null,
+              scriptFiles: null,
+              scriptFormat: scriptUpdate.scriptFormat,
               scriptRef: scriptRoot.id,
             }
             world.blueprints.modify(siblingChange)

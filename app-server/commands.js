@@ -124,7 +124,7 @@ function entryHasDefaultExport(sourceText) {
       allowHashBang: true,
     })
   } catch {
-    return false
+    return /\bexport\s+default\b/.test(sourceText) || /\bexport\s*\{[^}]*\bdefault\b[^}]*\}/.test(sourceText)
   }
   for (const node of ast.body) {
     if (node.type === 'ExportDefaultDeclaration') return true

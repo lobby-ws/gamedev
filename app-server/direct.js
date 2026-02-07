@@ -541,7 +541,7 @@ function entryHasDefaultExport(sourceText) {
       allowHashBang: true,
     })
   } catch {
-    return false
+    return /\bexport\s+default\b/.test(sourceText) || /\bexport\s*\{[^}]*\bdefault\b[^}]*\}/.test(sourceText)
   }
   for (const node of ast.body) {
     if (node.type === 'ExportDefaultDeclaration') return true
@@ -3682,6 +3682,30 @@ export class DirectAppServer {
     return null
   }
 
+  _syncScriptFormatForApp(appName, nextFormat) {
+    const format = normalizeScriptFormat(nextFormat)
+    if (!format) return 0
+    const appPath = path.join(this.appsDir, appName)
+    if (!fs.existsSync(appPath)) return 0
+    let updated = 0
+    const entries = fs.readdirSync(appPath, { withFileTypes: true })
+    for (const entry of entries) {
+      if (!entry.isFile()) continue
+      if (!entry.name.endsWith('.json') || isBlueprintDenylist(entry.name)) continue
+      const configPath = path.join(appPath, entry.name)
+      const cfg = readJson(configPath)
+      if (!cfg || typeof cfg !== 'object') continue
+      if (normalizeScriptFormat(cfg.scriptFormat) === format) continue
+      const nextCfg = {
+        ...cfg,
+        scriptFormat: format,
+      }
+      this._writeFileAtomic(configPath, JSON.stringify(nextCfg, null, 2) + '\n')
+      updated += 1
+    }
+    return updated
+  }
+
   _resolveAppScriptMode(appName) {
     const appPath = path.join(this.appsDir, appName)
     const entryPath = this._getScriptPath(appName)
@@ -4562,21 +4586,34 @@ export class DirectAppServer {
       throw new Error(`missing_script_entry:${appName}`)
     }
 
-    let scriptFormat = normalizeScriptFormat(modeInfo?.scriptFormat)
-    if (!scriptFormat) {
-      const hasDefaultExport = entryHasDefaultExport(entryText)
-      if (hasDefaultExport) {
-        scriptFormat = 'module'
-      } else {
-        scriptFormat = 'legacy-body'
-        if (!this.scriptFormatWarnings.has(appName)) {
-          this.scriptFormatWarnings.add(appName)
-          console.warn(
-            `⚠️  Missing scriptFormat for ${appName}; defaulting to legacy-body. ` +
-              `Add "scriptFormat": "legacy-body" or update the entry to export default for module mode.`
-          )
-        }
+    const detectedFormat = entryHasDefaultExport(entryText) ? 'module' : 'legacy-body'
+    const configuredFormat = normalizeScriptFormat(modeInfo?.scriptFormat)
+    const scriptFormat = detectedFormat
+
+    if (configuredFormat && configuredFormat !== detectedFormat) {
+      const warnKey = `${appName}:mismatch:${configuredFormat}:${detectedFormat}`
+      if (!this.scriptFormatWarnings.has(warnKey)) {
+        this.scriptFormatWarnings.add(warnKey)
+        console.warn(
+          `⚠️  scriptFormat mismatch for ${appName}; ` +
+            `entry script resolves to "${detectedFormat}" but blueprint config is "${configuredFormat}". ` +
+            `Using "${detectedFormat}" and syncing local blueprint files.`
+        )
       }
+    } else if (!configuredFormat) {
+      const warnKey = `${appName}:missing:${detectedFormat}`
+      if (!this.scriptFormatWarnings.has(warnKey)) {
+        this.scriptFormatWarnings.add(warnKey)
+        console.warn(
+          `⚠️  Missing scriptFormat for ${appName}; ` +
+            `detected "${detectedFormat}" from entry script and syncing local blueprint files.`
+        )
+      }
+    }
+
+    const syncedFormats = this._syncScriptFormatForApp(appName, detectedFormat)
+    if (syncedFormats > 0) {
+      console.log(`📝 Updated scriptFormat to "${detectedFormat}" in ${syncedFormats} blueprint file(s) for ${appName}.`)
     }
     return {
       mode: 'module',
