@@ -126,7 +126,9 @@ export class ClientAI extends System {
         scope,
         version: 0,
         name: 'AI Draft',
-        image: null,
+        image: {
+          url: 'asset://Model.png',
+        },
         author: null,
         url: null,
         desc: null,
