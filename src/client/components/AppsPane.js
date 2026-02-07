@@ -122,7 +122,7 @@ export function AppsPane({ world, close }) {
       `}
     >
       <div className='apane-head' ref={headRef}>
-        <div className='apane-head-title'>Apps</div>
+        <div className='apane-head-title'>Objects</div>
         <div className='apane-head-search'>
           <SearchIcon size={16} />
           <input type='text' placeholder='Search' value={query} onChange={e => setQuery(e.target.value)} />
