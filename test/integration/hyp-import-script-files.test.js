@@ -146,3 +146,51 @@ test('drag-drop .hyp import converts legacy script into module files', async () 
   const scriptText = await scriptAsset.file.text()
   assert.match(scriptText, /export default/)
 })
+
+test('drag-drop .hyp import rewrites single hashed entry path to index.js', async () => {
+  const files = new Map()
+  const addFile = (url, contents, name, type) => {
+    const file = new File([contents], name, { type })
+    files.set(url, file)
+    return file
+  }
+
+  const hashedEntry = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.js'
+  const modelUrl = 'asset://model.glb'
+  const scriptUrl = 'asset://entry.js'
+  addFile(modelUrl, new Uint8Array([1, 2, 3, 4]), 'model.glb', 'model/gltf-binary')
+  addFile(scriptUrl, 'export default () => "ok"', 'entry.js', 'text/javascript')
+
+  const blueprint = {
+    id: 'bp-hashed',
+    name: 'HashedEntryApp',
+    model: modelUrl,
+    script: scriptUrl,
+    scriptEntry: hashedEntry,
+    scriptFormat: 'module',
+    scriptFiles: {
+      [hashedEntry]: scriptUrl,
+    },
+    props: {},
+    preload: false,
+    public: false,
+    locked: false,
+    frozen: false,
+    unique: false,
+    scene: false,
+    disabled: false,
+  }
+
+  const resolveFile = url => {
+    const file = files.get(url)
+    if (!file) throw new Error(`missing file: ${url}`)
+    return file
+  }
+
+  const hypFile = await exportApp(blueprint, resolveFile)
+  const imported = await importApp(hypFile)
+
+  assert.equal(imported.blueprint.scriptEntry, 'index.js')
+  assert.deepEqual(Object.keys(imported.blueprint.scriptFiles), ['index.js'])
+  assert.equal(imported.blueprint.scriptFiles['index.js'], imported.blueprint.script)
+})

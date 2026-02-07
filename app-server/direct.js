@@ -3550,10 +3550,118 @@ export class DirectAppServer {
 
   _getScriptPath(appName) {
     const appPath = path.join(this.appsDir, appName)
+    const configuredEntries = this._getConfiguredScriptEntries(appName)
+    const snapshotEntry = this._getSnapshotScriptEntry(appName)
+    if (snapshotEntry && !configuredEntries.includes(snapshotEntry)) {
+      configuredEntries.push(snapshotEntry)
+    }
+    for (const relPath of configuredEntries) {
+      const resolved = this._resolveScriptEntryPath(appPath, relPath)
+      if (resolved) return resolved
+    }
     const tsPath = path.join(appPath, 'index.ts')
     const jsPath = path.join(appPath, 'index.js')
     if (fs.existsSync(tsPath)) return tsPath
     if (fs.existsSync(jsPath)) return jsPath
+    const localScripts = listScriptFiles(appPath)
+    if (localScripts.length === 1) {
+      return localScripts[0].absPath
+    }
+    return null
+  }
+
+  _getConfiguredScriptEntries(appName) {
+    const appPath = path.join(this.appsDir, appName)
+    if (!fs.existsSync(appPath)) return []
+    const entries = []
+    const seen = new Set()
+    const addEntry = value => {
+      const raw = normalizeSyncString(value)
+      if (!raw) return
+      const normalized = normalizeScriptRelPath(raw)
+      if (!isValidScriptPath(normalized)) return
+      if (seen.has(normalized)) return
+      seen.add(normalized)
+      entries.push(normalized)
+    }
+
+    const primaryFilename = `${appName}.json`
+    addEntry(readJson(path.join(appPath, primaryFilename))?.scriptEntry)
+
+    let files = []
+    try {
+      files = fs.readdirSync(appPath, { withFileTypes: true })
+    } catch {
+      return entries
+    }
+    for (const entry of files) {
+      if (!entry.isFile()) continue
+      if (!entry.name.endsWith('.json') || isBlueprintDenylist(entry.name)) continue
+      if (entry.name === primaryFilename) continue
+      addEntry(readJson(path.join(appPath, entry.name))?.scriptEntry)
+    }
+
+    return entries
+  }
+
+  _getSnapshotScriptEntry(appName) {
+    if (!this.snapshot?.blueprints) return null
+    const candidateIds = new Set()
+
+    if (this.localBlueprintPathIndex?.size) {
+      for (const info of this.localBlueprintPathIndex.values()) {
+        if (info?.appName !== appName || !info?.id) continue
+        candidateIds.add(info.id)
+      }
+    }
+
+    if (!candidateIds.size) {
+      for (const blueprint of this.snapshot.blueprints.values()) {
+        if (!blueprint?.id) continue
+        if (parseBlueprintId(blueprint.id).appName === appName) {
+          candidateIds.add(blueprint.id)
+        }
+      }
+    }
+
+    for (const id of candidateIds) {
+      const blueprint = this.snapshot.blueprints.get(id)
+      if (!blueprint) continue
+      const scriptRoot = this._resolveRemoteScriptRootBlueprint(blueprint) || blueprint
+      const rawEntry = normalizeSyncString(scriptRoot?.scriptEntry)
+      if (!rawEntry) continue
+      const normalized = normalizeScriptRelPath(rawEntry)
+      if (!isValidScriptPath(normalized)) continue
+      return normalized
+    }
+    return null
+  }
+
+  _resolveScriptEntryPath(appPath, relPath) {
+    const normalized = normalizeScriptRelPath(relPath)
+    if (!isValidScriptPath(normalized)) return null
+
+    const resolveIfFile = candidate => {
+      if (!candidate || !fs.existsSync(candidate)) return null
+      let stats = null
+      try {
+        stats = fs.statSync(candidate)
+      } catch {
+        return null
+      }
+      return stats?.isFile() ? candidate : null
+    }
+
+    const directPath = resolveIfFile(path.join(appPath, normalized))
+    if (directPath) return directPath
+
+    const ext = path.extname(normalized).toLowerCase()
+    if (ext === '.js') {
+      return resolveIfFile(path.join(appPath, `${normalized.slice(0, -3)}.ts`))
+    }
+    if (ext === '.ts') {
+      return resolveIfFile(path.join(appPath, `${normalized.slice(0, -3)}.js`))
+    }
     return null
   }
 
@@ -5040,6 +5148,13 @@ export class DirectAppServer {
     }
     const scriptFormat = normalizeScriptFormat(blueprint.scriptFormat)
     if (scriptFormat) output.scriptFormat = scriptFormat
+    const scriptEntry = normalizeSyncString(blueprint.scriptEntry)
+    if (scriptEntry) {
+      const normalizedScriptEntry = normalizeScriptRelPath(scriptEntry)
+      if (isValidScriptPath(normalizedScriptEntry) && normalizedScriptEntry !== 'index.js') {
+        output.scriptEntry = normalizedScriptEntry
+      }
+    }
 
     if (typeof blueprint.model === 'string') {
       const existingModel = typeof existing?.model === 'string' ? existing.model : null

@@ -107,3 +107,65 @@ test('remote blueprint sync writes module sources to disk', async () => {
     await assetServer.close()
   }
 })
+
+test('remote blueprint sync preserves non-index script entries for redeploy', async () => {
+  const rootDir = await createTempDir('hyperfy-sync-entry-')
+  const assets = {
+    'entry.js': 'export default () => {\n  return "ok"\n}\n',
+    'helper.js': 'export const value = 9\n',
+  }
+  const assetServer = await startAssetServer(assets)
+  const server = new DirectAppServer({ worldUrl: 'http://example.com', rootDir })
+  server.assetsUrl = assetServer.url
+  server._initSnapshot({
+    worldId: 'test',
+    assetsUrl: assetServer.url,
+    settings: {},
+    spawn: { position: [0, 0, 0], quaternion: [0, 0, 0, 1] },
+    entities: [],
+    blueprints: [
+      {
+        id: 'EntryApp',
+        name: 'EntryApp',
+        script: 'asset://entry.js',
+        scriptFormat: 'module',
+        scriptEntry: 'scripts/generated.js',
+        scriptFiles: {
+          'scripts/generated.js': 'asset://entry.js',
+          'scripts/helper.js': 'asset://helper.js',
+        },
+        props: {},
+      },
+    ],
+  })
+
+  try {
+    await server._onRemoteBlueprint({
+      id: 'EntryApp',
+      name: 'EntryApp',
+      script: 'asset://entry.js',
+      scriptFormat: 'module',
+      scriptEntry: 'scripts/generated.js',
+      scriptFiles: {
+        'scripts/generated.js': 'asset://entry.js',
+        'scripts/helper.js': 'asset://helper.js',
+      },
+      props: {},
+    })
+
+    const appDir = path.join(rootDir, 'apps', 'EntryApp')
+    const entryPath = path.join(appDir, 'scripts', 'generated.js')
+    assert.equal(await fileExists(entryPath), true)
+
+    const configPath = path.join(appDir, 'EntryApp.json')
+    const config = JSON.parse(await fs.readFile(configPath, 'utf8'))
+    assert.equal(config.scriptEntry, 'scripts/generated.js')
+
+    const uploadInfo = await server._uploadScriptForApp('EntryApp', null, { upload: false })
+    assert.equal(uploadInfo.scriptEntry, 'scripts/generated.js')
+    assert.equal(uploadInfo.scriptFiles[uploadInfo.scriptEntry], uploadInfo.scriptUrl)
+  } finally {
+    await stopAppServer(server)
+    await assetServer.close()
+  }
+})
