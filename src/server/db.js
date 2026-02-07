@@ -502,9 +502,9 @@ const migrations = [
         image: { url: 'asset://Model.png' },
         model: 'asset://Model.glb',
         script: 'asset://Model.js',
-        scriptEntry: 'Model.js',
+        scriptEntry: 'index.js',
         scriptFiles: {
-          'Model.js': 'asset://Model.js',
+          'index.js': 'asset://Model.js',
         },
         scriptFormat: 'module',
         props: { collision: true },
@@ -515,9 +515,9 @@ const migrations = [
         image: { url: 'asset://Image.png' },
         model: 'asset://Image.glb',
         script: 'asset://Image.js',
-        scriptEntry: 'Image.js',
+        scriptEntry: 'index.js',
         scriptFiles: {
-          'Image.js': 'asset://Image.js',
+          'index.js': 'asset://Image.js',
         },
         scriptFormat: 'module',
         props: {
@@ -540,9 +540,9 @@ const migrations = [
         image: { url: 'asset://Video.png' },
         model: 'asset://Video.glb',
         script: 'asset://Video.js',
-        scriptEntry: 'Video.js',
+        scriptEntry: 'index.js',
         scriptFiles: {
-          'Video.js': 'asset://Video.js',
+          'index.js': 'asset://Video.js',
         },
         scriptFormat: 'module',
         props: {
@@ -567,9 +567,9 @@ const migrations = [
         image: { url: 'asset://Text.png' },
         model: 'asset://Text.glb',
         script: 'asset://Text.js',
-        scriptEntry: 'Text.js',
+        scriptEntry: 'index.js',
         scriptFiles: {
-          'Text.js': 'asset://Text.js',
+          'index.js': 'asset://Text.js',
         },
         scriptFormat: 'module',
         props: {
@@ -747,8 +747,8 @@ const migrations = [
           image: { url: 'asset://Model.png' },
           model: 'asset://Model.glb',
           script: 'asset://Model.js',
-          scriptEntry: 'Model.js',
-          scriptFiles: { 'Model.js': 'asset://Model.js' },
+          scriptEntry: 'index.js',
+          scriptFiles: { 'index.js': 'asset://Model.js' },
           scriptFormat: 'module',
           props: { collision: true },
         },
@@ -761,8 +761,8 @@ const migrations = [
           image: { url: 'asset://Image.png' },
           model: 'asset://Image.glb',
           script: 'asset://Image.js',
-          scriptEntry: 'Image.js',
-          scriptFiles: { 'Image.js': 'asset://Image.js' },
+          scriptEntry: 'index.js',
+          scriptFiles: { 'index.js': 'asset://Image.js' },
           scriptFormat: 'module',
           props: {
             width: 0,
@@ -787,8 +787,8 @@ const migrations = [
           image: { url: 'asset://Video.png' },
           model: 'asset://Video.glb',
           script: 'asset://Video.js',
-          scriptEntry: 'Video.js',
-          scriptFiles: { 'Video.js': 'asset://Video.js' },
+          scriptEntry: 'index.js',
+          scriptFiles: { 'index.js': 'asset://Video.js' },
           scriptFormat: 'module',
           props: {
             width: 0,
@@ -815,8 +815,8 @@ const migrations = [
           image: { url: 'asset://Text.png' },
           model: 'asset://Text.glb',
           script: 'asset://Text.js',
-          scriptEntry: 'Text.js',
-          scriptFiles: { 'Text.js': 'asset://Text.js' },
+          scriptEntry: 'index.js',
+          scriptFiles: { 'index.js': 'asset://Text.js' },
           scriptFormat: 'module',
           props: {
             width: 200,
