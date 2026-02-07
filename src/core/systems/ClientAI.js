@@ -4,12 +4,24 @@ import { hashFile } from '../utils-client'
 
 const PLACEHOLDER_SCRIPT = `export default (world, app, fetch, props, setTimeout) => {
   // AI placeholder while generation runs
-  const box = app.create('prim', {
-    type: 'box',
-    size: [1, 1, 1],
-    color: '#4b5563',
+  const aura = app.create('particles', {
+    shape: ['sphere', 0.6, 1],
+    rate: 30,
+    life: '1.2~2.4',
+    speed: '0.05~0.2',
+    size: '0.2~0.5',
+    color: '#ffffff',
+    alpha: '0.4~0.8',
+    emissive: '0.6~1',
+    blending: 'additive',
+    billboard: 'full',
+    space: 'local',
   })
-  app.add(box)
+  aura.colorOverLife = '0,#5eead4|0.5,#a78bfa|1,#f0abfc'
+  aura.alphaOverLife = '0,0|0.2,0.7|1,0'
+  aura.sizeOverLife = '0,0.6|0.5,1|1,0.8'
+  aura.position.set(0, 0.5, 0)
+  app.add(aura)
 }
 `
 const DEFAULT_ENTRY = 'index.js'
