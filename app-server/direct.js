@@ -132,6 +132,16 @@ function sanitizeFileBaseName(name) {
   return base
 }
 
+function buildSuggestedAssetFilename(name, { fallbackBase = 'file', ext = '' } = {}) {
+  const normalizedExt = typeof ext === 'string' ? ext : ''
+  let base = sanitizeFileBaseName(name || fallbackBase)
+  if (normalizedExt && base.toLowerCase().endsWith(normalizedExt.toLowerCase())) {
+    base = base.slice(0, -normalizedExt.length)
+  }
+  base = sanitizeFileBaseName(base || fallbackBase)
+  return normalizedExt ? `${base}${normalizedExt}` : base
+}
+
 function sanitizeDirName(name) {
   const base = sanitizeFileBaseName(name)
   return base.replace(/[. ]+$/g, '').replace(/^[. ]+/g, '') || 'app'
@@ -4140,7 +4150,7 @@ export class DirectAppServer {
       for (const [key, value] of Object.entries(props)) {
         if (value && typeof value === 'object' && typeof value.url === 'string') {
           const ext = path.extname(value.url) || ''
-          const suggested = sanitizeFileBaseName(value.name || key) + ext
+          const suggested = buildSuggestedAssetFilename(value.name || key, { fallbackBase: key, ext })
           const existingUrl =
             existingProps?.[key] && typeof existingProps[key] === 'object' ? existingProps[key].url : null
           const url = await this._maybeDownloadAsset(appName, value.url, suggested, { existingUrl })
@@ -5195,10 +5205,13 @@ export class DirectAppServer {
 
     if (typeof blueprint.model === 'string') {
       const existingModel = typeof existing?.model === 'string' ? existing.model : null
+      const modelExt = path.extname(blueprint.model) || '.glb'
+      const modelBaseName = normalizeSyncString(blueprint?.name) || appName
+      const modelSuggestedName = buildSuggestedAssetFilename(modelBaseName, { fallbackBase: appName, ext: modelExt })
       output.model = await this._maybeDownloadAsset(
         appName,
         blueprint.model,
-        `${appName}${path.extname(blueprint.model) || '.glb'}`,
+        modelSuggestedName,
         { existingUrl: existingModel }
       )
     } else if (blueprint.model !== undefined) {
@@ -5231,7 +5244,7 @@ export class DirectAppServer {
         if (value && typeof value === 'object' && typeof value.url === 'string') {
           const v = { ...value }
           const ext = path.extname(v.url) || ''
-          const suggested = sanitizeFileBaseName(v.name || key) + ext
+          const suggested = buildSuggestedAssetFilename(v.name || key, { fallbackBase: key, ext })
           const existingUrl =
             existingProps?.[key] && typeof existingProps[key] === 'object' ? existingProps[key].url : null
           v.url = await this._maybeDownloadAsset(appName, v.url, suggested, { existingUrl })
@@ -5352,7 +5365,12 @@ export class DirectAppServer {
     const existingByHash = this._findLocalAssetByHash(hash, { preferredExt: ext })
     if (existingByHash) return existingByHash
 
-    const base = sanitizeFileBaseName(path.basename(suggestedName, ext) || `${appName}${ext}`)
+    const fallbackBase = sanitizeFileBaseName(appName || 'file')
+    const normalizedSuggested = buildSuggestedAssetFilename(suggestedName, {
+      fallbackBase,
+      ext,
+    })
+    const base = ext ? normalizedSuggested.slice(0, -ext.length) : normalizedSuggested
     for (let idx = 0; idx < 10000; idx += 1) {
       const suffix = idx === 0 ? '' : `_${idx}`
       const candidate = `${base}${suffix}${ext}`

@@ -153,3 +153,124 @@ test('entity prop localization dedupes by hash and reuses first readable filenam
     await assetServer.close()
   }
 })
+
+test('remote blueprint sync names hashed model assets from blueprint name', async () => {
+  const rootDir = await createTempDir('hyperfy-asset-model-name-')
+  const modelBytes = Buffer.from('avatar-bytes')
+  const filename = hashFilename(modelBytes, 'vrm')
+  const assetServer = await startAssetServer({
+    [filename]: modelBytes,
+  })
+  const server = new DirectAppServer({ worldUrl: 'http://example.com', rootDir })
+  server.assetsUrl = assetServer.url
+  server._initSnapshot({
+    worldId: 'test',
+    assetsUrl: assetServer.url,
+    settings: {},
+    spawn: { position: [0, 0, 0], quaternion: [0, 0, 0, 1] },
+    entities: [],
+    blueprints: [],
+  })
+
+  try {
+    await server._onRemoteBlueprint({
+      id: '2a7fcc4b-b90e-4bd6-a1a8-7b72f1388ded',
+      name: 'Dropped Hyp',
+      model: `asset://${filename}`,
+      props: {},
+    })
+
+    const appConfig = await readJson(
+      path.join(rootDir, 'apps', '2a7fcc4b-b90e-4bd6-a1a8-7b72f1388ded', '2a7fcc4b-b90e-4bd6-a1a8-7b72f1388ded.json')
+    )
+    const files = await listAssetFiles(rootDir)
+
+    assert.deepEqual(files, ['Dropped Hyp.vrm'])
+    assert.equal(appConfig.model, 'assets/Dropped Hyp.vrm')
+    assert.equal(assetServer.getRequestCount(), 1)
+  } finally {
+    await stopAppServer(server)
+    await assetServer.close()
+  }
+})
+
+test('remote blueprint sync does not duplicate extension for model names', async () => {
+  const rootDir = await createTempDir('hyperfy-asset-model-ext-')
+  const modelBytes = Buffer.from('avatar-bytes-ext')
+  const filename = hashFilename(modelBytes, 'vrm')
+  const assetServer = await startAssetServer({
+    [filename]: modelBytes,
+  })
+  const server = new DirectAppServer({ worldUrl: 'http://example.com', rootDir })
+  server.assetsUrl = assetServer.url
+  server._initSnapshot({
+    worldId: 'test',
+    assetsUrl: assetServer.url,
+    settings: {},
+    spawn: { position: [0, 0, 0], quaternion: [0, 0, 0, 1] },
+    entities: [],
+    blueprints: [],
+  })
+
+  try {
+    await server._onRemoteBlueprint({
+      id: 'ModelExtApp',
+      name: 'model.vrm',
+      model: `asset://${filename}`,
+      props: {},
+    })
+
+    const appConfig = await readJson(path.join(rootDir, 'apps', 'ModelExtApp', 'ModelExtApp.json'))
+    const files = await listAssetFiles(rootDir)
+
+    assert.deepEqual(files, ['model.vrm'])
+    assert.equal(appConfig.model, 'assets/model.vrm')
+    assert.equal(assetServer.getRequestCount(), 1)
+  } finally {
+    await stopAppServer(server)
+    await assetServer.close()
+  }
+})
+
+test('remote blueprint sync does not duplicate extension for file prop names', async () => {
+  const rootDir = await createTempDir('hyperfy-asset-prop-ext-')
+  const vrmBytes = Buffer.from('vrm-prop-bytes')
+  const filename = hashFilename(vrmBytes, 'vrm')
+  const assetServer = await startAssetServer({
+    [filename]: vrmBytes,
+  })
+  const server = new DirectAppServer({ worldUrl: 'http://example.com', rootDir })
+  server.assetsUrl = assetServer.url
+  server._initSnapshot({
+    worldId: 'test',
+    assetsUrl: assetServer.url,
+    settings: {},
+    spawn: { position: [0, 0, 0], quaternion: [0, 0, 0, 1] },
+    entities: [],
+    blueprints: [],
+  })
+
+  try {
+    await server._onRemoteBlueprint({
+      id: 'FilePropApp',
+      name: 'FilePropApp',
+      props: {
+        avatar: {
+          type: 'avatar',
+          name: 'file.vrm',
+          url: `asset://${filename}`,
+        },
+      },
+    })
+
+    const appConfig = await readJson(path.join(rootDir, 'apps', 'FilePropApp', 'FilePropApp.json'))
+    const files = await listAssetFiles(rootDir)
+
+    assert.deepEqual(files, ['file.vrm'])
+    assert.equal(appConfig.props.avatar.url, 'assets/file.vrm')
+    assert.equal(assetServer.getRequestCount(), 1)
+  } finally {
+    await stopAppServer(server)
+    await assetServer.close()
+  }
+})
