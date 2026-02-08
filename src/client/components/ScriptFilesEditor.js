@@ -439,10 +439,16 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     try {
       const state = await ensureFileState(trimmed, { allowMissing: true, useTemplate: true })
       if (!state) throw new Error('new_file_failed')
+      state.originalText = ''
+      state.dirty = true
+      setDirtyTick(tick => tick + 1)
       setSelectedPath(trimmed)
       setNewFileOpen(false)
       setNewFilePath('')
       setNewFileError(null)
+      if (saveAllRef.current) {
+        await saveAllRef.current({ paths: new Set([trimmed]) })
+      }
     } catch (err) {
       console.error(err)
       setNewFileError('Failed to create file.')
