@@ -195,7 +195,9 @@ export class App extends Entity {
     if (runScript) {
       this.abortController = new AbortController()
       try {
-        this.script.exec(this.getWorldProxy(), this.getAppProxy(), this.fetch, this.effectiveProps, this.setTimeout)
+        this.runInScriptContext(() => {
+          this.script.exec(this.getWorldProxy(), this.getAppProxy(), this.fetch, this.effectiveProps, this.setTimeout)
+        })
         this.scriptError = null
       } catch (err) {
         this.scriptError = serializeError(err)
@@ -440,27 +442,37 @@ export class App extends Entity {
 
   emit(name, a1, a2) {
     if (!this.listeners[name]) return
-    for (const callback of this.listeners[name]) {
-      callback(a1, a2)
-    }
+    this.runInScriptContext(() => {
+      for (const callback of this.listeners[name]) {
+        callback(a1, a2)
+      }
+    })
   }
 
   onWorldEvent(name, callback) {
-    this.worldListeners.set(callback, name)
-    this.world.events.on(name, callback)
+    const wrapped = (...args) => {
+      this.runInScriptContext(() => {
+        callback(...args)
+      })
+    }
+    this.worldListeners.set(callback, { name, wrapped })
+    this.world.events.on(name, wrapped)
   }
 
   offWorldEvent(name, callback) {
+    const listener = this.worldListeners.get(callback)
+    if (!listener) return
+    if (name && listener.name !== name) return
     this.worldListeners.delete(callback)
-    this.world.events.off(name, callback)
+    this.world.events.off(listener.name, listener.wrapped)
   }
 
   clearEventListeners() {
     // local
     this.listeners = {}
     // world
-    for (const [callback, name] of this.worldListeners) {
-      this.world.events.off(name, callback)
+    for (const listener of this.worldListeners.values()) {
+      this.world.events.off(listener.name, listener.wrapped)
     }
     this.worldListeners.clear()
   }
@@ -500,13 +512,24 @@ export class App extends Entity {
     const hook = this.getDeadHook()
     const timerId = setTimeout(() => {
       if (hook.dead) return
-      fn()
+      this.runInScriptContext(() => {
+        fn()
+      })
     }, ms)
     return timerId
   }
 
   getDeadHook = () => {
     return this.deadHook
+  }
+
+  runInScriptContext(fn) {
+    if (typeof fn !== 'function') return undefined
+    const withAppContext = this.world?.scripts?.withAppContext
+    if (typeof withAppContext !== 'function') {
+      return fn()
+    }
+    return withAppContext.call(this.world.scripts, this.data.id, fn)
   }
 
   getNodes() {

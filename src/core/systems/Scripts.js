@@ -33,13 +33,14 @@ export class Scripts extends System {
   constructor(world) {
     super(world)
     this.moduleSourceCache = new Map()
+    this.activeAppId = null
     this.endowments = {
       console: {
-        log: (...args) => console.log(...args),
-        warn: (...args) => console.warn(...args),
-        error: (...args) => console.error(...args),
-        time: (...args) => console.time(...args),
-        timeEnd: (...args) => console.timeEnd(...args),
+        log: (...args) => this.handleScriptConsole('log', args),
+        warn: (...args) => this.handleScriptConsole('warn', args),
+        error: (...args) => this.handleScriptConsole('error', args),
+        time: (...args) => this.handleScriptConsole('time', args),
+        timeEnd: (...args) => this.handleScriptConsole('timeEnd', args),
       },
       Date: {
         now: () => Date.now(),
@@ -71,6 +72,45 @@ export class Scripts extends System {
       // pause: () => this.world.pause(),
     }
     this.compartment = new Compartment(this.endowments)
+  }
+
+  resolveAppId(appOrId) {
+    if (typeof appOrId === 'string') {
+      const value = appOrId.trim()
+      return value || null
+    }
+    const value = appOrId?.data?.id
+    if (typeof value !== 'string') return null
+    const trimmed = value.trim()
+    return trimmed || null
+  }
+
+  withAppContext(appOrId, fn) {
+    if (typeof fn !== 'function') return undefined
+    const appId = this.resolveAppId(appOrId)
+    if (!appId) return fn()
+    const previousAppId = this.activeAppId
+    this.activeAppId = appId
+    try {
+      return fn()
+    } finally {
+      this.activeAppId = previousAppId
+    }
+  }
+
+  handleScriptConsole(level, args) {
+    const appId = this.activeAppId
+    if (appId && this.world?.appLogs?.capture) {
+      try {
+        this.world.appLogs.capture(appId, level, args)
+      } catch {}
+    }
+    const logger = console[level]
+    if (typeof logger === 'function') {
+      try {
+        logger.apply(console, args)
+      } catch {}
+    }
   }
 
   evaluate(code) {

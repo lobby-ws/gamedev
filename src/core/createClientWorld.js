@@ -17,6 +17,7 @@ import { ClientBuilder } from './systems/ClientBuilder'
 import { ClientActions } from './systems/ClientActions'
 import { ClientTarget } from './systems/ClientTarget'
 import { ClientUI } from './systems/ClientUI'
+import { ClientAppLogs } from './systems/ClientAppLogs'
 import { ClientAIScripts } from './systems/ClientAIScripts'
 import { ClientAI } from './systems/ClientAI'
 import { LODs } from './systems/LODs'
@@ -45,6 +46,7 @@ export function createClientWorld() {
   world.register('actions', ClientActions)
   world.register('target', ClientTarget)
   world.register('ui', ClientUI)
+  world.register('appLogs', ClientAppLogs)
   world.register('ai', ClientAI)
   world.register('aiScripts', ClientAIScripts)
   world.register('lods', LODs)
