@@ -149,6 +149,7 @@ export class ServerAI extends System {
     this.model = aiConfig.model
     this.effort = aiConfig.effort
     this.apiKey = aiConfig.apiKey
+    this.toolLoopEnabled = !!aiConfig.toolLoopEnabled
     this.client = createServerAIRunner(aiConfig, {
       anthropicMaxOutputTokens: ANTHROPIC_MAX_OUTPUT_TOKENS,
     })
@@ -160,7 +161,7 @@ export class ServerAI extends System {
       docsSearch: this.docsSearch,
       limits: DOCS_TOOL_LIMITS,
     })
-    this.tools = searchDocsTool
+    this.tools = this.toolLoopEnabled && searchDocsTool
       ? {
           searchDocs: searchDocsTool,
         }
@@ -174,6 +175,7 @@ export class ServerAI extends System {
       provider: this.provider,
       model: this.model,
       effort: this.effort,
+      toolLoopEnabled: this.toolLoopEnabled,
     }
   }
 

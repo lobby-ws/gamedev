@@ -7,6 +7,9 @@ const DEFAULT_ANTHROPIC_MAX_OUTPUT_TOKENS = 4096
 const DEFAULT_TOOL_LOOP_MAX_STEPS = 4
 const DEFAULT_TOOL_LOOP_MAX_CALLS = 4
 const DEFAULT_TOOL_LOOP_TIMEOUT_MS = 20_000
+const DEFAULT_TOOL_LOOP_ENABLED = false
+const TRUTHY_ENV_VALUES = new Set(['1', 'true', 'yes', 'on', 'enabled'])
+const FALSY_ENV_VALUES = new Set(['0', 'false', 'no', 'off', 'disabled'])
 
 function clampInt(value, min, max, fallback) {
   const parsed = Number(value)
@@ -14,6 +17,27 @@ function clampInt(value, min, max, fallback) {
   if (base < min) return min
   if (base > max) return max
   return base
+}
+
+function normalizeNonEmptyString(value) {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed || null
+}
+
+function parseBooleanEnv(value, fallback = false) {
+  if (typeof value !== 'string') return fallback
+  const normalized = value.trim().toLowerCase()
+  if (!normalized) return fallback
+  if (TRUTHY_ENV_VALUES.has(normalized)) return true
+  if (FALSY_ENV_VALUES.has(normalized)) return false
+  return fallback
+}
+
+function normalizeProvider(value) {
+  const provider = normalizeNonEmptyString(value)?.toLowerCase()
+  if (provider === 'openai' || provider === 'anthropic') return provider
+  return null
 }
 
 function normalizeToolLoopOptions(options = {}) {
@@ -99,11 +123,14 @@ function normalizeGenerationResult(result) {
 }
 
 export function readServerAIConfig(env = process.env) {
+  const effort = normalizeNonEmptyString(env.AI_EFFORT) || DEFAULT_EFFORT
+  const toolLoopEnabled = parseBooleanEnv(env.AI_TOOL_LOOP_ENABLED, DEFAULT_TOOL_LOOP_ENABLED)
   return {
-    provider: env.AI_PROVIDER || null,
-    model: env.AI_MODEL || null,
-    effort: env.AI_EFFORT || DEFAULT_EFFORT,
-    apiKey: env.AI_API_KEY || null,
+    provider: normalizeProvider(env.AI_PROVIDER),
+    model: normalizeNonEmptyString(env.AI_MODEL),
+    effort,
+    apiKey: normalizeNonEmptyString(env.AI_API_KEY),
+    toolLoopEnabled,
   }
 }
 

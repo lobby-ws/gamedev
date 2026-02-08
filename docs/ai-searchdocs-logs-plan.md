@@ -125,9 +125,9 @@
 - Dependency: PR-3, PR-4, PR-5.
 
 ### PR-8: Hardening, Tests, and Rollout Switch
-- [ ] Add integration tests for searchDocs tool flow and fix-with-logs flow.
-- [ ] Add smoke checks for provider selection and failure fallback paths.
-- [ ] Add feature flag / safe rollout toggle and ship docs.
+- [x] Add integration tests for searchDocs tool flow and fix-with-logs flow.
+- [x] Add smoke checks for provider selection and failure fallback paths.
+- [x] Add feature flag / safe rollout toggle and ship docs.
 - Concrete steps:
 - Add tests under `test/integration/` for:
 - Tool-call path returning valid patch output.
