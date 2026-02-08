@@ -1,6 +1,7 @@
 import { System } from './System'
 import { uuid } from '../utils'
 import { hashFile } from '../utils-client'
+import { buildUnifiedAiRequestPayload } from '../ai/AIRequestContract'
 
 const PLACEHOLDER_SCRIPT = `export default (world, app, fetch, props, setTimeout) => {
   // AI placeholder while generation runs
@@ -29,24 +30,6 @@ const DEFAULT_ENTRY = 'index.js'
 function normalizePrompt(value) {
   if (typeof value !== 'string') return ''
   return value.trim()
-}
-
-function normalizeAttachments(input) {
-  if (!Array.isArray(input)) return null
-  const output = []
-  const seen = new Set()
-  for (const item of input) {
-    if (!item) continue
-    const type = item.type === 'doc' || item.type === 'script' ? item.type : null
-    const path = typeof item.path === 'string' ? item.path.trim() : ''
-    if (!type || !path) continue
-    const key = `${type}:${path}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    output.push({ type, path })
-    if (output.length >= 12) break
-  }
-  return output.length ? output : null
 }
 
 export class ClientAI extends System {
@@ -96,7 +79,7 @@ export class ClientAI extends System {
       throw err
     }
 
-    const normalizedAttachments = normalizeAttachments(payload.attachments)
+    const normalizedAttachments = Array.isArray(payload.attachments) ? payload.attachments : null
     const scriptRootId = typeof payload.scriptRootId === 'string' ? payload.scriptRootId.trim() : ''
     let lockToken = null
     let blueprint = null
@@ -173,17 +156,17 @@ export class ClientAI extends System {
       this.world.admin.entityAdd(appData, { ignoreNetworkId: this.world.network.id })
       this.world.builder.select(app)
 
-      const request = {
-        blueprintId: blueprint.id,
-        appId: appData.id,
+      const request = buildUnifiedAiRequestPayload({
+        mode: 'create',
         prompt: trimmed,
-      }
-      if (normalizedAttachments) {
-        request.attachments = normalizedAttachments
-      }
-      if (scriptRootId) {
-        request.scriptRootId = scriptRootId
-      }
+        target: {
+          blueprintId: blueprint.id,
+          appId: appData.id,
+          scriptRootId: scriptRootId || null,
+        },
+        attachments: normalizedAttachments,
+        includeLegacyFields: true,
+      })
       this.world.network.send('aiCreateRequest', request)
 
       return { blueprintId: blueprint.id, appId: appData.id }

@@ -1,9 +1,11 @@
 import fs from 'fs'
-import path from 'path'
 import { System } from './System'
 import { createServerAIRunner, readServerAIConfig } from './ServerAIRunner'
 import { isValidScriptPath } from '../blueprintValidation'
 import { resolveDocsPath, resolveDocsRoot } from '../ai/DocsSearchService'
+import { normalizeAiRequest } from '../ai/AIRequestContract'
+import { buildUnifiedScriptPrompts } from '../ai/AIScriptPrompt'
+import { parseAiScriptResponse } from '../ai/AIScriptResponse'
 
 function hasScriptFiles(blueprint) {
   return blueprint?.scriptFiles && typeof blueprint.scriptFiles === 'object' && !Array.isArray(blueprint.scriptFiles)
@@ -33,135 +35,8 @@ function resolveScriptRootBlueprint(blueprint, world) {
   return null
 }
 
-const aiDocs = loadAiDocs()
 const docsRoot = resolveDocsRoot()
 const ANTHROPIC_MAX_OUTPUT_TOKENS = 8192
-
-function loadAiDocs() {
-  const candidates = [
-    path.join(process.cwd(), 'src/client/public/ai-docs.md'),
-    path.join(process.cwd(), 'build/public/ai-docs.md'),
-    path.join(process.cwd(), 'public/ai-docs.md'),
-  ]
-  for (const candidate of candidates) {
-    try {
-      if (!fs.existsSync(candidate)) continue
-      return fs.readFileSync(candidate, 'utf8')
-    } catch {
-      // continue searching other paths
-    }
-  }
-  return ''
-}
-
-const fencePattern = /^```(?:\w+)?\s*([\s\S]*?)\s*```$/
-
-function stripCodeFences(text) {
-  if (!text) return ''
-  const cleaned = text.trim()
-  const match = cleaned.match(fencePattern)
-  if (match) return match[1]
-  return cleaned
-}
-
-function extractJson(text) {
-  const cleaned = stripCodeFences(text).trim()
-  if (!cleaned) return null
-  try {
-    return JSON.parse(cleaned)
-  } catch (err) {
-    const first = cleaned.indexOf('{')
-    const last = cleaned.lastIndexOf('}')
-    if (first === -1 || last === -1 || last <= first) return null
-    const slice = cleaned.slice(first, last + 1)
-    try {
-      return JSON.parse(slice)
-    } catch (err2) {
-      return null
-    }
-  }
-}
-
-function normalizeAiPatchSet(output) {
-  if (!output) return null
-  const files = Array.isArray(output)
-    ? output
-    : output.files || output.changes || output.patches
-  if (!Array.isArray(files)) return null
-  const normalized = []
-  for (const entry of files) {
-    if (!entry) continue
-    const path = entry.path || entry.relPath || entry.file
-    const content = entry.content ?? entry.text ?? entry.code ?? entry.nextText
-    if (!path || typeof content !== 'string') continue
-    normalized.push({ path, content })
-  }
-  if (!normalized.length) return null
-  return {
-    summary: typeof output.summary === 'string' ? output.summary : '',
-    files: normalized,
-  }
-}
-
-function normalizeAiAttachments(input) {
-  if (!Array.isArray(input)) return []
-  const output = []
-  const seen = new Set()
-  for (const item of input) {
-    if (!item) continue
-    const type = item.type === 'doc' || item.type === 'script' ? item.type : null
-    const filePath = typeof item.path === 'string' ? item.path.trim() : ''
-    if (!type || !filePath) continue
-    const key = `${type}:${filePath}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    output.push({ type, path: filePath })
-    if (output.length >= 12) break
-  }
-  return output
-}
-
-function buildSystemPrompt({ entryPath, scriptFormat }) {
-  const formatNote =
-    scriptFormat === 'legacy-body'
-      ? `The entry file "${entryPath}" uses legacy-body format. It is not a standard module. Keep top-level imports, do not add export statements, and keep the file as a script body.`
-      : `The entry file "${entryPath}" is a standard ES module that must export a default function (world, app, fetch, props, setTimeout) => void.`
-  return [
-    aiDocs ? `${aiDocs}\n\n==============` : null,
-    'You are editing a multi-file module script for a 3D app runtime.',
-    'Return JSON only. Do not use markdown or code fences.',
-    'Output format:',
-    '{ "summary": "short description", "files": [{ "path": "path", "content": "full file text" }] }',
-    'Rules:',
-    '- You may update existing files or create new files.',
-    '- Provide full file contents for each changed or new file.',
-    '- Do not include unchanged files.',
-    '- Do not delete files.',
-    formatNote,
-  ]
-    .filter(Boolean)
-    .join('\n')
-}
-
-function buildUserPrompt({ mode, prompt, error, entryPath, scriptFormat, fileMap, attachmentMap }) {
-  const header = [
-    `Entry path: ${entryPath}`,
-    `Script format: ${scriptFormat}`,
-    `Mode: ${mode}`,
-  ]
-  if (mode === 'fix') {
-    header.push(`Error:\n${JSON.stringify(error, null, 2)}`)
-  } else {
-    header.push(`Request: ${prompt}`)
-  }
-  if (attachmentMap && Object.keys(attachmentMap).length) {
-    header.push('Attached files (full text):')
-    header.push(JSON.stringify(attachmentMap, null, 2))
-  }
-  header.push('Files (JSON map of path to content):')
-  header.push(JSON.stringify(fileMap, null, 2))
-  return header.join('\n\n')
-}
 
 export class ServerAIScripts extends System {
   constructor(world) {
@@ -178,8 +53,9 @@ export class ServerAIScripts extends System {
   }
 
   handleRequest = async (socket, data = {}) => {
-    const requestId = data?.requestId || null
-    let scriptRootId = typeof data?.scriptRootId === 'string' ? data.scriptRootId : null
+    const request = normalizeAiRequest(data, { fallbackMode: 'edit' })
+    const requestId = request.requestId
+    let scriptRootId = request.target.scriptRootId || null
     if (!this.enabled) {
       this.sendError(socket, {
         requestId,
@@ -202,11 +78,11 @@ export class ServerAIScripts extends System {
     if (scriptRootId) {
       blueprint = this.world.blueprints.get(scriptRootId)
     }
-    if (!blueprint && typeof data?.blueprintId === 'string') {
-      blueprint = this.world.blueprints.get(data.blueprintId)
+    if (!blueprint && request.target.blueprintId) {
+      blueprint = this.world.blueprints.get(request.target.blueprintId)
     }
-    if (!blueprint && typeof data?.appId === 'string') {
-      const app = this.world.entities.get(data.appId)
+    if (!blueprint && request.target.appId) {
+      const app = this.world.entities.get(request.target.appId)
       blueprint = app?.blueprint || this.world.blueprints.get(app?.data?.blueprint)
     }
     const scriptRoot = resolveScriptRootBlueprint(blueprint, this.world)
@@ -239,9 +115,9 @@ export class ServerAIScripts extends System {
       })
       return
     }
-    const mode = data?.mode === 'fix' ? 'fix' : 'edit'
-    const prompt = typeof data?.prompt === 'string' ? data.prompt.trim() : ''
-    const error = data?.error || null
+    const mode = request.mode === 'fix' ? 'fix' : 'edit'
+    const prompt = request.prompt
+    const error = request.error || null
     if (mode === 'edit' && !prompt) {
       this.sendError(socket, {
         requestId,
@@ -263,10 +139,9 @@ export class ServerAIScripts extends System {
     try {
       const fileMap = await this.loadFileMap(scriptRoot.scriptFiles)
       const scriptFormat = scriptRoot.scriptFormat === 'legacy-body' ? 'legacy-body' : 'module'
-      const attachments = normalizeAiAttachments(data?.attachments)
+      const attachments = request.attachments
       const attachmentMap = await this.loadAttachmentMap(attachments, fileMap)
-      const systemPrompt = buildSystemPrompt({ entryPath, scriptFormat })
-      const userPrompt = buildUserPrompt({
+      const { systemPrompt, userPrompt } = buildUnifiedScriptPrompts({
         mode,
         prompt,
         error,
@@ -274,21 +149,14 @@ export class ServerAIScripts extends System {
         scriptFormat,
         fileMap,
         attachmentMap,
+        context: mode === 'fix' ? request.context : null,
       })
       const raw = await this.client.generate(systemPrompt, userPrompt)
-      const parsed = extractJson(raw)
-      const normalized = normalizeAiPatchSet(parsed)
+      const normalized = parseAiScriptResponse(raw, { validatePath: isValidScriptPath })
       if (!normalized) {
         throw new Error('invalid_ai_response')
       }
-      const files = new Map()
-      for (const file of normalized.files) {
-        if (!isValidScriptPath(file.path)) continue
-        if (!files.has(file.path)) {
-          files.set(file.path, file.content)
-        }
-      }
-      const outputFiles = Array.from(files, ([path, content]) => ({ path, content }))
+      const outputFiles = normalized.files
       if (!outputFiles.length) {
         throw new Error('empty_ai_patch')
       }
@@ -303,7 +171,6 @@ export class ServerAIScripts extends System {
         files: outputFiles,
       })
     } catch (err) {
-      console.log(err)
       console.error('[ai-scripts] request failed', err)
       this.sendError(socket, {
         requestId,
