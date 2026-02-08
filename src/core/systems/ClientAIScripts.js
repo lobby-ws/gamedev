@@ -140,7 +140,14 @@ export class ClientAIScripts extends System {
       payload.attachments = normalizedAttachments
     }
     if (targetApp?.data?.id) {
-      payload.appId = targetApp.data.id
+      const appId = targetApp.data.id
+      payload.appId = appId
+      if (mode === 'fix') {
+        const clientLogs = this.world.appLogs?.getEntries?.(appId)
+        if (Array.isArray(clientLogs) && clientLogs.length) {
+          payload.clientLogs = clientLogs
+        }
+      }
     }
     this.world.network.send('scriptAiRequest', payload)
     this.world.emit?.('script-ai-request', payload)
