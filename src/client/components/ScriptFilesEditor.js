@@ -1,170 +1,25 @@
 import { css } from '@firebolt-dev/css'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { parse as acornParse } from 'acorn'
-import { cls } from './cls'
 import { loadMonaco } from './monaco'
 import { hashFile } from '../../core/utils-client'
 import { isValidScriptPath } from '../../core/blueprintValidation'
 import { buildScriptGroups } from '../../core/extras/blueprintGroups'
+import { ScriptFilesAiOverlay } from './ScriptFilesEditor/ScriptFilesAiOverlay'
+import { ScriptFilesTree } from './ScriptFilesEditor/ScriptFilesTree'
+import {
+  SHARED_PREFIX,
+  buildFileTree,
+  getFileExtension,
+  getLanguageForPath,
+  getNewFileTemplate,
+  isSharedPath,
+  normalizeAiPatchSet,
+  normalizeScope,
+  resolveScriptFormatForSave,
+  toSharedPath,
+} from './ScriptFilesEditor/scriptFileUtils'
 
-const languageByExt = {
-  js: 'javascript',
-  mjs: 'javascript',
-  cjs: 'javascript',
-  jsx: 'javascript',
-  ts: 'typescript',
-  tsx: 'typescript',
-}
-
-const SHARED_PREFIX = '@shared/'
-const SHARED_ALIAS = 'shared/'
-
-const aiDebugEnabled =
-  (process?.env?.PUBLIC_DEBUG_AI_SCRIPT || globalThis?.env?.PUBLIC_DEBUG_AI_SCRIPT) === 'true'
-
-function isSharedPath(path) {
-  if (typeof path !== 'string') return false
-  return path.startsWith(SHARED_PREFIX) || path.startsWith(SHARED_ALIAS)
-}
-
-function toSharedPath(path) {
-  if (typeof path !== 'string') return null
-  if (path.startsWith(SHARED_PREFIX)) return path
-  if (path.startsWith(SHARED_ALIAS)) {
-    return `${SHARED_PREFIX}${path.slice(SHARED_ALIAS.length)}`
-  }
-  return `${SHARED_PREFIX}${path}`
-}
-
-function normalizeAiPatchSet(input) {
-  if (!input) return null
-  const patchSet = input
-  const files = Array.isArray(patchSet)
-    ? patchSet
-    : patchSet.files || patchSet.changes || patchSet.patches
-  if (!Array.isArray(files) || files.length === 0) return null
-  const normalizedFiles = []
-  for (const entry of files) {
-    if (!entry) continue
-    const path = entry.path || entry.relPath || entry.file
-    const content = entry.content ?? entry.text ?? entry.nextText ?? entry.code
-    if (!path || typeof content !== 'string') continue
-    normalizedFiles.push({ path, content })
-  }
-  if (!normalizedFiles.length) return null
-  const autoApply =
-    patchSet.autoApply === true || patchSet.autoCommit === true || patchSet.autoAccept === true
-  return {
-    id: typeof patchSet.id === 'string' ? patchSet.id : null,
-    summary:
-      typeof patchSet.summary === 'string'
-        ? patchSet.summary
-        : typeof patchSet.prompt === 'string'
-          ? patchSet.prompt
-          : '',
-    source: typeof patchSet.source === 'string' ? patchSet.source : '',
-    scriptRootId:
-      typeof patchSet.scriptRootId === 'string'
-        ? patchSet.scriptRootId
-        : typeof patchSet.blueprintId === 'string'
-          ? patchSet.blueprintId
-          : null,
-    autoPreview: patchSet.autoPreview !== false && !autoApply,
-    autoApply,
-    files: normalizedFiles,
-  }
-}
-
-function getFileExtension(path) {
-  if (typeof path !== 'string') return ''
-  const idx = path.lastIndexOf('.')
-  if (idx === -1 || idx === path.length - 1) return ''
-  return path.slice(idx + 1).toLowerCase()
-}
-
-function getLanguageForPath(path) {
-  const ext = getFileExtension(path)
-  return languageByExt[ext] || 'javascript'
-}
-
-function normalizeScope(value) {
-  if (typeof value !== 'string') return null
-  const trimmed = value.trim()
-  return trimmed || null
-}
-
-function getExportedName(node) {
-  if (!node) return null
-  if (node.type === 'Identifier') return node.name
-  if (node.type === 'Literal') return String(node.value)
-  return null
-}
-
-function entryHasDefaultExport(sourceText) {
-  if (typeof sourceText !== 'string' || !sourceText.trim()) return false
-  let ast = null
-  try {
-    ast = acornParse(sourceText, {
-      ecmaVersion: 'latest',
-      sourceType: 'module',
-      allowHashBang: true,
-    })
-  } catch {
-    // Fallback for parse failures (e.g. transient edits or TS syntax):
-    // detect common default-export forms to keep scriptFormat in sync.
-    return /\bexport\s+default\b/.test(sourceText) || /\bexport\s*\{[^}]*\bdefault\b[^}]*\}/.test(sourceText)
-  }
-  for (const node of ast.body) {
-    if (node.type === 'ExportDefaultDeclaration') return true
-    if (node.type === 'ExportNamedDeclaration' && Array.isArray(node.specifiers)) {
-      for (const spec of node.specifiers) {
-        if (spec.type !== 'ExportSpecifier') continue
-        const exported = getExportedName(spec.exported)
-        if (exported === 'default') return true
-      }
-    }
-  }
-  return false
-}
-
-function resolveScriptFormatForSave(scriptRoot, entryPath, fileStates, nextEntryText = null) {
-  const currentFormat = scriptRoot?.scriptFormat === 'legacy-body' ? 'legacy-body' : 'module'
-  if (!entryPath || !isValidScriptPath(entryPath)) return currentFormat
-  const entryState = fileStates?.get?.(entryPath)
-  const entryText =
-    typeof nextEntryText === 'string'
-      ? nextEntryText
-      : typeof entryState?.model?.getValue === 'function'
-      ? entryState.model.getValue()
-      : typeof entryState?.originalText === 'string'
-        ? entryState.originalText
-        : null
-  if (typeof entryText !== 'string') return currentFormat
-  return entryHasDefaultExport(entryText) ? 'module' : 'legacy-body'
-}
-
-function buildFileTree(paths) {
-  const root = { name: '', path: null, fullPath: '', children: new Map() }
-  for (const path of paths) {
-    const parts = path.split('/')
-    let node = root
-    let currentPath = ''
-    for (let idx = 0; idx < parts.length; idx += 1) {
-      const part = parts[idx]
-      currentPath = currentPath ? `${currentPath}/${part}` : part
-      let child = node.children.get(part)
-      if (!child) {
-        child = { name: part, path: null, fullPath: currentPath, children: new Map() }
-        node.children.set(part, child)
-      }
-      if (idx === parts.length - 1) {
-        child.path = path
-      }
-      node = child
-    }
-  }
-  return root
-}
+const aiDebugEnabled = (process?.env?.PUBLIC_DEBUG_AI_SCRIPT || globalThis?.env?.PUBLIC_DEBUG_AI_SCRIPT) === 'true'
 
 export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
   const mountRef = useRef(null)
@@ -208,19 +63,13 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
   const rootId = scriptRoot?.id || ''
   const rootVersion = Number.isFinite(scriptRoot?.version) ? scriptRoot.version : 0
   const canMoveToShared =
-    !!selectedPath &&
-    selectedPath !== entryPath &&
-    isValidScriptPath(selectedPath) &&
-    !isSharedPath(selectedPath)
+    !!selectedPath && selectedPath !== entryPath && isValidScriptPath(selectedPath) && !isSharedPath(selectedPath)
   const canRenameSelected = !!selectedPath && isValidScriptPath(selectedPath)
-  const canDeleteSelected =
-    !!selectedPath && selectedPath !== entryPath && isValidScriptPath(selectedPath)
+  const canDeleteSelected = !!selectedPath && selectedPath !== entryPath && isValidScriptPath(selectedPath)
 
   const { validPaths, invalidPaths } = useMemo(() => {
     const basePaths =
-      scriptFiles && typeof scriptFiles === 'object' && !Array.isArray(scriptFiles)
-        ? Object.keys(scriptFiles)
-        : []
+      scriptFiles && typeof scriptFiles === 'object' && !Array.isArray(scriptFiles) ? Object.keys(scriptFiles) : []
     const combined = new Set(basePaths)
     for (const path of extraPaths) {
       combined.add(path)
@@ -384,7 +233,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
   )
 
   const ensureFileState = useCallback(
-    async (path, { allowMissing } = {}) => {
+    async (path, { allowMissing, useTemplate } = {}) => {
       if (!path || !scriptRoot || !scriptFiles) return null
       if (!isValidScriptPath(path)) {
         throw new Error('invalid_path')
@@ -401,15 +250,16 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
           throw new Error('missing_script_file')
         }
         const uri = monaco.Uri.parse(`inmemory://module/${rootId}/${path}`)
+        const template = useTemplate ? getNewFileTemplate() : ''
         let model = monaco.editor.getModel(uri)
         if (!model) {
-          model = monaco.editor.createModel('', getLanguageForPath(path), uri)
-        } else if (model.getValue() !== '') {
-          model.setValue('')
+          model = monaco.editor.createModel(template, getLanguageForPath(path), uri)
+        } else if (model.getValue() !== template) {
+          model.setValue(template)
         }
         const state = {
           model,
-          originalText: '',
+          originalText: template,
           dirty: false,
           version: rootVersion,
           assetUrl: null,
@@ -587,7 +437,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       return
     }
     try {
-      const state = await ensureFileState(trimmed, { allowMissing: true })
+      const state = await ensureFileState(trimmed, { allowMissing: true, useTemplate: true })
       if (!state) throw new Error('new_file_failed')
       setSelectedPath(trimmed)
       setNewFileOpen(false)
@@ -1173,11 +1023,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       originalModel = monaco.editor.getModel(uri)
       if (!originalModel) {
         try {
-          originalModel = monaco.editor.createModel(
-            entry.originalText,
-            getLanguageForPath(aiPreviewPath),
-            uri
-          )
+          originalModel = monaco.editor.createModel(entry.originalText, getLanguageForPath(aiPreviewPath), uri)
         } catch (err) {
           originalModel = monaco.editor.getModel(uri)
           if (!originalModel) throw err
@@ -1240,8 +1086,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       return { mode: 'group', group: null, targetBlueprint }
     }
     const groups = buildScriptGroups(world.blueprints.items)
-    const group =
-      (targetBlueprint?.id && groups.byId.get(targetBlueprint.id)) || groups.byId.get(scriptRoot.id) || null
+    const group = (targetBlueprint?.id && groups.byId.get(targetBlueprint.id)) || groups.byId.get(scriptRoot.id) || null
     const groupSize = group?.items?.length || 0
     if (groupSize <= 1 || !world.ui?.confirm) {
       return { mode: 'group', group, targetBlueprint }
@@ -1278,10 +1123,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         const app = world.ui?.state?.app
         if (app) {
           app.modify({ blueprint: forked.id })
-          world.admin.entityModify(
-            { id: app.data.id, blueprint: forked.id },
-            { ignoreNetworkId: world.network.id }
-          )
+          world.admin.entityModify({ id: app.data.id, blueprint: forked.id }, { ignoreNetworkId: world.network.id })
         }
         return { mode: 'fork', nextVersion: null }
       }
@@ -1509,9 +1351,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     const state = fileStatesRef.current.get(path)
     const ok = await world.ui.confirm({
       title: 'Delete file?',
-      message: state?.dirty
-        ? `Delete ${path}? Unsaved edits will be discarded.`
-        : `Delete ${path}?`,
+      message: state?.dirty ? `Delete ${path}? Unsaved edits will be discarded.` : `Delete ${path}?`,
       confirmText: 'Delete',
       cancelText: 'Cancel',
     })
@@ -1643,8 +1483,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       const assetExt = ext || 'js'
       const baseName = path.split('/').pop() || 'module'
       const filename = baseName.includes('.') ? baseName : `${baseName}.${assetExt}`
-      const mime =
-        assetExt === 'ts' || assetExt === 'tsx' ? 'text/typescript' : 'text/javascript'
+      const mime = assetExt === 'ts' || assetExt === 'tsx' ? 'text/typescript' : 'text/javascript'
       const file = new File([text], filename, { type: mime })
       const hash = await hashFile(file)
       const assetFilename = `${hash}.${assetExt}`
@@ -1680,10 +1519,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         const app = world.ui?.state?.app
         if (app) {
           app.modify({ blueprint: forked.id })
-          world.admin.entityModify(
-            { id: app.data.id, blueprint: forked.id },
-            { ignoreNetworkId: world.network.id }
-          )
+          world.admin.entityModify({ id: app.data.id, blueprint: forked.id }, { ignoreNetworkId: world.network.id })
         }
         world.emit('toast', 'Script forked')
         return
@@ -1825,8 +1661,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
           const assetExt = ext || 'js'
           const baseName = path.split('/').pop() || 'module'
           const filename = baseName.includes('.') ? baseName : `${baseName}.${assetExt}`
-          const mime =
-            assetExt === 'ts' || assetExt === 'tsx' ? 'text/typescript' : 'text/javascript'
+          const mime = assetExt === 'ts' || assetExt === 'tsx' ? 'text/typescript' : 'text/javascript'
           const file = new File([text], filename, { type: mime })
           const hash = await hashFile(file)
           const assetFilename = `${hash}.${assetExt}`
@@ -1866,10 +1701,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
           const app = world.ui?.state?.app
           if (app) {
             app.modify({ blueprint: forked.id })
-            world.admin.entityModify(
-              { id: app.data.id, blueprint: forked.id },
-              { ignoreNetworkId: world.network.id }
-            )
+            world.admin.entityModify({ id: app.data.id, blueprint: forked.id }, { ignoreNetworkId: world.network.id })
           }
           world.emit('toast', 'Script forked')
           return true
@@ -1960,45 +1792,58 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         }
       }
     },
-    [scriptRoot, scriptFiles, entryPath, rootVersion, world, saving, resolveScriptUpdateMode, getStateStaleReason, setServerConflict]
+    [
+      scriptRoot,
+      scriptFiles,
+      entryPath,
+      rootVersion,
+      world,
+      saving,
+      resolveScriptUpdateMode,
+      getStateStaleReason,
+      setServerConflict,
+    ]
   )
 
   saveCurrentRef.current = saveCurrent
   saveAllRef.current = saveAll
 
-  const commitAiProposal = useCallback(async (options = {}) => {
-    if (!aiProposal?.files?.length) return
-    if (saving) return
-    const skipConfirm = options.skipConfirm === true
-    const aiPaths = new Set(aiProposal.files.map(file => file.path))
-    const otherDirty = []
-    for (const [path, state] of fileStatesRef.current.entries()) {
-      if (state?.dirty && !aiPaths.has(path)) {
-        otherDirty.push(path)
+  const commitAiProposal = useCallback(
+    async (options = {}) => {
+      if (!aiProposal?.files?.length) return
+      if (saving) return
+      const skipConfirm = options.skipConfirm === true
+      const aiPaths = new Set(aiProposal.files.map(file => file.path))
+      const otherDirty = []
+      for (const [path, state] of fileStatesRef.current.entries()) {
+        if (state?.dirty && !aiPaths.has(path)) {
+          otherDirty.push(path)
+        }
       }
-    }
-    if (otherDirty.length && !skipConfirm) {
-      const ok = await world.ui.confirm({
-        title: 'Apply AI changes only?',
-        message: `You have ${otherDirty.length} other unsaved file${otherDirty.length === 1 ? '' : 's'}. Apply AI changes without them?`,
-        confirmText: 'Apply',
-        cancelText: 'Cancel',
+      if (otherDirty.length && !skipConfirm) {
+        const ok = await world.ui.confirm({
+          title: 'Apply AI changes only?',
+          message: `You have ${otherDirty.length} other unsaved file${otherDirty.length === 1 ? '' : 's'}. Apply AI changes without them?`,
+          confirmText: 'Apply',
+          cancelText: 'Cancel',
+        })
+        if (!ok) return
+      }
+      emitAiTelemetry('commit_start', {
+        fileCount: aiPaths.size,
+        paths: Array.from(aiPaths),
       })
-      if (!ok) return
-    }
-    emitAiTelemetry('commit_start', {
-      fileCount: aiPaths.size,
-      paths: Array.from(aiPaths),
-    })
-    const ok = await saveAll({ paths: aiPaths })
-    if (!ok) {
-      emitAiTelemetry('commit_failed')
-      return
-    }
-    clearAiProposal()
-    world.emit('toast', 'AI changes applied')
-    emitAiTelemetry('commit_success', { fileCount: aiPaths.size })
-  }, [aiProposal, saving, world, saveAll, clearAiProposal, emitAiTelemetry])
+      const ok = await saveAll({ paths: aiPaths })
+      if (!ok) {
+        emitAiTelemetry('commit_failed')
+        return
+      }
+      clearAiProposal()
+      world.emit('toast', 'AI changes applied')
+      emitAiTelemetry('commit_success', { fileCount: aiPaths.size })
+    },
+    [aiProposal, saving, world, saveAll, clearAiProposal, emitAiTelemetry]
+  )
 
   const discardAiProposal = useCallback(async () => {
     if (!aiProposal?.files?.length) return
@@ -2034,15 +1879,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     clearAiProposal()
     world.emit('toast', 'AI changes discarded')
     emitAiTelemetry('proposal_discarded', { fileCount: aiProposal.files.length })
-  }, [
-    aiProposal,
-    saving,
-    world,
-    clearAiProposal,
-    emitAiTelemetry,
-    selectedPath,
-    validPaths,
-  ])
+  }, [aiProposal, saving, world, clearAiProposal, emitAiTelemetry, selectedPath, validPaths])
 
   useEffect(() => {
     if (!world.ui) return
@@ -2060,15 +1897,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         world.ui.scriptEditorAI = null
       }
     }
-  }, [
-    world,
-    applyAiPatchSet,
-    openAiPreview,
-    closeAiPreview,
-    toggleAiPreview,
-    commitAiProposal,
-    discardAiProposal,
-  ])
+  }, [world, applyAiPatchSet, openAiPreview, closeAiPreview, toggleAiPreview, commitAiProposal, discardAiProposal])
 
   const retrySave = useCallback(async () => {
     const path = currentPathRef.current
@@ -2440,241 +2269,86 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         }
       `}
     >
-      <div className='script-files-tree noscrollbar'>
-        <div className='script-files-heading-row'>
-          <div className='script-files-heading'>Files</div>
-          <div className='script-files-actions'>
-            <button
-              className='script-files-add'
-              type='button'
-              disabled={!editorReady}
-              onClick={() => {
-                if (!newFileOpen) {
-                  openNewFile()
-                }
-              }}
-            >
-              New
-            </button>
-            <button
-              className='script-files-add'
-              type='button'
-              disabled={!editorReady}
-              onClick={openNewSharedFile}
-            >
-              Shared
-            </button>
-          </div>
-        </div>
-        {newFileOpen && (
-          <div className='script-files-new'>
-            <input
-              ref={newFileInputRef}
-              value={newFilePath}
-              placeholder='new-file.js'
-              onChange={event => {
-                setNewFilePath(event.target.value)
-                if (newFileError) {
-                  setNewFileError(null)
-                }
-              }}
-              onKeyDown={event => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  createNewFile()
-                } else if (event.key === 'Escape') {
-                  event.preventDefault()
-                  cancelNewFile()
-                }
-              }}
-            />
-            <div className='script-files-new-actions'>
-              <button
-                className='script-files-new-btn primary'
-                type='button'
-                disabled={!newFilePath.trim()}
-                onClick={createNewFile}
-              >
-                Add
-              </button>
-              <button className='script-files-new-btn' type='button' onClick={cancelNewFile}>
-                Cancel
-              </button>
-            </div>
-            {newFileError && <div className='script-files-new-error'>{newFileError}</div>}
-          </div>
-        )}
-        {renameFileOpen && (
-          <div className='script-files-new'>
-            <input
-              ref={renameFileInputRef}
-              value={renameFilePath}
-              placeholder='helpers/util.js'
-              onChange={event => {
-                setRenameFilePath(event.target.value)
-                if (renameFileError) {
-                  setRenameFileError(null)
-                }
-              }}
-              onKeyDown={event => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  renameSelectedFile()
-                } else if (event.key === 'Escape') {
-                  event.preventDefault()
-                  cancelRenameFile()
-                }
-              }}
-            />
-            <div className='script-files-new-actions'>
-              <button
-                className='script-files-new-btn primary'
-                type='button'
-                disabled={!renameFilePath.trim()}
-                onClick={renameSelectedFile}
-              >
-                Rename
-              </button>
-              <button className='script-files-new-btn' type='button' onClick={cancelRenameFile}>
-                Cancel
-              </button>
-            </div>
-            {renameFileError && <div className='script-files-new-error'>{renameFileError}</div>}
-          </div>
-        )}
-        {entryPath && <div className='script-files-entry'>Entry: {entryPath}</div>}
-        {canRenameSelected && (
-          <button
-            className='script-files-move'
-            type='button'
-            disabled={!editorReady || saving}
-            onClick={openRenameFile}
-          >
-            Rename
-          </button>
-        )}
-        {canDeleteSelected && (
-          <button
-            className='script-files-move danger'
-            type='button'
-            disabled={!editorReady || saving}
-            onClick={deleteSelectedFile}
-          >
-            Delete
-          </button>
-        )}
-        {canMoveToShared && (
-          <button
-            className='script-files-move'
-            type='button'
-            disabled={!editorReady || saving}
-            onClick={moveSelectedToShared}
-          >
-            Move to shared
-          </button>
-        )}
-        {validPaths.length === 0 && <div className='script-files-entry'>No script files.</div>}
-        {renderTree(tree, {
-          selectedPath,
-          entryPath,
-          onSelect: path => setSelectedPath(path),
-          dirtyPaths: fileStatesRef.current,
-        })}
-        {invalidPaths.length > 0 && (
-          <div className='script-files-warning'>
-            Some script files have invalid paths and are hidden.
-          </div>
-        )}
-      </div>
+      <ScriptFilesTree
+        tree={tree}
+        validPaths={validPaths}
+        invalidPaths={invalidPaths}
+        selectedPath={selectedPath}
+        entryPath={entryPath}
+        dirtyPaths={fileStatesRef.current}
+        newFileOpen={newFileOpen}
+        newFilePath={newFilePath}
+        newFileError={newFileError}
+        newFileInputRef={newFileInputRef}
+        onNewFileChange={event => {
+          setNewFilePath(event.target.value)
+          if (newFileError) {
+            setNewFileError(null)
+          }
+        }}
+        onNewFileKeyDown={event => {
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            createNewFile()
+          } else if (event.key === 'Escape') {
+            event.preventDefault()
+            cancelNewFile()
+          }
+        }}
+        onCreateNewFile={createNewFile}
+        onCancelNewFile={cancelNewFile}
+        renameFileOpen={renameFileOpen}
+        renameFilePath={renameFilePath}
+        renameFileError={renameFileError}
+        renameFileInputRef={renameFileInputRef}
+        onRenameFileChange={event => {
+          setRenameFilePath(event.target.value)
+          if (renameFileError) {
+            setRenameFileError(null)
+          }
+        }}
+        onRenameFileKeyDown={event => {
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            renameSelectedFile()
+          } else if (event.key === 'Escape') {
+            event.preventDefault()
+            cancelRenameFile()
+          }
+        }}
+        onRenameSelectedFile={renameSelectedFile}
+        onCancelRenameFile={cancelRenameFile}
+        onOpenNewFile={openNewFile}
+        onOpenNewSharedFile={openNewSharedFile}
+        onOpenRenameFile={openRenameFile}
+        onDeleteSelectedFile={deleteSelectedFile}
+        onMoveSelectedToShared={moveSelectedToShared}
+        onSelectPath={path => setSelectedPath(path)}
+        editorReady={editorReady}
+        saving={saving}
+        canRenameSelected={canRenameSelected}
+        canDeleteSelected={canDeleteSelected}
+        canMoveToShared={canMoveToShared}
+      />
       <div className='script-files-editor'>
         {loading && <div className='script-files-loading'>Loading...</div>}
         <div className='script-files-editor-mount' ref={mountRef} />
       </div>
       {aiPreviewOpen && aiProposal && (
-        <div className='script-files-ai-overlay'>
-          <div className='script-files-ai-header'>
-            <div className='script-files-ai-title'>AI Review</div>
-            <div className='script-files-ai-summary'>
-              {aiProposal.summary ||
-                `${aiProposal.files.length} file${aiProposal.files.length === 1 ? '' : 's'} changed`}
-            </div>
-            <div className='script-files-ai-actions'>
-              <button className='script-files-ai-action' type='button' onClick={closeAiPreview}>
-                Close
-              </button>
-              <button
-                className='script-files-ai-action'
-                type='button'
-                disabled={saving}
-                onClick={() => commitAiProposal()}
-              >
-                {saving ? 'Applying...' : 'Apply'}
-              </button>
-              <button
-                className='script-files-ai-action'
-                type='button'
-                disabled={saving}
-                onClick={() => discardAiProposal()}
-              >
-                Discard
-              </button>
-            </div>
-          </div>
-          <div className='script-files-ai-body'>
-            <div className='script-files-ai-list noscrollbar'>
-              {aiProposal.files.map(file => (
-                <div
-                  key={file.path}
-                  className={cls('script-files-ai-item', { selected: file.path === aiPreviewPath })}
-                  onClick={() => {
-                    setAiPreviewPath(file.path)
-                    setSelectedPath(file.path)
-                  }}
-                >
-                  {file.path}
-                </div>
-              ))}
-            </div>
-            <div className='script-files-ai-diff'>
-              <div className='script-files-ai-diff-mount' ref={diffMountRef} />
-            </div>
-          </div>
-        </div>
+        <ScriptFilesAiOverlay
+          aiProposal={aiProposal}
+          aiPreviewPath={aiPreviewPath}
+          saving={saving}
+          onClose={closeAiPreview}
+          onCommit={() => commitAiProposal()}
+          onDiscard={() => discardAiProposal()}
+          onSelectFile={path => {
+            setAiPreviewPath(path)
+            setSelectedPath(path)
+          }}
+          diffMountRef={diffMountRef}
+        />
       )}
     </div>
   )
-}
-
-function renderTree(node, { selectedPath, entryPath, onSelect, dirtyPaths }, depth = 0) {
-  if (!node?.children) return null
-  const entries = Array.from(node.children.values()).sort((a, b) => {
-    const aIsFile = !!a.path && (!a.children || a.children.size === 0)
-    const bIsFile = !!b.path && (!b.children || b.children.size === 0)
-    if (aIsFile !== bIsFile) return aIsFile ? 1 : -1
-    return a.name.localeCompare(b.name)
-  })
-  return entries.map(child => {
-    const isFile = !!child.path
-    const isSelected = isFile && child.path === selectedPath
-    const isDirty = isFile && dirtyPaths.get(child.path)?.dirty
-    return (
-      <div key={child.fullPath}>
-        <div
-          className={cls('script-file', {
-            folder: !isFile,
-            selected: isSelected,
-          })}
-          style={{ paddingLeft: `${depth * 0.8}rem` }}
-          onClick={() => {
-            if (isFile) onSelect(child.path)
-          }}
-        >
-          <span className='script-file-name'>{child.name}</span>
-          {isFile && entryPath === child.path && <span className='script-file-entry-tag'>entry</span>}
-          {isFile && isDirty && <span className='script-file-dirty'>*</span>}
-        </div>
-        {child.children && child.children.size > 0 && renderTree(child, { selectedPath, entryPath, onSelect, dirtyPaths }, depth + 1)}
-      </div>
-    )
-  })
 }
