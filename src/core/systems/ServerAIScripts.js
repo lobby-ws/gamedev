@@ -218,6 +218,11 @@ export class ServerAIScripts extends System {
     this.enabled = !!this.client
   }
 
+  getRecentServerLogs(appId, limit = 20) {
+    if (typeof this.world.scripts?.getRecentServerLogs !== 'function') return []
+    return this.world.scripts.getRecentServerLogs(appId, limit)
+  }
+
   handleRequest = async (socket, data = {}) => {
     const requestId = data?.requestId || null
     let scriptRootId = typeof data?.scriptRootId === 'string' ? data.scriptRootId : null

@@ -8,6 +8,7 @@ import { ServerEnvironment } from './systems/ServerEnvironment'
 import { ServerMonitor } from './systems/ServerMonitor'
 import { ServerAIScripts } from './systems/ServerAIScripts'
 import { ServerAI } from './systems/ServerAI'
+import { ServerAppLogs } from './systems/ServerAppLogs'
 
 export function createServerWorld() {
   const world = new World()
@@ -15,6 +16,7 @@ export function createServerWorld() {
   world.register('livekit', ServerLiveKit)
   world.register('network', ServerNetwork)
   world.register('loader', ServerLoader)
+  world.register('serverAppLogs', ServerAppLogs)
   world.register('ai', ServerAI)
   world.register('aiScripts', ServerAIScripts)
   world.register('environment', ServerEnvironment)

@@ -33,13 +33,14 @@ export class Scripts extends System {
   constructor(world) {
     super(world)
     this.moduleSourceCache = new Map()
+    this.appContextStack = []
     this.endowments = {
       console: {
-        log: (...args) => console.log(...args),
-        warn: (...args) => console.warn(...args),
-        error: (...args) => console.error(...args),
-        time: (...args) => console.time(...args),
-        timeEnd: (...args) => console.timeEnd(...args),
+        log: (...args) => this._handleConsoleCall('log', args),
+        warn: (...args) => this._handleConsoleCall('warn', args),
+        error: (...args) => this._handleConsoleCall('error', args),
+        time: (...args) => this._handleConsoleTime(args),
+        timeEnd: (...args) => this._handleConsoleTimeEnd(args),
       },
       Date: {
         now: () => Date.now(),
@@ -71,6 +72,87 @@ export class Scripts extends System {
       // pause: () => this.world.pause(),
     }
     this.compartment = new Compartment(this.endowments)
+  }
+
+  withAppContext(appId, fn) {
+    if (typeof fn !== 'function') return undefined
+    if (typeof appId !== 'string' || !appId) return fn()
+    this.appContextStack.push(appId)
+    try {
+      return fn()
+    } finally {
+      this.appContextStack.pop()
+    }
+  }
+
+  getRecentServerLogs(appId, limit = 20) {
+    return this.world.serverAppLogs?.getRecent?.(appId, limit) || []
+  }
+
+  _getCurrentAppId() {
+    if (!this.appContextStack.length) return null
+    return this.appContextStack[this.appContextStack.length - 1]
+  }
+
+  _recordScriptLog(level, args, extras = {}) {
+    const appId = this._getCurrentAppId()
+    if (!appId) return
+    const record = {
+      timestamp: new Date().toISOString(),
+      level,
+      args,
+      ...extras,
+    }
+    try {
+      this.world.serverAppLogs?.record?.(appId, record)
+    } catch (err) {
+      // ignore logging errors to avoid affecting script execution
+    }
+  }
+
+  _normalizeTimerLabel(args) {
+    const label = Array.isArray(args) && args.length ? args[0] : undefined
+    if (typeof label === 'string') {
+      const trimmed = label.trim()
+      return trimmed || 'default'
+    }
+    if (typeof label === 'undefined' || label === null) {
+      return 'default'
+    }
+    const text = String(label).trim()
+    return text || 'default'
+  }
+
+  _handleConsoleCall(level, args) {
+    this._recordScriptLog(level, args)
+    if (level === 'warn') return console.warn(...args)
+    if (level === 'error') return console.error(...args)
+    return console.log(...args)
+  }
+
+  _handleConsoleTime(args) {
+    const appId = this._getCurrentAppId()
+    const label = this._normalizeTimerLabel(args)
+    if (appId) {
+      this.world.serverAppLogs?.startTimer?.(appId, label)
+    }
+    this._recordScriptLog('time', args, {
+      label,
+      message: label,
+    })
+    return console.time(...args)
+  }
+
+  _handleConsoleTimeEnd(args) {
+    const appId = this._getCurrentAppId()
+    const label = this._normalizeTimerLabel(args)
+    const durationMs = appId ? this.world.serverAppLogs?.endTimer?.(appId, label) ?? null : null
+    this._recordScriptLog('timeEnd', args, {
+      label,
+      durationMs,
+      message: Number.isFinite(durationMs) ? `${label}: ${Math.round(durationMs)}ms` : label,
+    })
+    return console.timeEnd(...args)
   }
 
   evaluate(code) {
