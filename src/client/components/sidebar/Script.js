@@ -10,7 +10,6 @@ import {
 import { cls } from '../cls'
 import { theme } from '../theme'
 import { isArray } from 'lodash-es'
-import { ScriptEditor } from '../ScriptEditor'
 import { ScriptFilesEditor } from '../ScriptFilesEditor'
 import { buildScriptGroups, getScriptGroupMain } from '../../../core/extras/blueprintGroups'
 import { storage } from '../../../core/storage'
@@ -233,7 +232,7 @@ export function Script({ world, hidden }) {
     const apiUrl = world.network?.apiUrl
     if (!apiUrl) {
       setAiDocsIndex([])
-      return () => {}
+      return () => { }
     }
     const loadDocs = async () => {
       try {
@@ -1040,8 +1039,7 @@ export function Script({ world, hidden }) {
                   <div className='script-ai-proposal-title'>AI proposal ready</div>
                   <div className='script-ai-proposal-summary'>
                     {handle?.ai?.summary ||
-                      `${handle?.ai?.fileCount || 0} file${
-                        handle?.ai?.fileCount === 1 ? '' : 's'
+                      `${handle?.ai?.fileCount || 0} file${handle?.ai?.fileCount === 1 ? '' : 's'
                       } changed`}
                   </div>
                   <div className='script-ai-proposal-meta'>
@@ -1229,11 +1227,7 @@ export function Script({ world, hidden }) {
           )}
         </div>
       )}
-      {moduleRoot ? (
-        <ScriptFilesEditor scriptRoot={moduleRoot} world={world} onHandle={setHandle} />
-      ) : (
-        <ScriptEditor key={app.data.id} app={app} onHandle={setHandle} />
-      )}
+      <ScriptFilesEditor scriptRoot={moduleRoot} world={world} onHandle={setHandle} />
       <div className='script-resizer' ref={resizeRef} />
     </div>
   )

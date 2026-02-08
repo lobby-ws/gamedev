@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url'
 import { spawn } from 'child_process'
 import { customAlphabet } from 'nanoid'
 
-import { runAppCommand, runScriptCommand } from '../app-server/commands.js'
+import { runAppCommand, runScriptCommand, runSyncCommand } from '../app-server/commands.js'
 import { DirectAppServer } from '../app-server/direct.js'
 import { scaffoldBaseProject, scaffoldBuiltins, updateBuiltins, writeManifest } from '../app-server/scaffold.js'
 import { applyTargetEnv, parseTargetArgs, resolveTarget } from '../app-server/targets.js'
@@ -568,9 +568,6 @@ async function appServerCommand(args = []) {
   const artifacts = resolveServerPaths({ needsWorldServer: false })
   if (!artifacts) return 1
 
-  const appProjectDir = path.join(projectDir, 'project')
-  fs.mkdirSync(appProjectDir, { recursive: true })
-
   if (localMode) {
     console.log(`World: Local world detected, waiting for server (${env.WORLD_URL})`)
     const ready = await waitForWorldReady(env.WORLD_URL)
@@ -589,7 +586,7 @@ async function appServerCommand(args = []) {
   console.log('Sync: Starting app-server sync')
   children.push(
     spawnProcess('app server', process.execPath, [artifacts.appServerPath], {
-      cwd: appProjectDir,
+      cwd: projectDir,
       env: envBase,
     })
   )
@@ -799,6 +796,32 @@ async function scriptsCommand(args) {
   return runScriptCommand({ command, args: commandArgs, rootDir: projectDir, helpPrefix: 'gamedev scripts' })
 }
 
+async function syncCommand(args) {
+  if (!args.length || ['help', '--help', '-h'].includes(args[0])) {
+    await runSyncCommand({ command: 'help', args: [], rootDir: projectDir, helpPrefix: 'gamedev sync' })
+    return 0
+  }
+
+  let command = args[0]
+  let commandArgs = args.slice(1)
+  try {
+    const parsed = parseTargetArgs(args)
+    command = parsed.args[0]
+    commandArgs = parsed.args.slice(1)
+    if (parsed.target) {
+      commandArgs.push('--target', parsed.target)
+    }
+  } catch (err) {
+    console.error(`Error: ${err?.message || err}`)
+    return 1
+  }
+
+  const env = readDotEnv(envPath)
+  if (env) applyEnvToProcess(env)
+
+  return runSyncCommand({ command, args: commandArgs, rootDir: projectDir, helpPrefix: 'gamedev sync' })
+}
+
 async function connectAdminServer({ worldUrl, adminCode, rootDir }) {
   let code = adminCode || process.env.ADMIN_CODE || null
   let server = new DirectAppServer({ worldUrl, adminCode: code, rootDir })
@@ -881,12 +904,13 @@ Commands:
   app-server                Start app-server sync only (no world server)
   apps <command>            Manage apps (create, list, deploy, update, rollback, status)
   scripts <command>         Script migration helpers (migrate)
+  sync <command>            Sync reconciliation helpers (status, conflicts, resolve)
   world export              Export world.json + apps/assets from the world (module sources included; use --include-built-scripts for legacy apps)
   world import              Import local apps + world.json into the world
   help                      Show this help
 
 Options:
-  --target <name>           Use .lobby/targets.json entry (applies to dev/app-server/apps)
+  --target <name>           Use .lobby/targets.json entry (applies to dev/app-server/apps/sync)
 `)
 }
 
@@ -913,6 +937,9 @@ async function main() {
       break
     case 'scripts':
       result = await scriptsCommand(args)
+      break
+    case 'sync':
+      result = await syncCommand(args)
       break
     case 'world':
       result = await worldCommand(args)

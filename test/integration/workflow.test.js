@@ -26,6 +26,7 @@ async function withWorldServer(fn) {
 function buildBlueprintPayload({ id, name, script }) {
   return {
     id,
+    scope: id,
     version: 0,
     name,
     script,

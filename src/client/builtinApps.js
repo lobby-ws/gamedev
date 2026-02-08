@@ -6,9 +6,9 @@ export const BUILTIN_APP_TEMPLATES = [
     },
     model: 'asset://Model.glb',
     script: 'asset://Model.js',
-    scriptEntry: 'Model.js',
+    scriptEntry: 'index.js',
     scriptFiles: {
-      'Model.js': 'asset://Model.js',
+      'index.js': 'asset://Model.js',
     },
     scriptFormat: 'module',
     props: {
@@ -29,9 +29,9 @@ export const BUILTIN_APP_TEMPLATES = [
     },
     model: 'asset://Image.glb',
     script: 'asset://Image.js',
-    scriptEntry: 'Image.js',
+    scriptEntry: 'index.js',
     scriptFiles: {
-      'Image.js': 'asset://Image.js',
+      'index.js': 'asset://Image.js',
     },
     scriptFormat: 'module',
     props: {
@@ -62,9 +62,9 @@ export const BUILTIN_APP_TEMPLATES = [
     },
     model: 'asset://Video.glb',
     script: 'asset://Video.js',
-    scriptEntry: 'Video.js',
+    scriptEntry: 'index.js',
     scriptFiles: {
-      'Video.js': 'asset://Video.js',
+      'index.js': 'asset://Video.js',
     },
     scriptFormat: 'module',
     props: {
@@ -97,9 +97,9 @@ export const BUILTIN_APP_TEMPLATES = [
     },
     model: 'asset://Text.glb',
     script: 'asset://Text.js',
-    scriptEntry: 'Text.js',
+    scriptEntry: 'index.js',
     scriptFiles: {
-      'Text.js': 'asset://Text.js',
+      'index.js': 'asset://Text.js',
     },
     scriptFormat: 'module',
     props: {
@@ -128,9 +128,9 @@ export const BUILTIN_APP_TEMPLATES = [
     },
     model: 'asset://Webview.glb',
     script: 'asset://Webview.js',
-    scriptEntry: 'Webview.js',
+    scriptEntry: 'index.js',
     scriptFiles: {
-      'Webview.js': 'asset://Webview.js',
+      'index.js': 'asset://Webview.js',
     },
     scriptFormat: 'module',
     props: {

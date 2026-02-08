@@ -11,6 +11,7 @@ const aiDocs = loadAiDocs()
 const docsRoot = resolveDocsRoot()
 const fencePattern = /^```(?:\w+)?\s*([\s\S]*?)\s*```$/
 const DEFAULT_ENTRY = 'index.js'
+const BLUEPRINT_NAME_MAX_LENGTH = 80
 
 function hasScriptFiles(blueprint) {
   return blueprint?.scriptFiles && typeof blueprint.scriptFiles === 'object' && !Array.isArray(blueprint.scriptFiles)
@@ -154,6 +155,59 @@ function buildClassifySystemPrompt() {
 
 function buildClassifyUserPrompt(prompt) {
   return `Please classify the following prompt:\n\n"${prompt}"`
+}
+
+function stripControlChars(value) {
+  let output = ''
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i)
+    if (code >= 32) output += value[i]
+  }
+  return output
+}
+
+function sanitizeBlueprintIdFromName(name) {
+  if (typeof name !== 'string') return ''
+  let safe = name.trim()
+  if (!safe) return ''
+  safe = stripControlChars(safe)
+  safe = safe.replace(/[<>:"/\\|?*]/g, '')
+  safe = safe.replace(/[^a-zA-Z0-9._ -]+/g, '-')
+  safe = safe.replace(/\s+/g, ' ').trim()
+  safe = safe.replace(/[. ]+$/g, '').replace(/^[. ]+/g, '')
+  safe = safe.replace(/__+/g, '_')
+  if (safe.length > BLUEPRINT_NAME_MAX_LENGTH) {
+    safe = safe.slice(0, BLUEPRINT_NAME_MAX_LENGTH).trim()
+  }
+  return safe || ''
+}
+
+function resolveUniqueBlueprintId(world, preferredId, currentId = null) {
+  const base = sanitizeBlueprintIdFromName(preferredId)
+  if (!base) return null
+  if (base !== '$scene') {
+    const existing = world?.blueprints?.get(base)
+    if (!existing || base === currentId) {
+      return base
+    }
+  }
+  for (let i = 2; i < 10000; i += 1) {
+    const candidate = `${base}_${i}`
+    if (candidate === '$scene') continue
+    const existing = world?.blueprints?.get(candidate)
+    if (!existing || candidate === currentId) {
+      return candidate
+    }
+  }
+  return null
+}
+
+function getRenamedCreatedAt(currentValue) {
+  const ts = Date.parse(currentValue || '')
+  if (Number.isFinite(ts)) {
+    return new Date(Math.max(0, ts - 1)).toISOString()
+  }
+  return new Date(Date.now() - 1).toISOString()
 }
 
 function sleep(ms) {
@@ -312,6 +366,62 @@ export class ServerAI extends System {
     return change
   }
 
+  async renameBlueprintFromClassifiedName(currentId, nextName) {
+    const current = this.world.blueprints.get(currentId)
+    if (!current) return false
+
+    const nextId = resolveUniqueBlueprintId(this.world, nextName, currentId)
+    if (!nextId || nextId === currentId) {
+      await this.applyBlueprintChange(currentId, { name: nextName })
+      return true
+    }
+
+    const renamedBlueprint = {
+      ...current,
+      id: nextId,
+      name: nextName,
+      createdAt: getRenamedCreatedAt(current.createdAt),
+    }
+    const addResult = this.world.network.applyBlueprintAdded(renamedBlueprint)
+    if (!addResult?.ok) {
+      return false
+    }
+
+    const entityIds = []
+    for (const entity of this.world.entities.items.values()) {
+      if (!entity?.isApp) continue
+      if (entity.data.blueprint !== currentId) continue
+      entityIds.push(entity.data.id)
+    }
+    for (const entityId of entityIds) {
+      const result = await this.world.network.applyEntityModified({ id: entityId, blueprint: nextId })
+      if (!result?.ok) {
+        console.warn('[ai-create] failed to repoint entity', entityId, result?.error || 'unknown_error')
+      }
+    }
+
+    const scriptRefIds = []
+    for (const blueprint of this.world.blueprints.items.values()) {
+      if (!blueprint?.id || blueprint.id === currentId || blueprint.id === nextId) continue
+      const ref = typeof blueprint.scriptRef === 'string' ? blueprint.scriptRef.trim() : ''
+      if (ref !== currentId) continue
+      scriptRefIds.push(blueprint.id)
+    }
+    for (const blueprintId of scriptRefIds) {
+      await this.applyBlueprintChange(blueprintId, { scriptRef: nextId })
+    }
+
+    const removeResult = await this.world.network.applyBlueprintRemoved({ id: currentId })
+    if (!removeResult?.ok) {
+      console.warn(
+        '[ai-create] failed to remove previous blueprint id',
+        currentId,
+        removeResult?.error || 'unknown_error'
+      )
+    }
+    return true
+  }
+
   async classifyName(blueprintId, prompt) {
     if (!this.client) return
     const systemPrompt = buildClassifySystemPrompt()
@@ -320,7 +430,10 @@ export class ServerAI extends System {
     let name = stripCodeFences(raw).trim()
     name = name.replace(/^["']|["']$/g, '')
     if (!name) return
-    await this.applyBlueprintChange(blueprintId, { name })
+    const renamed = await this.renameBlueprintFromClassifiedName(blueprintId, name)
+    if (!renamed) {
+      await this.applyBlueprintChange(blueprintId, { name })
+    }
   }
 }
 

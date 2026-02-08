@@ -105,6 +105,36 @@ function getScriptFiles(blueprint) {
   return blueprint.scriptFiles
 }
 
+function isHashedScriptEntryPath(relPath) {
+  if (typeof relPath !== 'string') return false
+  const normalized = relPath.replace(/\\/g, '/').trim()
+  if (!normalized) return false
+  const fileName = normalized.split('/').pop() || ''
+  const ext = getExtension(fileName)
+  if (ext !== 'js' && ext !== 'ts') return false
+  const stem = fileName.slice(0, -(ext.length + 1))
+  return /^[a-f0-9]{64}$/i.test(stem)
+}
+
+function normalizeSingleHashedScriptEntry(blueprint) {
+  const scriptFiles = getScriptFiles(blueprint)
+  if (!scriptFiles) return
+  const entries = Object.entries(scriptFiles)
+  if (entries.length !== 1) return
+  const [onlyPath, onlyUrl] = entries[0]
+  if (typeof onlyUrl !== 'string' || !onlyUrl) return
+
+  const configuredEntry =
+    typeof blueprint.scriptEntry === 'string' && Object.prototype.hasOwnProperty.call(scriptFiles, blueprint.scriptEntry)
+      ? blueprint.scriptEntry
+      : onlyPath
+  if (!isHashedScriptEntryPath(configuredEntry)) return
+
+  blueprint.scriptEntry = 'index.js'
+  blueprint.scriptFiles = { 'index.js': onlyUrl }
+  blueprint.script = onlyUrl
+}
+
 function deriveLegacyEntryPath(scriptUrl) {
   let entryPath = getUrlFilename(scriptUrl) || 'index.js'
   if (!getExtension(entryPath)) {
@@ -385,6 +415,7 @@ export async function importApp(file) {
     rewrittenAssets,
     urlMap,
   })
+  normalizeSingleHashedScriptEntry(converted.blueprint)
 
   return {
     blueprint: converted.blueprint,

@@ -12,6 +12,15 @@ import { readPacket, writePacket } from '../../src/core/packets.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(__dirname, '..', '..')
+let buildReadyPromise = null
+const buildLockDir = path.join(repoRoot, '.build-test-lock')
+const buildOutputPath = path.join(repoRoot, 'build', 'index.js')
+const buildInputs = [
+  path.join(repoRoot, 'scripts', 'build.mjs'),
+  path.join(repoRoot, 'package.json'),
+  path.join(repoRoot, 'src'),
+  path.join(repoRoot, 'app-server'),
+]
 
 function normalizeBaseUrl(url) {
   if (!url) return ''
@@ -72,7 +81,126 @@ export async function waitForHealth(worldUrl, { timeoutMs = 20000 } = {}) {
   }, { timeoutMs, intervalMs: 200 })
 }
 
+async function ensureBuildReady() {
+  if (buildReadyPromise) {
+    await buildReadyPromise
+    return
+  }
+
+  buildReadyPromise = (async () => {
+    await withBuildLock(async () => {
+      const needsBuild = await shouldRebuild()
+      if (!needsBuild) return
+      await runBuild()
+    })
+  })().catch(err => {
+    buildReadyPromise = null
+    throw err
+  })
+
+  await buildReadyPromise
+}
+
+async function runBuild() {
+  await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['scripts/build.mjs'], {
+      cwd: repoRoot,
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', chunk => {
+      stdout += chunk.toString()
+    })
+    child.stderr.on('data', chunk => {
+      stderr += chunk.toString()
+    })
+
+    child.once('error', reject)
+    child.once('exit', code => {
+      if (code === 0) {
+        resolve()
+        return
+      }
+      reject(new Error(`build failed (exit ${code})\n${stdout}\n${stderr}`.trim()))
+    })
+  })
+}
+
+async function withBuildLock(fn, { timeoutMs = 180000 } = {}) {
+  const startedAt = Date.now()
+  while (true) {
+    try {
+      await fsPromises.mkdir(buildLockDir)
+      break
+    } catch (err) {
+      if (err?.code !== 'EEXIST') throw err
+      if (Date.now() - startedAt > timeoutMs) {
+        throw new Error(`timed out waiting for build lock at ${buildLockDir}`)
+      }
+      await new Promise(resolve => setTimeout(resolve, 120))
+    }
+  }
+  try {
+    return await fn()
+  } finally {
+    await fsPromises.rm(buildLockDir, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
+async function shouldRebuild() {
+  let outputStat
+  try {
+    outputStat = await fsPromises.stat(buildOutputPath)
+  } catch {
+    return true
+  }
+
+  const latestInputMtime = await getLatestMtime(buildInputs)
+  return latestInputMtime > outputStat.mtimeMs
+}
+
+async function getLatestMtime(paths) {
+  let latest = 0
+  for (const entryPath of paths) {
+    const next = await getPathLatestMtime(entryPath)
+    if (next > latest) latest = next
+  }
+  return latest
+}
+
+async function getPathLatestMtime(entryPath) {
+  let stats
+  try {
+    stats = await fsPromises.stat(entryPath)
+  } catch {
+    return 0
+  }
+
+  let latest = stats.mtimeMs || 0
+  if (!stats.isDirectory()) return latest
+
+  let entries
+  try {
+    entries = await fsPromises.readdir(entryPath, { withFileTypes: true })
+  } catch {
+    return latest
+  }
+
+  for (const entry of entries) {
+    if (entry.name === '.git' || entry.name === 'node_modules') continue
+    const childPath = path.join(entryPath, entry.name)
+    const childLatest = await getPathLatestMtime(childPath)
+    if (childLatest > latest) latest = childLatest
+  }
+
+  return latest
+}
+
 export async function startWorldServer({ adminCode = 'admin' } = {}) {
+  await ensureBuildReady()
   const port = await getAvailablePort()
   const worldDir = await createTempDir('hyperfy-world-')
   const worldId = `test-${crypto.randomUUID()}`

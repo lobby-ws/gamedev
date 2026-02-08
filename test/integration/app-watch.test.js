@@ -49,7 +49,7 @@ test('app watch schedules deploy when entry file extension changes', async () =>
   try {
     server._watchAppDir('RenameApp')
 
-    await fs.rename(path.join(appDir, 'index.js'), path.join(appDir, 'index.js'))
+    await fs.rename(path.join(appDir, 'index.js'), path.join(appDir, 'index.ts'))
     await waitFor(() => scheduled.length > 0, { timeoutMs: 10000 })
     assert.equal(scheduled[0], 'RenameApp')
   } finally {
