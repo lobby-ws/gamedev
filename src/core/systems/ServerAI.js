@@ -3,15 +3,27 @@ import { System } from './System'
 import { createServerAIRunner, readServerAIConfig } from './ServerAIRunner'
 import { hashFile } from '../utils-server'
 import { isValidScriptPath } from '../blueprintValidation'
-import { resolveDocsPath, resolveDocsRoot } from '../ai/DocsSearchService'
+import { DocsSearchService, resolveDocsPath, resolveDocsRoot } from '../ai/DocsSearchService'
 import { normalizeAiRequest } from '../ai/AIRequestContract'
 import { buildUnifiedScriptPrompts } from '../ai/AIScriptPrompt'
 import { parseAiScriptResponse } from '../ai/AIScriptResponse'
+import { createSearchDocsTool } from '../ai/SearchDocsTool'
 
 const docsRoot = resolveDocsRoot()
 const DEFAULT_ENTRY = 'index.js'
 const BLUEPRINT_NAME_MAX_LENGTH = 80
 const ANTHROPIC_MAX_OUTPUT_TOKENS = 4096
+const AI_TOOL_LOOP_BUDGETS = Object.freeze({
+  maxSteps: 4,
+  maxToolCalls: 4,
+  timeoutMs: 20_000,
+})
+const DOCS_TOOL_LIMITS = Object.freeze({
+  maxQueryChars: 240,
+  maxResults: 6,
+  maxExcerptChars: 420,
+  maxResponseChars: 9_000,
+})
 const codeFencePattern = /^```(?:\w+)?\s*([\s\S]*?)\s*```$/
 
 function hasScriptFiles(blueprint) {
@@ -140,6 +152,19 @@ export class ServerAI extends System {
     this.client = createServerAIRunner(aiConfig, {
       anthropicMaxOutputTokens: ANTHROPIC_MAX_OUTPUT_TOKENS,
     })
+    this.docsSearch = new DocsSearchService({
+      docsRoot,
+      ...DOCS_TOOL_LIMITS,
+    })
+    const searchDocsTool = createSearchDocsTool({
+      docsSearch: this.docsSearch,
+      limits: DOCS_TOOL_LIMITS,
+    })
+    this.tools = searchDocsTool
+      ? {
+          searchDocs: searchDocsTool,
+        }
+      : null
     this.enabled = !!this.client
   }
 
@@ -221,65 +246,74 @@ export class ServerAI extends System {
       return
     }
 
-    const entryPath = isValidScriptPath(blueprint?.scriptEntry) ? blueprint.scriptEntry : DEFAULT_ENTRY
-    const scriptFormat = blueprint?.scriptFormat === 'legacy-body' ? 'legacy-body' : 'module'
-    const attachments = request.attachments
-    let contextFiles = null
-    const scriptRootId = request.target.scriptRootId || ''
-    if (scriptRootId) {
-      const contextRoot = resolveScriptRootBlueprint(this.world.blueprints.get(scriptRootId), this.world)
-      if (contextRoot && hasScriptFiles(contextRoot)) {
-        contextFiles = contextRoot.scriptFiles
-      }
-    }
-    const attachmentMap = await this.loadAttachmentMap(attachments, contextFiles)
-    const { systemPrompt, userPrompt } = buildUnifiedScriptPrompts({
-      mode: 'create',
-      prompt,
-      entryPath,
-      scriptFormat,
-      attachmentMap,
-    })
-    const raw = await this.client.generate(systemPrompt, userPrompt)
-    let parsed = parseAiScriptResponse(raw, { validatePath: isValidScriptPath })
-    if (!parsed?.files?.length) {
-      const fallback = stripCodeFences(raw).trim()
-      if (fallback) {
-        parsed = {
-          summary: '',
-          files: [{ path: entryPath, content: fallback }],
+    try {
+      const entryPath = isValidScriptPath(blueprint?.scriptEntry) ? blueprint.scriptEntry : DEFAULT_ENTRY
+      const scriptFormat = blueprint?.scriptFormat === 'legacy-body' ? 'legacy-body' : 'module'
+      const attachments = request.attachments
+      let contextFiles = null
+      const scriptRootId = request.target.scriptRootId || ''
+      if (scriptRootId) {
+        const contextRoot = resolveScriptRootBlueprint(this.world.blueprints.get(scriptRootId), this.world)
+        if (contextRoot && hasScriptFiles(contextRoot)) {
+          contextFiles = contextRoot.scriptFiles
         }
       }
-    }
-    if (!parsed?.files?.length) {
-      console.warn('[ai-create] invalid ai response')
-      return
-    }
-    const generatedScriptFiles = await this.uploadGeneratedFiles(parsed.files)
-    const generatedPaths = Object.keys(generatedScriptFiles)
-    if (!generatedPaths.length) {
-      console.warn('[ai-create] no generated files')
-      return
-    }
-    const entryScriptUrl =
-      generatedScriptFiles[entryPath] || generatedScriptFiles[generatedPaths[0]]
-    const nextScriptFiles = hasScriptFiles(blueprint) ? { ...blueprint.scriptFiles } : {}
-    for (const [relPath, url] of Object.entries(generatedScriptFiles)) {
-      nextScriptFiles[relPath] = url
-    }
-    if (!nextScriptFiles[entryPath] && entryScriptUrl) {
-      nextScriptFiles[entryPath] = entryScriptUrl
-    }
-    await this.applyBlueprintChange(blueprintId, {
-      script: nextScriptFiles[entryPath] || entryScriptUrl || blueprint.script,
-      scriptEntry: entryPath,
-      scriptFiles: nextScriptFiles,
-      scriptFormat,
-    })
+      const attachmentMap = await this.loadAttachmentMap(attachments, contextFiles)
+      const { systemPrompt, userPrompt } = buildUnifiedScriptPrompts({
+        mode: 'create',
+        prompt,
+        entryPath,
+        scriptFormat,
+        attachmentMap,
+      })
+      const generation = await this.client.generate(systemPrompt, userPrompt, {
+        ...AI_TOOL_LOOP_BUDGETS,
+        tools: this.tools,
+      })
+      this.logGenerationTelemetry('ai-create', generation, { mode: 'create', blueprintId })
+      const raw = generation.text
+      let parsed = parseAiScriptResponse(raw, { validatePath: isValidScriptPath })
+      if (!parsed?.files?.length) {
+        const fallback = stripCodeFences(raw).trim()
+        if (fallback) {
+          parsed = {
+            summary: '',
+            files: [{ path: entryPath, content: fallback }],
+          }
+        }
+      }
+      if (!parsed?.files?.length) {
+        console.warn('[ai-create] invalid ai response')
+        return
+      }
+      const generatedScriptFiles = await this.uploadGeneratedFiles(parsed.files)
+      const generatedPaths = Object.keys(generatedScriptFiles)
+      if (!generatedPaths.length) {
+        console.warn('[ai-create] no generated files')
+        return
+      }
+      const entryScriptUrl =
+        generatedScriptFiles[entryPath] || generatedScriptFiles[generatedPaths[0]]
+      const nextScriptFiles = hasScriptFiles(blueprint) ? { ...blueprint.scriptFiles } : {}
+      for (const [relPath, url] of Object.entries(generatedScriptFiles)) {
+        nextScriptFiles[relPath] = url
+      }
+      if (!nextScriptFiles[entryPath] && entryScriptUrl) {
+        nextScriptFiles[entryPath] = entryScriptUrl
+      }
+      await this.applyBlueprintChange(blueprintId, {
+        script: nextScriptFiles[entryPath] || entryScriptUrl || blueprint.script,
+        scriptEntry: entryPath,
+        scriptFiles: nextScriptFiles,
+        scriptFormat,
+      })
 
-    this.classifyName(blueprintId, prompt).catch(err => {
-      console.warn('[ai-create] classify failed', err?.message || err)
-    })
+      this.classifyName(blueprintId, prompt).catch(err => {
+        console.warn('[ai-create] classify failed', err?.message || err)
+      })
+    } catch (err) {
+      console.error('[ai-create] request failed', err)
+    }
   }
 
   async waitForBlueprint(id, attempts = 5) {
@@ -363,7 +397,12 @@ export class ServerAI extends System {
     if (!this.client) return
     const systemPrompt = buildClassifySystemPrompt()
     const userPrompt = buildClassifyUserPrompt(prompt)
-    const raw = await this.client.generate(systemPrompt, userPrompt)
+    const generation = await this.client.generate(systemPrompt, userPrompt, {
+      timeoutMs: 10_000,
+      maxSteps: 1,
+      maxToolCalls: 1,
+    })
+    const raw = generation.text
     let name = stripCodeFences(raw).trim()
     name = name.replace(/^["']|["']$/g, '')
     if (!name) return
@@ -371,5 +410,19 @@ export class ServerAI extends System {
     if (!renamed) {
       await this.applyBlueprintChange(blueprintId, { name })
     }
+  }
+
+  logGenerationTelemetry(prefix, generation, extra = {}) {
+    if (!generation || typeof generation !== 'object') return
+    const telemetry = {
+      finishReason: generation.finishReason || 'unknown',
+      steps: Number.isFinite(generation.stepCount) ? generation.stepCount : 1,
+      toolCalls: Number.isFinite(generation.toolCallCount) ? generation.toolCallCount : 0,
+    }
+    for (const [key, value] of Object.entries(extra)) {
+      if (value == null || value === '') continue
+      telemetry[key] = value
+    }
+    console.info(`[${prefix}] generation`, telemetry)
   }
 }

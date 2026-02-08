@@ -95,9 +95,9 @@
 - Dependency: recommended after PR-1 (shared runner), but can proceed without it if needed.
 
 ### PR-6: Tool Loop Integration (Path A) + `searchDocs` Tool
-- [ ] Add AI SDK tool loop (`tools` + `stopWhen`) for OpenAI/Anthropic.
-- [ ] Register `searchDocs` tool that calls PR-2 docs search service.
-- [ ] Add tool budgets (max steps, max tool calls, timeout/fail-safe).
+- [x] Add AI SDK tool loop (`tools` + `stopWhen`) for OpenAI/Anthropic.
+- [x] Register `searchDocs` tool that calls PR-2 docs search service.
+- [x] Add tool budgets (max steps, max tool calls, timeout/fail-safe).
 - Concrete steps:
 - Update shared AI runner / server AI systems to call tool-enabled generation.
 - Implement `searchDocs` tool input schema and output schema.
