@@ -1447,12 +1447,15 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         return
       }
       const nextState = rekeyFileState(fromPath, toPath)
-      if (!nextState) {
-        throw new Error('rename_state_failed')
+      if (nextState) {
+        nextState.version = result.nextVersion
+        nextState.assetUrl = assetUrl
+        nextState.isNew = false
+      } else {
+        // The blueprint update can re-render and prune `fromPath` before local rekey runs.
+        // The rename already succeeded remotely; selecting `toPath` reloads local state.
+        console.warn('rename_state_rekey_skipped', { fromPath, toPath })
       }
-      nextState.version = result.nextVersion
-      nextState.assetUrl = assetUrl
-      nextState.isNew = false
       setExtraPaths(current => current.filter(item => item !== fromPath && item !== toPath))
       setSelectedPath(toPath)
       cancelRenameFile()
