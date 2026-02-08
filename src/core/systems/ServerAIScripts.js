@@ -1,9 +1,7 @@
 import fs from 'fs'
 import path from 'path'
-import { streamText } from 'ai'
-import { createAnthropic } from '@ai-sdk/anthropic'
-import { createOpenAI } from '@ai-sdk/openai'
 import { System } from './System'
+import { createServerAIRunner, readServerAIConfig } from './ServerAIRunner'
 import { isValidScriptPath } from '../blueprintValidation'
 
 function hasScriptFiles(blueprint) {
@@ -36,6 +34,7 @@ function resolveScriptRootBlueprint(blueprint, world) {
 
 const aiDocs = loadAiDocs()
 const docsRoot = resolveDocsRoot()
+const ANTHROPIC_MAX_OUTPUT_TOKENS = 8192
 
 function loadAiDocs() {
   const candidates = [
@@ -199,22 +198,14 @@ function buildUserPrompt({ mode, prompt, error, entryPath, scriptFormat, fileMap
 export class ServerAIScripts extends System {
   constructor(world) {
     super(world)
-    this.provider = process.env.AI_PROVIDER || null
-    this.model = process.env.AI_MODEL || null
-    this.effort = process.env.AI_EFFORT || 'low'
-    this.apiKey = process.env.AI_API_KEY || null
-    this.client = null
-    if (this.provider && this.model && this.apiKey) {
-      if (this.provider === 'openai') {
-        this.client = new OpenAIClient(this.apiKey, this.model, this.effort)
-      } else if (this.provider === 'anthropic') {
-        this.client = new AnthropicClient(this.apiKey, this.model)
-      } else if (this.provider === 'xai') {
-        this.client = new XAIClient(this.apiKey, this.model)
-      } else if (this.provider === 'google') {
-        this.client = new GoogleClient(this.apiKey, this.model)
-      }
-    }
+    const aiConfig = readServerAIConfig()
+    this.provider = aiConfig.provider
+    this.model = aiConfig.model
+    this.effort = aiConfig.effort
+    this.apiKey = aiConfig.apiKey
+    this.client = createServerAIRunner(aiConfig, {
+      anthropicMaxOutputTokens: ANTHROPIC_MAX_OUTPUT_TOKENS,
+    })
     this.enabled = !!this.client
   }
 
@@ -407,57 +398,5 @@ export class ServerAIScripts extends System {
       error,
       message,
     })
-  }
-}
-
-class OpenAIClient {
-  constructor(apiKey, model, effort) {
-    this.model = model
-    this.effort = effort
-    this.provider = createOpenAI({ apiKey })
-  }
-
-  async generate(systemPrompt, userPrompt) {
-    const result = streamText({
-      model: this.provider(this.model),
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      providerOptions: {
-        openai: {
-          reasoningEffort: this.effort || undefined,
-        },
-      },
-    })
-    let output = ''
-    for await (const delta of result.textStream) {
-      output += delta
-    }
-    return output
-  }
-}
-
-class AnthropicClient {
-  constructor(apiKey, model) {
-    this.model = model
-    this.maxOutputTokens = 8192
-    this.provider = createAnthropic({ apiKey })
-  }
-
-  async generate(systemPrompt, userPrompt) {
-    const result = streamText({
-      model: this.provider(this.model),
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      maxOutputTokens: this.maxOutputTokens,
-    })
-    let output = ''
-    for await (const delta of result.textStream) {
-      output += delta
-    }
-    return output
   }
 }
