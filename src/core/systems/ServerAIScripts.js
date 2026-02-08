@@ -2,10 +2,11 @@ import fs from 'fs'
 import { System } from './System'
 import { createServerAIRunner, readServerAIConfig } from './ServerAIRunner'
 import { isValidScriptPath } from '../blueprintValidation'
-import { resolveDocsPath, resolveDocsRoot } from '../ai/DocsSearchService'
+import { DocsSearchService, resolveDocsPath, resolveDocsRoot } from '../ai/DocsSearchService'
 import { normalizeAiRequest } from '../ai/AIRequestContract'
 import { buildUnifiedScriptPrompts } from '../ai/AIScriptPrompt'
 import { parseAiScriptResponse } from '../ai/AIScriptResponse'
+import { createSearchDocsTool } from '../ai/SearchDocsTool'
 
 function hasScriptFiles(blueprint) {
   return blueprint?.scriptFiles && typeof blueprint.scriptFiles === 'object' && !Array.isArray(blueprint.scriptFiles)
@@ -37,6 +38,17 @@ function resolveScriptRootBlueprint(blueprint, world) {
 
 const docsRoot = resolveDocsRoot()
 const ANTHROPIC_MAX_OUTPUT_TOKENS = 8192
+const AI_TOOL_LOOP_BUDGETS = Object.freeze({
+  maxSteps: 4,
+  maxToolCalls: 4,
+  timeoutMs: 20_000,
+})
+const DOCS_TOOL_LIMITS = Object.freeze({
+  maxQueryChars: 240,
+  maxResults: 6,
+  maxExcerptChars: 420,
+  maxResponseChars: 9_000,
+})
 
 export class ServerAIScripts extends System {
   constructor(world) {
@@ -49,6 +61,19 @@ export class ServerAIScripts extends System {
     this.client = createServerAIRunner(aiConfig, {
       anthropicMaxOutputTokens: ANTHROPIC_MAX_OUTPUT_TOKENS,
     })
+    this.docsSearch = new DocsSearchService({
+      docsRoot,
+      ...DOCS_TOOL_LIMITS,
+    })
+    const searchDocsTool = createSearchDocsTool({
+      docsSearch: this.docsSearch,
+      limits: DOCS_TOOL_LIMITS,
+    })
+    this.tools = searchDocsTool
+      ? {
+          searchDocs: searchDocsTool,
+        }
+      : null
     this.enabled = !!this.client
   }
 
@@ -156,7 +181,12 @@ export class ServerAIScripts extends System {
         attachmentMap,
         context: mode === 'fix' ? request.context : null,
       })
-      const raw = await this.client.generate(systemPrompt, userPrompt)
+      const generation = await this.client.generate(systemPrompt, userPrompt, {
+        ...AI_TOOL_LOOP_BUDGETS,
+        tools: this.tools,
+      })
+      this.logGenerationTelemetry(generation, { requestId, mode, scriptRootId })
+      const raw = generation.text
       const normalized = parseAiScriptResponse(raw, { validatePath: isValidScriptPath })
       if (!normalized) {
         throw new Error('invalid_ai_response')
@@ -238,5 +268,19 @@ export class ServerAIScripts extends System {
       error,
       message,
     })
+  }
+
+  logGenerationTelemetry(generation, extra = {}) {
+    if (!generation || typeof generation !== 'object') return
+    const telemetry = {
+      finishReason: generation.finishReason || 'unknown',
+      steps: Number.isFinite(generation.stepCount) ? generation.stepCount : 1,
+      toolCalls: Number.isFinite(generation.toolCallCount) ? generation.toolCallCount : 0,
+    }
+    for (const [key, value] of Object.entries(extra)) {
+      if (value == null || value === '') continue
+      telemetry[key] = value
+    }
+    console.info('[ai-scripts] generation', telemetry)
   }
 }
