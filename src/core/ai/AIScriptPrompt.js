@@ -1,5 +1,10 @@
 import fs from 'fs'
 import path from 'path'
+import { MAX_CONTEXT_LOG_ENTRIES, normalizeAiContextLogs } from './AIRequestContract.js'
+
+const MAX_PROMPT_LOG_ARGS = 4
+const MAX_PROMPT_LOG_ARG_LENGTH = 160
+const MAX_PROMPT_LOG_MESSAGE_LENGTH = 240
 
 const aiDocs = loadAiDocs()
 
@@ -52,6 +57,82 @@ function buildModeInstruction(mode, entryPath) {
   ]
 }
 
+function truncateString(value, maxLength) {
+  if (typeof value !== 'string') return ''
+  if (value.length <= maxLength) return value
+  return `${value.slice(0, maxLength)}...`
+}
+
+function normalizePromptLogEntry(entry) {
+  if (!entry || typeof entry !== 'object') return null
+  const timestamp =
+    typeof entry.timestamp === 'string' && entry.timestamp ? entry.timestamp : new Date().toISOString()
+  const level = typeof entry.level === 'string' && entry.level ? entry.level : 'log'
+  const args = Array.isArray(entry.args)
+    ? entry.args.slice(0, MAX_PROMPT_LOG_ARGS).map(arg => truncateString(String(arg), MAX_PROMPT_LOG_ARG_LENGTH))
+    : []
+  const messageSource = typeof entry.message === 'string' && entry.message ? entry.message : args.join(' ')
+  const message = truncateString(messageSource, MAX_PROMPT_LOG_MESSAGE_LENGTH)
+  return {
+    timestamp,
+    level,
+    args,
+    message,
+  }
+}
+
+function normalizePromptLogs(entries) {
+  const normalized = normalizeAiContextLogs(entries)
+  return normalized.map(normalizePromptLogEntry).filter(Boolean)
+}
+
+function formatPromptLogGroup(title, entries) {
+  if (!entries.length) return `${title}: none`
+  const lines = [`${title} (oldest to newest):`]
+  for (const entry of entries) {
+    const prefix = `[${entry.timestamp}] ${entry.level}`
+    const argsSuffix = entry.args.length ? ` | args=${JSON.stringify(entry.args)}` : ''
+    lines.push(`- ${prefix}: ${entry.message}${argsSuffix}`)
+  }
+  return lines.join('\n')
+}
+
+function buildRuntimeLogsContext(clientLogs, serverLogs) {
+  return [
+    `Runtime logs (last ${MAX_CONTEXT_LOG_ENTRIES} entries each):`,
+    formatPromptLogGroup('Client logs', clientLogs),
+    formatPromptLogGroup('Server logs', serverLogs),
+  ].join('\n')
+}
+
+function splitPromptContext(mode, context) {
+  if (!context || typeof context !== 'object') {
+    return {
+      additionalContext: null,
+      clientLogs: [],
+      serverLogs: [],
+    }
+  }
+  const additionalContext = { ...context }
+  const rawClientLogs = additionalContext.clientLogs
+  const rawServerLogs = additionalContext.serverLogs
+  delete additionalContext.clientLogs
+  delete additionalContext.serverLogs
+  const trimmedContext = Object.keys(additionalContext).length ? additionalContext : null
+  if (mode !== 'fix') {
+    return {
+      additionalContext: trimmedContext,
+      clientLogs: [],
+      serverLogs: [],
+    }
+  }
+  return {
+    additionalContext: trimmedContext,
+    clientLogs: normalizePromptLogs(rawClientLogs),
+    serverLogs: normalizePromptLogs(rawServerLogs),
+  }
+}
+
 export function buildUnifiedScriptPrompts({
   mode = 'edit',
   prompt = '',
@@ -64,6 +145,9 @@ export function buildUnifiedScriptPrompts({
 } = {}) {
   const resolvedMode = normalizeMode(mode)
   const modeInstructions = buildModeInstruction(resolvedMode, entryPath)
+  const promptContext = splitPromptContext(resolvedMode, context)
+  const runtimeLogsContext =
+    resolvedMode === 'fix' ? buildRuntimeLogsContext(promptContext.clientLogs, promptContext.serverLogs) : null
   const systemPrompt = [
     aiDocs ? `${aiDocs}\n\n==============` : null,
     'You are generating script files for a 3D app runtime.',
@@ -87,10 +171,13 @@ export function buildUnifiedScriptPrompts({
     `Entry path: ${entryPath}`,
     `Script format: ${scriptFormat}`,
     resolvedMode === 'fix' ? `Error:\n${JSON.stringify(error, null, 2)}` : `Request: ${prompt}`,
+    runtimeLogsContext ? runtimeLogsContext : null,
     attachmentMap && Object.keys(attachmentMap).length
       ? `Attached files (JSON map path->full text):\n${JSON.stringify(attachmentMap, null, 2)}`
       : null,
-    context && Object.keys(context).length ? `Additional context (JSON):\n${JSON.stringify(context, null, 2)}` : null,
+    promptContext.additionalContext
+      ? `Additional context (JSON):\n${JSON.stringify(promptContext.additionalContext, null, 2)}`
+      : null,
     fileMap ? `Current files (JSON map path->content):\n${JSON.stringify(fileMap, null, 2)}` : null,
   ]
     .filter(Boolean)

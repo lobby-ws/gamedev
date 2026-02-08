@@ -1,5 +1,5 @@
 const MAX_ATTACHMENTS = 12
-const MAX_CONTEXT_LOG_ENTRIES = 20
+export const MAX_CONTEXT_LOG_ENTRIES = 20
 const MAX_LOG_ARGS = 8
 const MAX_LOG_ARG_LENGTH = 400
 const MAX_LOG_MESSAGE_LENGTH = 1200
@@ -60,7 +60,7 @@ function normalizeContextLogEntry(entry) {
   }
 }
 
-function normalizeContextLogs(entries) {
+export function normalizeAiContextLogs(entries) {
   if (!Array.isArray(entries) || !entries.length) return []
   const start = Math.max(0, entries.length - MAX_CONTEXT_LOG_ENTRIES)
   const normalized = []
@@ -113,7 +113,7 @@ export function normalizeAiRequest(input = {}, { fallbackMode = 'edit' } = {}) {
   const legacyLogs = Array.isArray(input?.clientLogs) ? input.clientLogs : null
   const contextLogs =
     Array.isArray(input?.context?.clientLogs) || legacyLogs ? input?.context?.clientLogs || legacyLogs : null
-  const clientLogs = normalizeContextLogs(contextLogs)
+  const clientLogs = normalizeAiContextLogs(contextLogs)
   const context = {}
   if (clientLogs.length) {
     context.clientLogs = clientLogs

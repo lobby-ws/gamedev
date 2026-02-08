@@ -3,7 +3,7 @@ import { System } from './System'
 import { createServerAIRunner, readServerAIConfig } from './ServerAIRunner'
 import { isValidScriptPath } from '../blueprintValidation'
 import { resolveDocsPath, resolveDocsRoot } from '../ai/DocsSearchService'
-import { normalizeAiRequest } from '../ai/AIRequestContract'
+import { MAX_CONTEXT_LOG_ENTRIES, normalizeAiContextLogs, normalizeAiRequest } from '../ai/AIRequestContract'
 import { buildUnifiedScriptPrompts } from '../ai/AIScriptPrompt'
 import { parseAiScriptResponse } from '../ai/AIScriptResponse'
 
@@ -37,6 +37,22 @@ function resolveScriptRootBlueprint(blueprint, world) {
 
 const docsRoot = resolveDocsRoot()
 const ANTHROPIC_MAX_OUTPUT_TOKENS = 8192
+
+function buildFixPromptContext(context, serverLogs) {
+  const baseContext = context && typeof context === 'object' ? { ...context } : {}
+  delete baseContext.clientLogs
+  delete baseContext.serverLogs
+
+  const clientLogs = normalizeAiContextLogs(context?.clientLogs)
+  const normalizedServerLogs = normalizeAiContextLogs(serverLogs)
+  if (clientLogs.length) {
+    baseContext.clientLogs = clientLogs
+  }
+  if (normalizedServerLogs.length) {
+    baseContext.serverLogs = normalizedServerLogs
+  }
+  return baseContext
+}
 
 export class ServerAIScripts extends System {
   constructor(world) {
@@ -141,6 +157,10 @@ export class ServerAIScripts extends System {
       })
       return
     }
+    const appId = request.target.appId || null
+    const serverLogs =
+      mode === 'fix' && appId ? this.getRecentServerLogs(appId, MAX_CONTEXT_LOG_ENTRIES) : []
+    const promptContext = mode === 'fix' ? buildFixPromptContext(request.context, serverLogs) : null
     try {
       const fileMap = await this.loadFileMap(scriptRoot.scriptFiles)
       const scriptFormat = scriptRoot.scriptFormat === 'legacy-body' ? 'legacy-body' : 'module'
@@ -154,7 +174,7 @@ export class ServerAIScripts extends System {
         scriptFormat,
         fileMap,
         attachmentMap,
-        context: mode === 'fix' ? request.context : null,
+        context: promptContext,
       })
       const raw = await this.client.generate(systemPrompt, userPrompt)
       const normalized = parseAiScriptResponse(raw, { validatePath: isValidScriptPath })
