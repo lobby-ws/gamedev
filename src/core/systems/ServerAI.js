@@ -1,17 +1,18 @@
 import fs from 'fs'
-import path from 'path'
 import { System } from './System'
 import { createServerAIRunner, readServerAIConfig } from './ServerAIRunner'
 import { hashFile } from '../utils-server'
 import { isValidScriptPath } from '../blueprintValidation'
 import { resolveDocsPath, resolveDocsRoot } from '../ai/DocsSearchService'
+import { normalizeAiRequest } from '../ai/AIRequestContract'
+import { buildUnifiedScriptPrompts } from '../ai/AIScriptPrompt'
+import { parseAiScriptResponse } from '../ai/AIScriptResponse'
 
-const aiDocs = loadAiDocs()
 const docsRoot = resolveDocsRoot()
-const fencePattern = /^```(?:\w+)?\s*([\s\S]*?)\s*```$/
 const DEFAULT_ENTRY = 'index.js'
 const BLUEPRINT_NAME_MAX_LENGTH = 80
 const ANTHROPIC_MAX_OUTPUT_TOKENS = 4096
+const codeFencePattern = /^```(?:\w+)?\s*([\s\S]*?)\s*```$/
 
 function hasScriptFiles(blueprint) {
   return blueprint?.scriptFiles && typeof blueprint.scriptFiles === 'object' && !Array.isArray(blueprint.scriptFiles)
@@ -41,77 +42,6 @@ function resolveScriptRootBlueprint(blueprint, world) {
   return null
 }
 
-function loadAiDocs() {
-  const candidates = [
-    path.join(process.cwd(), 'src/client/public/ai-docs.md'),
-    path.join(process.cwd(), 'build/public/ai-docs.md'),
-    path.join(process.cwd(), 'public/ai-docs.md'),
-  ]
-  for (const candidate of candidates) {
-    try {
-      if (!fs.existsSync(candidate)) continue
-      return fs.readFileSync(candidate, 'utf8')
-    } catch {
-      // continue searching other paths
-    }
-  }
-  return ''
-}
-
-function stripCodeFences(text) {
-  if (!text) return ''
-  const cleaned = text.trim()
-  const match = cleaned.match(fencePattern)
-  if (match) return match[1]
-  return cleaned
-}
-
-function normalizeAiAttachments(input) {
-  if (!Array.isArray(input)) return []
-  const output = []
-  const seen = new Set()
-  for (const item of input) {
-    if (!item) continue
-    const type = item.type === 'doc' || item.type === 'script' ? item.type : null
-    const filePath = typeof item.path === 'string' ? item.path.trim() : ''
-    if (!type || !filePath) continue
-    const key = `${type}:${filePath}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    output.push({ type, path: filePath })
-    if (output.length >= 12) break
-  }
-  return output
-}
-
-function buildCreateSystemPrompt({ entryPath, scriptFormat }) {
-  const formatNote =
-    scriptFormat === 'module'
-      ? `The entry file "${entryPath}" is a standard ES module that must export a default function (world, app, fetch, props, setTimeout) => void.`
-      : `The entry file "${entryPath}" uses legacy-body format. Keep top-level imports, do not add export statements, and output a script body.`
-  return [
-    aiDocs ? `${aiDocs}\n\n==============` : null,
-    'You are an artist and code generator for Hyperfy app scripts.',
-    'Return raw JavaScript only. Do not use markdown or code fences.',
-    formatNote,
-  ]
-    .filter(Boolean)
-    .join('\n')
-}
-
-function buildCreateUserPrompt({ prompt, attachmentMap, entryPath, scriptFormat }) {
-  const parts = [
-    `Entry path: ${entryPath}`,
-    `Script format: ${scriptFormat}`,
-    `Request: ${prompt}`,
-  ]
-  if (attachmentMap && Object.keys(attachmentMap).length) {
-    parts.push('Attached files (full text):')
-    parts.push(JSON.stringify(attachmentMap, null, 2))
-  }
-  return parts.join('\n\n')
-}
-
 function buildClassifySystemPrompt() {
   return [
     'You are a classifier.',
@@ -122,6 +52,14 @@ function buildClassifySystemPrompt() {
 
 function buildClassifyUserPrompt(prompt) {
   return `Please classify the following prompt:\n\n"${prompt}"`
+}
+
+function stripCodeFences(text) {
+  if (!text) return ''
+  const cleaned = String(text).trim()
+  const match = cleaned.match(codeFencePattern)
+  if (match) return match[1]
+  return cleaned
 }
 
 function stripControlChars(value) {
@@ -179,6 +117,15 @@ function getRenamedCreatedAt(currentValue) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function getUploadFilename(relPath, hash) {
+  const value = typeof relPath === 'string' ? relPath : ''
+  const slash = value.lastIndexOf('/')
+  const base = slash === -1 ? value : value.slice(slash + 1)
+  const dot = base.lastIndexOf('.')
+  const ext = dot > 0 && dot < base.length - 1 ? base.slice(dot) : '.js'
+  return `${hash}${ext}`
 }
 
 export class ServerAI extends System {
@@ -241,12 +188,27 @@ export class ServerAI extends System {
     return map
   }
 
+  async uploadGeneratedFiles(files) {
+    const uploaded = {}
+    for (const file of files) {
+      if (!file?.path || typeof file.content !== 'string') continue
+      const hash = await hashFile(Buffer.from(file.content, 'utf8'))
+      const filename = getUploadFilename(file.path, hash)
+      const scriptUrl = `asset://${filename}`
+      const upload = new File([file.content], filename, { type: 'text/javascript' })
+      await this.assets.upload(upload)
+      uploaded[file.path] = scriptUrl
+    }
+    return uploaded
+  }
+
   handleCreate = async (socket, data = {}) => {
     if (!this.enabled || !this.client) return
     if (!socket?.player?.isBuilder?.()) return
-    const prompt = typeof data?.prompt === 'string' ? data.prompt.trim() : ''
+    const request = normalizeAiRequest(data, { fallbackMode: 'create' })
+    const prompt = request.prompt
     if (!prompt) return
-    const blueprintId = typeof data?.blueprintId === 'string' ? data.blueprintId : ''
+    const blueprintId = request.target.blueprintId || ''
     if (!blueprintId) return
 
     const blueprint = await this.waitForBlueprint(blueprintId)
@@ -261,9 +223,9 @@ export class ServerAI extends System {
 
     const entryPath = isValidScriptPath(blueprint?.scriptEntry) ? blueprint.scriptEntry : DEFAULT_ENTRY
     const scriptFormat = blueprint?.scriptFormat === 'legacy-body' ? 'legacy-body' : 'module'
-    const attachments = normalizeAiAttachments(data?.attachments)
+    const attachments = request.attachments
     let contextFiles = null
-    const scriptRootId = typeof data?.scriptRootId === 'string' ? data.scriptRootId.trim() : ''
+    const scriptRootId = request.target.scriptRootId || ''
     if (scriptRootId) {
       const contextRoot = resolveScriptRootBlueprint(this.world.blueprints.get(scriptRootId), this.world)
       if (contextRoot && hasScriptFiles(contextRoot)) {
@@ -271,29 +233,45 @@ export class ServerAI extends System {
       }
     }
     const attachmentMap = await this.loadAttachmentMap(attachments, contextFiles)
-    const systemPrompt = buildCreateSystemPrompt({ entryPath, scriptFormat })
-    const userPrompt = buildCreateUserPrompt({
+    const { systemPrompt, userPrompt } = buildUnifiedScriptPrompts({
+      mode: 'create',
       prompt,
-      attachmentMap,
       entryPath,
       scriptFormat,
+      attachmentMap,
     })
     const raw = await this.client.generate(systemPrompt, userPrompt)
-    const output = stripCodeFences(raw)
-    if (!output.trim()) {
-      console.warn('[ai-create] empty response')
+    let parsed = parseAiScriptResponse(raw, { validatePath: isValidScriptPath })
+    if (!parsed?.files?.length) {
+      const fallback = stripCodeFences(raw).trim()
+      if (fallback) {
+        parsed = {
+          summary: '',
+          files: [{ path: entryPath, content: fallback }],
+        }
+      }
+    }
+    if (!parsed?.files?.length) {
+      console.warn('[ai-create] invalid ai response')
       return
     }
-
-    const hash = await hashFile(Buffer.from(output, 'utf8'))
-    const filename = `${hash}.js`
-    const scriptUrl = `asset://${filename}`
-    const file = new File([output], 'script.js', { type: 'text/javascript' })
-    await this.assets.upload(file)
+    const generatedScriptFiles = await this.uploadGeneratedFiles(parsed.files)
+    const generatedPaths = Object.keys(generatedScriptFiles)
+    if (!generatedPaths.length) {
+      console.warn('[ai-create] no generated files')
+      return
+    }
+    const entryScriptUrl =
+      generatedScriptFiles[entryPath] || generatedScriptFiles[generatedPaths[0]]
     const nextScriptFiles = hasScriptFiles(blueprint) ? { ...blueprint.scriptFiles } : {}
-    nextScriptFiles[entryPath] = scriptUrl
+    for (const [relPath, url] of Object.entries(generatedScriptFiles)) {
+      nextScriptFiles[relPath] = url
+    }
+    if (!nextScriptFiles[entryPath] && entryScriptUrl) {
+      nextScriptFiles[entryPath] = entryScriptUrl
+    }
     await this.applyBlueprintChange(blueprintId, {
-      script: scriptUrl,
+      script: nextScriptFiles[entryPath] || entryScriptUrl || blueprint.script,
       scriptEntry: entryPath,
       scriptFiles: nextScriptFiles,
       scriptFormat,

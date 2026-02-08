@@ -144,12 +144,17 @@ test('client AI fix request includes client app log snapshot', () => {
   assert.equal(sentPackets.length, 1)
   assert.equal(sentPackets[0].name, 'scriptAiRequest')
   assert.equal(sentPackets[0].payload.mode, 'fix')
+  assert.equal(sentPackets[0].payload.target.scriptRootId, scriptRoot.id)
+  assert.equal(sentPackets[0].payload.target.blueprintId, scriptRoot.id)
+  assert.equal(sentPackets[0].payload.target.appId, app.data.id)
   assert.equal(sentPackets[0].payload.appId, app.data.id)
+  assert.deepEqual(sentPackets[0].payload.context.clientLogs, logsSnapshot)
   assert.deepEqual(sentPackets[0].payload.clientLogs, logsSnapshot)
 
   aiScripts.requestEdit({ app, prompt: 'rename variable' })
   assert.equal(sentPackets.length, 2)
   assert.equal(sentPackets[1].payload.mode, 'edit')
+  assert.equal(sentPackets[1].payload.target.scriptRootId, scriptRoot.id)
   assert.equal(Object.prototype.hasOwnProperty.call(sentPackets[1].payload, 'clientLogs'), false)
 
   assert.ok(emittedEvents.some(event => event.name === 'script-ai-request'))

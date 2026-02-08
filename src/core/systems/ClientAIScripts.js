@@ -1,6 +1,7 @@
 import { System } from './System'
 import { uuid } from '../utils'
 import { isValidScriptPath } from '../blueprintValidation'
+import { buildUnifiedAiRequestPayload } from '../ai/AIRequestContract'
 
 function hasScriptFiles(blueprint) {
   return blueprint?.scriptFiles && typeof blueprint.scriptFiles === 'object' && !Array.isArray(blueprint.scriptFiles)
@@ -34,24 +35,6 @@ function resolveScriptRootForApp(app, world) {
   if (!app) return null
   const blueprint = app.blueprint || world.blueprints.get(app.data?.blueprint)
   return resolveScriptRootBlueprint(blueprint, world)
-}
-
-function normalizeAttachments(input) {
-  if (!Array.isArray(input)) return null
-  const output = []
-  const seen = new Set()
-  for (const item of input) {
-    if (!item) continue
-    const type = item.type === 'doc' || item.type === 'script' ? item.type : null
-    const path = typeof item.path === 'string' ? item.path.trim() : ''
-    if (!type || !path) continue
-    const key = `${type}:${path}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    output.push({ type, path })
-    if (output.length >= 12) break
-  }
-  return output.length ? output : null
 }
 
 export class ClientAIScripts extends System {
@@ -128,27 +111,29 @@ export class ClientAIScripts extends System {
       }
     }
     const requestId = uuid()
-    const payload = {
-      requestId,
-      scriptRootId: scriptRoot.id,
-      mode,
-      prompt: prompt || null,
-      error: requestError || null,
-    }
-    const normalizedAttachments = normalizeAttachments(attachments)
-    if (normalizedAttachments) {
-      payload.attachments = normalizedAttachments
-    }
-    if (targetApp?.data?.id) {
-      const appId = targetApp.data.id
-      payload.appId = appId
-      if (mode === 'fix') {
-        const clientLogs = this.world.appLogs?.getEntries?.(appId)
-        if (Array.isArray(clientLogs) && clientLogs.length) {
-          payload.clientLogs = clientLogs
-        }
+    const appId = targetApp?.data?.id || null
+    let clientLogs = null
+    if (mode === 'fix' && appId) {
+      const entries = this.world.appLogs?.getEntries?.(appId)
+      if (Array.isArray(entries) && entries.length) {
+        clientLogs = entries
       }
     }
+    const requestPrompt = mode === 'edit' ? prompt.trim() : ''
+    const payload = buildUnifiedAiRequestPayload({
+      requestId,
+      mode,
+      prompt: requestPrompt,
+      error: requestError || null,
+      target: {
+        scriptRootId: scriptRoot.id,
+        blueprintId: scriptRoot.id,
+        appId,
+      },
+      attachments,
+      clientLogs,
+      includeLegacyFields: true,
+    })
     this.world.network.send('scriptAiRequest', payload)
     this.world.emit?.('script-ai-request', payload)
     return requestId
