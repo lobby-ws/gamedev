@@ -6,6 +6,7 @@ import { createOpenAI } from '@ai-sdk/openai'
 import { System } from './System'
 import { hashFile } from '../utils-server'
 import { isValidScriptPath } from '../blueprintValidation'
+import { resolveDocsPath, resolveDocsRoot } from '../ai/DocsSearchService'
 
 const aiDocs = loadAiDocs()
 const docsRoot = resolveDocsRoot()
@@ -58,24 +59,6 @@ function loadAiDocs() {
   return ''
 }
 
-function resolveDocsRoot() {
-  const candidates = [
-    path.join(process.cwd(), 'docs'),
-    path.join(process.cwd(), 'build', 'docs'),
-    path.join(process.cwd(), 'public', 'docs'),
-  ]
-  for (const candidate of candidates) {
-    try {
-      if (!fs.existsSync(candidate)) continue
-      const stats = fs.statSync(candidate)
-      if (stats.isDirectory()) return candidate
-    } catch {
-      // continue searching other paths
-    }
-  }
-  return null
-}
-
 function stripCodeFences(text) {
   if (!text) return ''
   const cleaned = text.trim()
@@ -100,21 +83,6 @@ function normalizeAiAttachments(input) {
     if (output.length >= 12) break
   }
   return output
-}
-
-function resolveDocPath(docPath) {
-  if (!docsRoot || !docPath) return null
-  if (docPath.includes('..')) return null
-  const normalized = docPath.replace(/\\/g, '/')
-  if (!normalized.startsWith('docs/')) return null
-  const rel = normalized.slice('docs/'.length)
-  if (!rel) return null
-  const ext = path.extname(rel).toLowerCase()
-  if (ext !== '.md' && ext !== '.mdx') return null
-  const fullPath = path.resolve(docsRoot, rel)
-  const rootWithSep = docsRoot.endsWith(path.sep) ? docsRoot : docsRoot + path.sep
-  if (!fullPath.startsWith(rootWithSep)) return null
-  return fullPath
 }
 
 function buildCreateSystemPrompt({ entryPath, scriptFormat }) {
@@ -269,7 +237,7 @@ export class ServerAI extends System {
         continue
       }
       if (attachment.type === 'doc') {
-        const fullPath = resolveDocPath(attachment.path)
+        const fullPath = resolveDocsPath(attachment.path, docsRoot)
         if (!fullPath) continue
         try {
           const content = await fs.promises.readFile(fullPath, 'utf8')

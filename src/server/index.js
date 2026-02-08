@@ -12,6 +12,7 @@ import statics from '@fastify/static'
 import multipart from '@fastify/multipart'
 
 import { createServerWorld } from '../core/createServerWorld'
+import { listDocsMarkdownFiles, resolveDocsRoot } from '../core/ai/DocsSearchService'
 import { getDB } from './db'
 import { Storage } from './Storage'
 import { assets } from './assets'
@@ -29,53 +30,12 @@ function formatUserName(name) {
   return name
 }
 
-function resolveDocsRoot() {
-  const candidates = [
-    path.join(process.cwd(), 'docs'),
-    path.join(process.cwd(), 'build', 'docs'),
-    path.join(process.cwd(), 'public', 'docs'),
-    path.join(rootDir, 'docs'),
-  ]
-  for (const candidate of candidates) {
-    try {
-      if (!fs.existsSync(candidate)) continue
-      const stats = fs.statSync(candidate)
-      if (stats.isDirectory()) return candidate
-    } catch (err) {
-      // continue searching other paths
-    }
-  }
-  return null
-}
-
-function listDocsFiles(dir, baseDir, output) {
-  const entries = fs.readdirSync(dir, { withFileTypes: true })
-  for (const entry of entries) {
-    if (entry.name.startsWith('.')) continue
-    const fullPath = path.join(dir, entry.name)
-    if (entry.isDirectory()) {
-      listDocsFiles(fullPath, baseDir, output)
-      continue
-    }
-    if (!entry.isFile()) continue
-    const ext = path.extname(entry.name).toLowerCase()
-    if (ext !== '.md' && ext !== '.mdx') continue
-    const relPath = path.relative(baseDir, fullPath).split(path.sep).join('/')
-    output.push(`docs/${relPath}`)
-  }
-}
-
 function getDocsIndex() {
-  const root = resolveDocsRoot()
+  const root = resolveDocsRoot({
+    additionalCandidates: [path.join(rootDir, 'docs')],
+  })
   if (!root) return []
-  const files = []
-  try {
-    listDocsFiles(root, root, files)
-  } catch (err) {
-    return []
-  }
-  files.sort((a, b) => a.localeCompare(b))
-  return files
+  return listDocsMarkdownFiles(root)
 }
 
 // check envs
