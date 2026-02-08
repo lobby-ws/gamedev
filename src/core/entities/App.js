@@ -195,9 +195,9 @@ export class App extends Entity {
     if (runScript) {
       this.abortController = new AbortController()
       try {
-        this.runInScriptContext(() => {
+        this.runInScriptContext(() =>
           this.script.exec(this.getWorldProxy(), this.getAppProxy(), this.fetch, this.effectiveProps, this.setTimeout)
-        })
+        )
         this.scriptError = null
       } catch (err) {
         this.scriptError = serializeError(err)
@@ -440,39 +440,65 @@ export class App extends Entity {
     }
   }
 
+  runInScriptContext(fn) {
+    if (typeof fn !== 'function') return undefined
+    const appId = this.data?.id
+    if (typeof appId !== 'string' || !appId) return fn()
+    if (typeof this.world.scripts?.withAppContext !== 'function') return fn()
+    return this.world.scripts.withAppContext(appId, fn)
+  }
+
   emit(name, a1, a2) {
     if (!this.listeners[name]) return
-    this.runInScriptContext(() => {
-      for (const callback of this.listeners[name]) {
+    for (const callback of this.listeners[name]) {
+      this.runInScriptContext(() => {
         callback(a1, a2)
-      }
-    })
+      })
+    }
   }
 
   onWorldEvent(name, callback) {
-    const wrapped = (...args) => {
+    if (typeof callback !== 'function') return
+    let byName = this.worldListeners.get(callback)
+    if (!byName) {
+      byName = new Map()
+      this.worldListeners.set(callback, byName)
+    }
+    if (byName.has(name)) return
+    const wrapped = (...args) =>
       this.runInScriptContext(() => {
         callback(...args)
       })
-    }
-    this.worldListeners.set(callback, { name, wrapped })
+    byName.set(name, wrapped)
     this.world.events.on(name, wrapped)
   }
 
   offWorldEvent(name, callback) {
-    const listener = this.worldListeners.get(callback)
-    if (!listener) return
-    if (name && listener.name !== name) return
-    this.worldListeners.delete(callback)
-    this.world.events.off(listener.name, listener.wrapped)
+    const byName = this.worldListeners.get(callback)
+    if (!byName) {
+      this.world.events.off(name, callback)
+      return
+    }
+    const wrapped = byName.get(name)
+    if (!wrapped) {
+      this.world.events.off(name, callback)
+      return
+    }
+    byName.delete(name)
+    if (!byName.size) {
+      this.worldListeners.delete(callback)
+    }
+    this.world.events.off(name, wrapped)
   }
 
   clearEventListeners() {
     // local
     this.listeners = {}
     // world
-    for (const listener of this.worldListeners.values()) {
-      this.world.events.off(listener.name, listener.wrapped)
+    for (const byName of this.worldListeners.values()) {
+      for (const [name, wrapped] of byName) {
+        this.world.events.off(name, wrapped)
+      }
     }
     this.worldListeners.clear()
   }
@@ -521,15 +547,6 @@ export class App extends Entity {
 
   getDeadHook = () => {
     return this.deadHook
-  }
-
-  runInScriptContext(fn) {
-    if (typeof fn !== 'function') return undefined
-    const withAppContext = this.world?.scripts?.withAppContext
-    if (typeof withAppContext !== 'function') {
-      return fn()
-    }
-    return withAppContext.call(this.world.scripts, this.data.id, fn)
   }
 
   getNodes() {
