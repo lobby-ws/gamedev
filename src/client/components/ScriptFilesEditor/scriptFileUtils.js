@@ -161,6 +161,7 @@ export {
   SHARED_ALIAS,
   SHARED_PREFIX,
   buildFileTree,
+  ensureJsExtension,
   getNewFileTemplate,
   getFileExtension,
   getLanguageForPath,
@@ -173,4 +174,27 @@ export {
 
 function getNewFileTemplate() {
   return 'export default (world, app, fetch, props, setTimeout) => {\n}\n'
+}
+
+function ensureJsExtension(path) {
+  if (typeof path !== 'string') return path
+  const trimmed = path.trim()
+  if (!trimmed) return trimmed
+  if (trimmed.endsWith('/')) return trimmed
+  const lastSlash = trimmed.lastIndexOf('/')
+  const lastSegment = trimmed.slice(lastSlash + 1)
+  if (!lastSegment) return trimmed
+  const lower = lastSegment.toLowerCase()
+  if (lower.endsWith('.js')) {
+    return `${trimmed.slice(0, trimmed.length - 3)}.js`
+  }
+  let base = trimmed
+  while (base.endsWith('.')) {
+    base = base.slice(0, -1)
+  }
+  const dotIndex = base.lastIndexOf('.')
+  if (dotIndex > lastSlash) {
+    base = base.slice(0, dotIndex)
+  }
+  return `${base}.js`
 }

@@ -9,6 +9,7 @@ import { ScriptFilesTree } from './ScriptFilesEditor/ScriptFilesTree'
 import {
   SHARED_PREFIX,
   buildFileTree,
+  ensureJsExtension,
   getFileExtension,
   getLanguageForPath,
   getNewFileTemplate,
@@ -424,30 +425,34 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       setNewFileError('Enter a file path.')
       return
     }
-    if (!isValidScriptPath(trimmed)) {
+    const normalizedPath = ensureJsExtension(trimmed)
+    if (normalizedPath !== trimmed) {
+      setNewFilePath(normalizedPath)
+    }
+    if (!isValidScriptPath(normalizedPath)) {
       setNewFileError('Invalid path. Use helpers/util.js or @shared/helpers/util.js.')
       return
     }
     if (
-      Object.prototype.hasOwnProperty.call(scriptFiles, trimmed) ||
-      extraPaths.includes(trimmed) ||
-      fileStatesRef.current.has(trimmed)
+      Object.prototype.hasOwnProperty.call(scriptFiles, normalizedPath) ||
+      extraPaths.includes(normalizedPath) ||
+      fileStatesRef.current.has(normalizedPath)
     ) {
       setNewFileError('That file already exists.')
       return
     }
     try {
-      const state = await ensureFileState(trimmed, { allowMissing: true, useTemplate: true })
+      const state = await ensureFileState(normalizedPath, { allowMissing: true, useTemplate: true })
       if (!state) throw new Error('new_file_failed')
       state.originalText = ''
       state.dirty = true
       setDirtyTick(tick => tick + 1)
-      setSelectedPath(trimmed)
+      setSelectedPath(normalizedPath)
       setNewFileOpen(false)
       setNewFilePath('')
       setNewFileError(null)
       if (saveAllRef.current) {
-        await saveAllRef.current({ paths: new Set([trimmed]) })
+        await saveAllRef.current({ paths: new Set([normalizedPath]) })
       }
     } catch (err) {
       console.error(err)
