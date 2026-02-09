@@ -237,6 +237,7 @@ export function createVRMFactory(glb, setupMaterial) {
       if (currentEmote) {
         currentEmote.action?.fadeOut(0.15)
         currentEmote = null
+        setLocoLower(false)
       }
       if (!url) return
       const opts = getQueryParams(url)
@@ -251,7 +252,8 @@ export function createVRMFactory(glb, setupMaterial) {
           currentEmote.action.clampWhenFinished = !loop
           currentEmote.action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce)
           currentEmote.action.reset().fadeIn(0.15).play()
-          if (!upperBody) clearLocomotion()
+          if (upperBody) setLocoLower(true)
+          else clearLocomotion()
         }
       } else {
         const emote = {
@@ -278,7 +280,8 @@ export function createVRMFactory(glb, setupMaterial) {
             action.clampWhenFinished = !loop
             action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce)
             action.play()
-            if (!upperBody) clearLocomotion()
+            if (upperBody) setLocoLower(true)
+            else clearLocomotion()
           }
         })
       }
@@ -482,6 +485,29 @@ export function createVRMFactory(glb, setupMaterial) {
     //   console.log('hi2')
     // })
 
+    let locoLower = false
+    function setLocoLower(enabled) {
+      if (locoLower === enabled) return
+      locoLower = enabled
+      for (const key in poses) {
+        const pose = poses[key]
+        if (!pose.action || !pose.lowerAction) continue
+        if (enabled) {
+          // crossfade from full-body to lower-body-only
+          pose.lowerAction.weight = pose.action.weight
+          pose.lowerAction.time = pose.action.time
+          pose.lowerAction.reset().fadeIn(0.15).play()
+          pose.action.fadeOut(0.15)
+        } else {
+          // crossfade from lower-body-only to full-body
+          pose.action.weight = pose.lowerAction.weight
+          pose.action.time = pose.lowerAction.time
+          pose.action.reset().fadeIn(0.15).play()
+          pose.lowerAction.fadeOut(0.15)
+        }
+      }
+    }
+
     const poses = {}
     function addPose(key, url) {
       const opts = getQueryParams(url)
@@ -490,14 +516,16 @@ export function createVRMFactory(glb, setupMaterial) {
         loading: true,
         active: false,
         action: null,
+        lowerAction: null,
         weight: 0,
         target: 0,
         setWeight: value => {
           pose.weight = value
-          if (pose.action) {
-            pose.action.weight = value
+          const active = locoLower ? pose.lowerAction : pose.action
+          if (active) {
+            active.weight = value
             if (!pose.active) {
-              pose.action.reset().fadeIn(0.15).play()
+              active.reset().fadeIn(0.15).play()
               pose.active = true
             }
           }
@@ -505,6 +533,7 @@ export function createVRMFactory(glb, setupMaterial) {
         fadeOut: () => {
           pose.weight = 0
           pose.action?.fadeOut(0.15)
+          pose.lowerAction?.fadeOut(0.15)
           pose.active = false
         },
       }
@@ -518,6 +547,18 @@ export function createVRMFactory(glb, setupMaterial) {
         pose.action.timeScale = speed
         pose.action.weight = pose.weight
         pose.action.play()
+
+        const lowerClip = emo.toClip({
+          rootToHips,
+          version,
+          getBoneName,
+          lowerBody: true,
+        })
+        lowerClip.name = clip.name + '_lower'
+        pose.lowerAction = mixer.clipAction(lowerClip)
+        pose.lowerAction.timeScale = speed
+        pose.lowerAction.weight = 0
+        pose.lowerAction.play()
       })
       poses[key] = pose
     }

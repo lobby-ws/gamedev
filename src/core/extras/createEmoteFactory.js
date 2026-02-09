@@ -94,7 +94,7 @@ export function createEmoteFactory(glb, url) {
   // console.log(clip)
 
   return {
-    toClip({ rootToHips, version, getBoneName, upperBody }) {
+    toClip({ rootToHips, version, getBoneName, upperBody, lowerBody }) {
       // we're going to resize animation to match vrm height
       const height = rootToHips
 
@@ -105,6 +105,7 @@ export function createEmoteFactory(glb, url) {
         const ogBoneName = trackSplitted[0]
         const vrmBoneName = normalizedBoneNames[ogBoneName]
         if (upperBody && LOWER_BODY_BONES.has(vrmBoneName)) return
+        if (lowerBody && !LOWER_BODY_BONES.has(vrmBoneName)) return
         // TODO: use vrm.bones[name] not getBoneNode
         const vrmNodeName = getBoneName(vrmBoneName)
 
