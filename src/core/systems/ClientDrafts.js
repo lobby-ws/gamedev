@@ -45,6 +45,56 @@ function buildPlaceholderScript({ blueprintId }) {
 }
 
 const DEFAULT_ENTRY = 'index.js'
+const BLUEPRINT_ID_MAX_LENGTH = 80
+
+function stripControlChars(value) {
+  let output = ''
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i)
+    if (code >= 32) output += value[i]
+  }
+  return output
+}
+
+function sanitizeBlueprintIdFromName(name) {
+  if (typeof name !== 'string') return ''
+  let safe = name.trim()
+  if (!safe) return ''
+  safe = stripControlChars(safe)
+  safe = safe.replace(/[<>:"/\\|?*]/g, '')
+  safe = safe.replace(/[^a-zA-Z0-9._ -]+/g, '-')
+  safe = safe.replace(/\s+/g, ' ').trim()
+  safe = safe.replace(/[. ]+$/g, '').replace(/^[. ]+/g, '')
+  safe = safe.replace(/__+/g, '_')
+  if (safe.length > BLUEPRINT_ID_MAX_LENGTH) {
+    safe = safe.slice(0, BLUEPRINT_ID_MAX_LENGTH).trim()
+  }
+  return safe || ''
+}
+
+function trimBlueprintIdBase(value) {
+  if (typeof value !== 'string') return ''
+  return value.replace(/[. ]+$/g, '').replace(/^[. ]+/g, '').trim()
+}
+
+function resolveUniqueDraftBlueprintId(world, preferredName) {
+  const initialBase = sanitizeBlueprintIdFromName(preferredName) || 'Draft'
+  const base = trimBlueprintIdBase(initialBase) || 'Draft'
+  if (base !== '$scene' && !world.blueprints.get(base)) {
+    return base
+  }
+  for (let i = 2; i < 10000; i += 1) {
+    const suffix = `_${i}`
+    const maxBaseLength = Math.max(1, BLUEPRINT_ID_MAX_LENGTH - suffix.length)
+    const stem = trimBlueprintIdBase(base.slice(0, maxBaseLength)) || 'Draft'
+    const candidate = `${stem}${suffix}`
+    if (candidate === '$scene') continue
+    if (!world.blueprints.get(candidate)) {
+      return candidate
+    }
+  }
+  return uuid()
+}
 
 export class ClientDrafts extends System {
   createDraftApp = async input => {
@@ -75,7 +125,7 @@ async function createPlaceholderApp({ world, name, props }) {
   let blueprint = null
   let app = null
   try {
-    const blueprintId = uuid()
+    const blueprintId = resolveUniqueDraftBlueprintId(world, name)
     const scope = blueprintId
     const lockResult = await world.admin.acquireDeployLock({
       owner: world.network.id,
