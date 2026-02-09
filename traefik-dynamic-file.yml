@@ -1,0 +1,42 @@
+http:
+  # Middlewares
+  middlewares:
+    gzip:
+      compress: true
+    redirect-to-https:
+      redirectScheme:
+        scheme: https
+
+  # Routers
+  routers:
+    # HTTP router (port 80) - redirects to HTTPS
+    http-0-game-server:
+      entryPoints:
+        - http
+      rule: "Host(`ten.peezy.tech`) && PathPrefix(`/`)"
+      middlewares:
+        - redirect-to-https
+      service: http-0-game-server
+
+    # HTTPS router (port 443) - main service
+    https-0-game-server:
+      entryPoints:
+        - https
+      rule: "Host(`ten.peezy.tech`) && PathPrefix(`/`)"
+      middlewares:
+        - gzip
+      service: https-0-game-server
+      tls:
+        certResolver: letsencrypt
+
+  # Services
+  services:
+    http-0-game-server:
+      loadBalancer:
+        servers:
+          - url: "http://localhost:3000"
+
+    https-0-game-server:
+      loadBalancer:
+        servers:
+          - url: "http://localhost:3000"
