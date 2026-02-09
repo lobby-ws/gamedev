@@ -15,8 +15,29 @@ const PING_RATE = 10 // seconds
 const defaultSpawn = '{ "position": [0, 0, 0], "quaternion": [0, 0, 0, 1] }'
 
 const HEALTH_MAX = 100
-const PUBLIC_ADMIN_URL =
-  process.env.PUBLIC_ADMIN_URL || (process.env.PUBLIC_API_URL || '').replace(/\/api\/?$/, '')
+const PUBLIC_ADMIN_URL = process.env.PUBLIC_ADMIN_URL || ''
+
+function deriveAdminUrlFromRequest(req) {
+  const headers = req?.headers || {}
+  let host = headers['x-forwarded-host'] || headers['host']
+  if (Array.isArray(host)) host = host[0]
+  if (!host) return null
+
+  let proto = headers['x-forwarded-proto']
+  if (Array.isArray(proto)) proto = proto[0]
+  if (proto) proto = String(proto).split(',')[0].trim()
+  if (!proto && req?.protocol) proto = req.protocol
+  if (!proto) proto = 'https'
+
+  return `${proto}://${host}`
+}
+
+function deriveAdminUrlFromEnv() {
+  return (
+    (process.env.PUBLIC_WS_URL || '').replace(/^wss:/, 'https:').replace(/^ws:/, 'http:').replace(/\/ws\/?$/, '') ||
+    (process.env.PUBLIC_API_URL || '').replace(/\/api\/?$/, '')
+  )
+}
 
 function isNumberArray(value, length) {
   return (
@@ -140,22 +161,23 @@ export class ServerNetwork extends System {
     this.queue = []
   }
 
-  init({ db }) {
+  init({ db, deploymentId }) {
     this.db = db
+    this.deploymentId = deploymentId
   }
 
   async start() {
     // get spawn
-    const spawnRow = await this.db('config').where('key', 'spawn').first()
+    const spawnRow = await this.db('config').where({ deployment_id: this.deploymentId, key: 'spawn' }).first()
     this.spawn = JSON.parse(spawnRow?.value || defaultSpawn)
     // get worldId
-    const worldIdRow = await this.db('config').where('key', 'worldId').first()
+    const worldIdRow = await this.db('config').where({ deployment_id: this.deploymentId, key: 'worldId' }).first()
     let worldId = worldIdRow?.value
     if (!worldId) {
       worldId = process.env.WORLD_ID || uuid()
       await this.db('config')
-        .insert({ key: 'worldId', value: worldId })
-        .onConflict('key')
+        .insert({ deployment_id: this.deploymentId, key: 'worldId', value: worldId })
+        .onConflict(['deployment_id', 'key'])
         .merge({ value: worldId })
     }
     if (process.env.WORLD_ID && process.env.WORLD_ID !== worldId) {
@@ -163,7 +185,7 @@ export class ServerNetwork extends System {
     }
     this.worldId = worldId
     // hydrate blueprints
-    const blueprints = await this.db('blueprints')
+    const blueprints = await this.db('blueprints').where('deployment_id', this.deploymentId)
     for (const blueprint of blueprints) {
       const data = JSON.parse(blueprint.data)
       if (blueprint?.createdAt) data.createdAt = blueprint.createdAt
@@ -177,7 +199,7 @@ export class ServerNetwork extends System {
       this.world.blueprints.add(data, true)
     }
     // hydrate entities
-    const entities = await this.db('entities')
+    const entities = await this.db('entities').where('deployment_id', this.deploymentId)
     for (const entity of entities) {
       const data = JSON.parse(entity.data)
       const blueprintScope =
@@ -193,7 +215,7 @@ export class ServerNetwork extends System {
       this.world.entities.add(data, true)
     }
     // hydrate settings
-    let settingsRow = await this.db('config').where('key', 'settings').first()
+    let settingsRow = await this.db('config').where({ deployment_id: this.deploymentId, key: 'settings' }).first()
     try {
       const settings = JSON.parse(settingsRow?.value || '{}')
       this.world.settings.deserialize(settings)
@@ -314,8 +336,8 @@ export class ServerNetwork extends System {
           data: JSON.stringify(blueprint),
         }
         await this.db('blueprints')
-          .insert({ ...record, createdAt, updatedAt: now })
-          .onConflict('id')
+          .insert({ deployment_id: this.deploymentId, ...record, createdAt, updatedAt: now })
+          .onConflict(['deployment_id', 'id'])
           .merge({ ...record, updatedAt: now })
         counts.upsertedBlueprints++
         this.dirtyBlueprints.delete(id)
@@ -347,8 +369,8 @@ export class ServerNetwork extends System {
             data: JSON.stringify(entity.data),
           }
           await this.db('entities')
-            .insert({ ...record, createdAt: now, updatedAt: now })
-            .onConflict('id')
+            .insert({ deployment_id: this.deploymentId, ...record, createdAt: now, updatedAt: now })
+            .onConflict(['deployment_id', 'id'])
             .merge({ ...record, updatedAt: now })
           counts.upsertedApps++
           this.dirtyApps.delete(id)
@@ -358,7 +380,7 @@ export class ServerNetwork extends System {
         }
       } else {
         // it was removed
-        await this.db('entities').where('id', id).delete()
+        await this.db('entities').where({ deployment_id: this.deploymentId, id }).delete()
         counts.deletedApps++
         this.dirtyApps.delete(id)
       }
@@ -379,16 +401,17 @@ export class ServerNetwork extends System {
     const value = JSON.stringify(data)
     await this.db('config')
       .insert({
+        deployment_id: this.deploymentId,
         key: 'settings',
         value,
       })
-      .onConflict('key')
+      .onConflict(['deployment_id', 'key'])
       .merge({
         value,
       })
   }
 
-  async onConnection(ws, params) {
+  async onConnection(ws, params, req) {
     try {
       // check player limit
       const playerLimit = this.world.settings.playerLimit
@@ -460,12 +483,13 @@ export class ServerNetwork extends System {
       )
 
       // send snapshot
+      const adminUrl = PUBLIC_ADMIN_URL || deriveAdminUrlFromRequest(req) || deriveAdminUrlFromEnv()
       socket.send('snapshot', {
         id: socket.id,
         serverTime: performance.now(),
         assetsUrl: process.env.ASSETS_BASE_URL,
         apiUrl: process.env.PUBLIC_API_URL,
-        adminUrl: PUBLIC_ADMIN_URL,
+        adminUrl,
         maxUploadSize: process.env.PUBLIC_MAX_UPLOAD_SIZE,
         settings: this.world.settings.serialize(),
         chat: this.world.chat.serialize(),
@@ -719,7 +743,7 @@ export class ServerNetwork extends System {
     this.world.blueprints.remove(id)
     this.send('blueprintRemoved', { id }, ignoreNetworkId)
     this.dirtyBlueprints.delete(id)
-    await this.db('blueprints').where('id', id).delete()
+    await this.db('blueprints').where({ deployment_id: this.deploymentId, id }).delete()
     this.emit('blueprintRemoved', { id })
     this.emitOperation({
       ...operation,
@@ -896,10 +920,11 @@ export class ServerNetwork extends System {
     const value = JSON.stringify(this.spawn)
     await this.db('config')
       .insert({
+        deployment_id: this.deploymentId,
         key: 'spawn',
         value,
       })
-      .onConflict('key')
+      .onConflict(['deployment_id', 'key'])
       .merge({
         value,
       })
@@ -927,10 +952,11 @@ export class ServerNetwork extends System {
     const value = JSON.stringify(this.spawn)
     await this.db('config')
       .insert({
+        deployment_id: this.deploymentId,
         key: 'spawn',
         value,
       })
-      .onConflict('key')
+      .onConflict(['deployment_id', 'key'])
       .merge({
         value,
       })

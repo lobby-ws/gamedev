@@ -115,8 +115,25 @@ if (!process.env.ASSETS_BASE_URL) {
 if (process.env.ASSETS === 's3' && !process.env.ASSETS_S3_URI) {
   throw new Error(`[envs] ASSETS_S3_URI must be set when using ASSETS=s3`)
 }
+if (!process.env.DEPLOYMENT_ID) {
+  throw new Error('[envs] DEPLOYMENT_ID not set')
+}
 
-const fastify = Fastify({ logger: { level: 'error' } })
+const tlsConfig =
+  process.env.TLS_CERT_PATH && process.env.TLS_KEY_PATH
+    ? {
+        cert: fs.readFileSync(process.env.TLS_CERT_PATH),
+        key: fs.readFileSync(process.env.TLS_KEY_PATH),
+      }
+    : undefined
+const directWssPort = process.env.DIRECT_WSS_PORT
+const useDualPort = !!(tlsConfig && directWssPort)
+const mainServerTls = tlsConfig && !directWssPort ? tlsConfig : undefined
+
+const fastify = Fastify({
+  logger: { level: 'error' },
+  https: mainServerTls,
+})
 
 // create world folder if needed
 await fs.ensureDir(worldDir)
@@ -125,10 +142,11 @@ await fs.ensureDir(worldDir)
 await assets.init({ rootDir, worldDir })
 
 // init db
-const db = await getDB({ worldDir })
+const deploymentId = process.env.DEPLOYMENT_ID
+const db = await getDB({ worldDir, deploymentId })
 
 // init cleaner
-await cleaner.init({ db })
+await cleaner.init({ db, deploymentId })
 
 // init storage
 const storage = new Storage(path.join(worldDir, '/storage.json'))
@@ -139,15 +157,14 @@ await world.init({
   assetsDir: assets.dir,
   assetsUrl: assets.url,
   db,
+  deploymentId,
   assets,
   storage,
 })
 
 const registryState = createRegistryState()
 
-fastify.register(cors)
-fastify.register(compress)
-fastify.get('/', async (req, reply) => {
+function renderClientHtml(reply) {
   const title = world.settings.title || 'World'
   const desc = world.settings.desc || ''
   const image = world.resolveURL(world.settings.image?.url) || ''
@@ -159,6 +176,18 @@ fastify.get('/', async (req, reply) => {
   html = html.replaceAll('{desc}', desc)
   html = html.replaceAll('{image}', image)
   reply.type('text/html').send(html)
+}
+
+fastify.register(cors)
+fastify.register(compress)
+fastify.get('/', async (_req, reply) => {
+  renderClientHtml(reply)
+})
+fastify.get('/worlds', async (_req, reply) => {
+  renderClientHtml(reply)
+})
+fastify.get('/worlds/*', async (_req, reply) => {
+  renderClientHtml(reply)
 })
 fastify.get('/api/ai-docs-index', async (req, reply) => {
   reply.send({ files: getDocsIndex() })
@@ -281,6 +310,86 @@ try {
   process.exit(1)
 }
 
+console.log(`${mainServerTls ? 'HTTPS' : 'HTTP'} server listening on port ${port}`)
+
+let wssServer = null
+if (useDualPort) {
+  wssServer = Fastify({
+    logger: { level: 'error' },
+    https: tlsConfig,
+  })
+
+  wssServer.register(cors)
+  wssServer.register(compress)
+  wssServer.get('/', async (_req, reply) => {
+    renderClientHtml(reply)
+  })
+  wssServer.get('/worlds', async (_req, reply) => {
+    renderClientHtml(reply)
+  })
+  wssServer.get('/worlds/*', async (_req, reply) => {
+    renderClientHtml(reply)
+  })
+  wssServer.register(statics, {
+    root: path.join(__dirname, 'public'),
+    prefix: '/',
+    decorateReply: false,
+    setHeaders: res => {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
+      res.setHeader('Pragma', 'no-cache')
+      res.setHeader('Expires', '0')
+    },
+  })
+  if (world.assetsDir) {
+    wssServer.register(statics, {
+      root: world.assetsDir,
+      prefix: '/assets/',
+      decorateReply: false,
+      setHeaders: res => {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+        res.setHeader('Expires', new Date(Date.now() + 31536000000).toUTCString())
+      },
+    })
+  }
+  wssServer.get('/env.js', async (_req, reply) => {
+    reply.type('application/javascript').send(envsCode)
+  })
+  wssServer.get('/health', async (_req, reply) => {
+    return reply.code(200).send({ ok: true, timestamp: new Date().toISOString(), uptime: process.uptime() })
+  })
+  wssServer.get('/status', async (_req, reply) => {
+    return reply.code(200).send({
+      ok: true,
+      worldId: world?.network?.worldId || null,
+      title: world.settings.title || 'World',
+      description: world.settings.desc || '',
+      playerCount: world?.network?.sockets?.size || 0,
+      updatedAt: new Date().toISOString(),
+    })
+  })
+  wssServer.register(ws)
+  const adminHtmlPathDirect = path.join(__dirname, 'public', 'admin.html')
+  wssServer.register(admin, { world, assets, adminHtmlPath: adminHtmlPathDirect })
+  wssServer.register(async function wssWorldNetwork(app) {
+    app.get('/ws', { websocket: true }, (wsConn, req) => {
+      world.network.onConnection(wsConn, req.query, req)
+    })
+  })
+  wssServer.setErrorHandler((err, req, reply) => {
+    console.error(err)
+    reply.status(500).send()
+  })
+
+  try {
+    await wssServer.listen({ port: directWssPort, host })
+    console.log(`WSS server listening on port ${directWssPort} (TLS enabled)`)
+  } catch (err) {
+    console.error(err)
+    console.error(`failed to launch WSS server on port ${directWssPort}`)
+    process.exit(1)
+  }
+}
+
 void registerWithRegistry(registryState, {
   worldId: world?.network?.worldId || null,
   commitHash: process.env.COMMIT_HASH || null,
@@ -288,19 +397,19 @@ void registerWithRegistry(registryState, {
 
 async function worldNetwork(fastify) {
   fastify.get('/ws', { websocket: true }, (ws, req) => {
-    world.network.onConnection(ws, req.query)
+    world.network.onConnection(ws, req.query, req)
   })
 }
-
-console.log(`server listening on port ${port}`)
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
   await fastify.close()
+  if (wssServer) await wssServer.close()
   process.exit(0)
 })
 
 process.on('SIGTERM', async () => {
   await fastify.close()
+  if (wssServer) await wssServer.close()
   process.exit(0)
 })

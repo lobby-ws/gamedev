@@ -15,7 +15,7 @@ import { ChevronDoubleUpIcon, HandIcon } from './Icons'
 import { Sidebar } from './Sidebar'
 import { MainMenu } from './MainMenu'
 
-export function CoreUI({ world }) {
+export function CoreUI({ world, connectionStatus }) {
   const ref = useRef()
   const [ready, setReady] = useState(false)
   const [player, setPlayer] = useState(() => world.entities.player)
@@ -98,7 +98,7 @@ export function CoreUI({ world }) {
       {/* {ready && <Side world={world} player={player} menu={menu} />} */}
       {avatar && <AvatarPane key={avatar.hash} world={world} info={avatar} />}
       {/* {apps && <AppsPane world={world} close={() => world.ui.toggleApps()} />} */}
-      {!ready && <LoadingOverlay world={world} />}
+      {!ready && <LoadingOverlay world={world} connectionStatus={connectionStatus} />}
       {kicked && <KickedOverlay code={kicked} />}
       {ready && isTouch && <TouchBtns world={world} />}
       {ready && isTouch && <TouchStick world={world} />}
@@ -701,13 +701,20 @@ function Disconnected() {
   )
 }
 
-function LoadingOverlay({ world }) {
+function LoadingOverlay({ world, connectionStatus }) {
   const [progress, setProgress] = useState(0)
+  const [wsStatus, setWsStatus] = useState(null)
   const { title, desc, image } = world.settings
+  const activeStatus = wsStatus || connectionStatus
+  const isWaiting = activeStatus?.status === 'waiting' || activeStatus?.status === 'retrying'
+  const isError = activeStatus?.status === 'error'
+  const statusMessage = activeStatus?.message
   useEffect(() => {
     world.on('progress', setProgress)
+    world.on('connectionStatus', setWsStatus)
     return () => {
       world.off('progress', setProgress)
+      world.off('connectionStatus', setWsStatus)
     }
   }, [])
   return (
@@ -768,6 +775,29 @@ function LoadingOverlay({ world }) {
           background: rgba(255, 255, 255, 0.1);
           position: relative;
         }
+        .loading-status {
+          color: rgba(255, 255, 255, 0.7);
+          font-size: 0.875rem;
+          margin: 0 0 12px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .loading-status--error {
+          color: #ff6b6b;
+        }
+        .loading-spinner {
+          display: inline-flex;
+          animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+          from {
+            transform: rotate(0deg);
+          }
+          to {
+            transform: rotate(360deg);
+          }
+        }
         .loading-bar {
           position: absolute;
           top: 0;
@@ -785,6 +815,16 @@ function LoadingOverlay({ world }) {
       <div className='loading-info'>
         {title && <div className='loading-title'>{title}</div>}
         {desc && <div className='loading-desc'>{desc}</div>}
+        {(isWaiting || isError) && statusMessage && (
+          <div className={`loading-status ${isError ? 'loading-status--error' : ''}`}>
+            {isWaiting && (
+              <span className='loading-spinner'>
+                <LoaderIcon size='1rem' />
+              </span>
+            )}
+            {statusMessage}
+          </div>
+        )}
         <div className='loading-track'>
           <div className='loading-bar' />
         </div>

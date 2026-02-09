@@ -9,6 +9,14 @@ export { System } from '../core/systems/System'
 
 function resolveAdminUrl() {
   if (globalThis.env?.PUBLIC_ADMIN_URL) return globalThis.env.PUBLIC_ADMIN_URL
+  if (window?.location?.origin) return window.location.origin
+  if (globalThis.env?.PUBLIC_WS_URL) {
+    const derived = globalThis.env.PUBLIC_WS_URL
+      .replace(/^wss:/, 'https:')
+      .replace(/^ws:/, 'http:')
+      .replace(/\/ws\/?$/, '')
+    if (derived) return derived
+  }
   if (globalThis.env?.PUBLIC_API_URL) {
     return globalThis.env.PUBLIC_API_URL.replace(/\/api\/?$/, '')
   }

@@ -32,14 +32,38 @@ export class ClientNetwork extends System {
   }
 
   init({ wsUrl, name, avatar }) {
+    this.maxRetries = 10
+    this.maxWaitTime = 60000
+    this.retryCount = 0
+    this.retryDelay = 6000
+    this.connectStartTime = Date.now()
+    this.wsUrl = wsUrl
+    this.connectParams = { name, avatar }
+    this.wasConnected = false
+    this.connect()
+  }
+
+  connect() {
     const authToken = storage.get('authToken')
-    let url = `${wsUrl}?authToken=${authToken}`
-    if (name) url += `&name=${encodeURIComponent(name)}`
-    if (avatar) url += `&avatar=${encodeURIComponent(avatar)}`
+    let url = `${this.wsUrl}?authToken=${authToken}`
+    if (this.connectParams.name) url += `&name=${encodeURIComponent(this.connectParams.name)}`
+    if (this.connectParams.avatar) url += `&avatar=${encodeURIComponent(this.connectParams.avatar)}`
     this.ws = new WebSocket(url)
     this.ws.binaryType = 'arraybuffer'
+    this.ws.addEventListener('open', this.onOpen)
     this.ws.addEventListener('message', this.onPacket)
     this.ws.addEventListener('close', this.onClose)
+    this.ws.addEventListener('error', this.onError)
+  }
+
+  onOpen = () => {
+    this.wasConnected = true
+    this.retryCount = 0
+    this.world.emit('connectionStatus', { status: 'connected' })
+  }
+
+  onError = e => {
+    console.error('WebSocket error:', e)
   }
 
   preFixedUpdate() {
@@ -241,6 +265,26 @@ export class ClientNetwork extends System {
   }
 
   onClose = code => {
+    const elapsed = Date.now() - this.connectStartTime
+    const timedOut = elapsed > this.maxWaitTime
+
+    if (!this.wasConnected && this.retryCount < this.maxRetries && !timedOut) {
+      this.retryCount++
+      this.world.emit('connectionStatus', {
+        status: 'retrying',
+        message: `Connecting to server... (attempt ${this.retryCount}/${this.maxRetries})`,
+      })
+      setTimeout(() => this.connect(), this.retryDelay)
+      return
+    }
+
+    if (!this.wasConnected && timedOut) {
+      this.world.emit('connectionStatus', {
+        status: 'error',
+        message: 'Cannot find server',
+      })
+    }
+
     this.world.chat.add({
       id: uuid(),
       from: null,
@@ -254,8 +298,10 @@ export class ClientNetwork extends System {
 
   destroy() {
     if (this.ws) {
+      this.ws.removeEventListener('open', this.onOpen)
       this.ws.removeEventListener('message', this.onPacket)
       this.ws.removeEventListener('close', this.onClose)
+      this.ws.removeEventListener('error', this.onError)
       if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
         this.ws.close()
       }

@@ -10,7 +10,7 @@ import { ensureBlueprintSyncMetadata, ensureEntitySyncMetadata } from './syncMet
 
 let db
 
-export async function getDB({ worldDir }) {
+export async function getDB({ worldDir, deploymentId }) {
   if (!db) {
     const isPostgres = process.env.DB_URI?.startsWith('postgres://') || process.env.DB_URI?.startsWith('postgresql://')
     if (isPostgres) {
@@ -34,12 +34,12 @@ export async function getDB({ worldDir }) {
         useNullAsDefault: true,
       })
     }
-    await migrate(db)
+    await migrate(db, { deploymentId })
   }
   return db
 }
 
-async function migrate(db) {
+async function migrate(db, options = {}) {
   // ensure we have our config table
   const exists = await db.schema.hasTable('config')
   if (!exists) {
@@ -55,7 +55,7 @@ async function migrate(db) {
   // run missing migrations
   for (let i = version; i < migrations.length; i++) {
     console.log(`[db] migration #${i + 1}`)
-    await migrations[i](db)
+    await migrations[i](db, options)
     await db('config')
       .where('key', 'version')
       .update('value', (i + 1).toString())
@@ -972,5 +972,85 @@ const migrations = [
       if (!isCanonicalBuiltin(entry.data, entry.template)) continue
       await db('blueprints').where('id', id).delete()
     }
+  },
+  // align schema fields with deployment_id support
+  async (db, { deploymentId: argDeploymentId } = {}) => {
+    const deploymentId = argDeploymentId || process.env.DEPLOYMENT_ID || 'default'
+    const now = moment().toISOString()
+
+    if (!(await db.schema.hasColumn('config', 'deployment_id'))) {
+      await db.schema.alterTable('config', table => {
+        table.string('deployment_id').nullable()
+      })
+    }
+    await db('config').whereNull('deployment_id').update({ deployment_id: deploymentId })
+    await db.raw('CREATE UNIQUE INDEX IF NOT EXISTS config_deployment_id_key_unique ON config (deployment_id, key)')
+
+    if (!(await db.schema.hasColumn('users', 'updatedAt'))) {
+      await db.schema.alterTable('users', table => {
+        table.timestamp('updatedAt').nullable().defaultTo(db.fn.now())
+      })
+    }
+    await db('users').whereNull('updatedAt').update({ updatedAt: now })
+
+    if (!(await db.schema.hasColumn('users', 'wallet_address'))) {
+      await db.schema.alterTable('users', table => {
+        table.string('wallet_address', 42).nullable()
+      })
+    }
+    if (!(await db.schema.hasColumn('users', 'nonce'))) {
+      await db.schema.alterTable('users', table => {
+        table.string('nonce').nullable()
+      })
+    }
+    if (!(await db.schema.hasColumn('users', 'last_auth_at'))) {
+      await db.schema.alterTable('users', table => {
+        table.timestamp('last_auth_at').nullable()
+      })
+    }
+    if (!(await db.schema.hasColumn('users', 'auth_method'))) {
+      await db.schema.alterTable('users', table => {
+        table.string('auth_method').nullable().defaultTo('anonymous')
+      })
+    }
+    await db('users').whereNull('auth_method').update({ auth_method: 'anonymous' })
+    await db.raw('CREATE UNIQUE INDEX IF NOT EXISTS users_wallet_address_unique ON users (wallet_address)')
+
+    if (!(await db.schema.hasTable('world_profiles'))) {
+      await db.schema.createTable('world_profiles', table => {
+        table.string('deployment_id').notNullable()
+        table.string('user_id').notNullable()
+        table.integer('rank').notNullable().defaultTo(0)
+        table.timestamp('createdAt').notNullable()
+        table.timestamp('updatedAt').notNullable()
+        table.primary(['deployment_id', 'user_id'])
+      })
+    }
+
+    if (!(await db.schema.hasColumn('blueprints', 'deployment_id'))) {
+      await db.schema.alterTable('blueprints', table => {
+        table.string('deployment_id').nullable()
+      })
+    }
+    await db('blueprints').whereNull('deployment_id').update({ deployment_id: deploymentId })
+    await db.raw('CREATE UNIQUE INDEX IF NOT EXISTS blueprints_deployment_id_id_unique ON blueprints (deployment_id, id)')
+
+    if (!(await db.schema.hasColumn('entities', 'deployment_id'))) {
+      await db.schema.alterTable('entities', table => {
+        table.string('deployment_id').nullable()
+      })
+    }
+    await db('entities').whereNull('deployment_id').update({ deployment_id: deploymentId })
+    await db.raw('CREATE UNIQUE INDEX IF NOT EXISTS entities_deployment_id_id_unique ON entities (deployment_id, id)')
+
+    if (!(await db.schema.hasColumn('deploy_snapshots', 'deployment_id'))) {
+      await db.schema.alterTable('deploy_snapshots', table => {
+        table.string('deployment_id').nullable()
+      })
+    }
+    await db('deploy_snapshots').whereNull('deployment_id').update({ deployment_id: deploymentId })
+    await db.raw(
+      'CREATE UNIQUE INDEX IF NOT EXISTS deploy_snapshots_deployment_id_id_unique ON deploy_snapshots (deployment_id, id)'
+    )
   },
 ]
