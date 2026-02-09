@@ -117,6 +117,9 @@ export function createPlayerProxy(entity, player) {
       if (opts.turn) effect.turn = opts.turn
       if (opts.duration) effect.duration = opts.duration
       if (opts.upperBody) effect.upperBody = opts.upperBody
+      if (typeof opts.torsoYaw === 'number') {
+        effect.torsoYaw = Math.max(-90, Math.min(90, opts.torsoYaw))
+      }
       if (opts.cancellable) {
         effect.cancellable = opts.cancellable
         delete effect.freeze // overrides

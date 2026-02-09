@@ -864,6 +864,7 @@ interface Player {
       emote?: string
       upperBody?: boolean
       emoteGaze?: boolean
+      torsoYaw?: number
       snare?: number
       freeze?: boolean
       turn?: boolean
