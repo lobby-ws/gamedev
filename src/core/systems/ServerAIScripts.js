@@ -39,9 +39,9 @@ function resolveScriptRootBlueprint(blueprint, world) {
 const docsRoot = resolveDocsRoot()
 const ANTHROPIC_MAX_OUTPUT_TOKENS = 8192
 const AI_TOOL_LOOP_BUDGETS = Object.freeze({
-  maxSteps: 4,
+  maxSteps: 10,
   maxToolCalls: 4,
-  timeoutMs: 20_000,
+  timeoutMs: 45_000,
 })
 const DOCS_TOOL_LIMITS = Object.freeze({
   maxQueryChars: 240,

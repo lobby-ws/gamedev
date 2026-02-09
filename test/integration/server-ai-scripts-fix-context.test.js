@@ -215,9 +215,9 @@ test('server AI requests include searchDocs tool loop options when rollout is en
 
     assert.equal(generateCalls.length, 1)
     const options = generateCalls[0].options
-    assert.equal(options.maxSteps, 4)
+    assert.equal(options.maxSteps, 10)
     assert.equal(options.maxToolCalls, 4)
-    assert.equal(options.timeoutMs, 20_000)
+    assert.equal(options.timeoutMs, 45_000)
     assert.ok(options.tools)
     assert.equal(typeof options.tools.searchDocs.execute, 'function')
     assert.equal(sentPackets.length, 1)

@@ -31,9 +31,9 @@ When tool loop is enabled, `searchDocs` can query only markdown docs under `docs
 
 Tool-loop execution budgets:
 
-- Max generation steps: 4
+- Max generation steps: 5
 - Max tool calls: 4
-- Timeout per AI request: 20s
+- Timeout per AI request: 45s
 
 ## Fix Context Logs
 

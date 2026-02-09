@@ -14,9 +14,9 @@ const DEFAULT_ENTRY = 'index.js'
 const BLUEPRINT_NAME_MAX_LENGTH = 80
 const ANTHROPIC_MAX_OUTPUT_TOKENS = 4096
 const AI_TOOL_LOOP_BUDGETS = Object.freeze({
-  maxSteps: 4,
+  maxSteps: 10,
   maxToolCalls: 4,
-  timeoutMs: 20_000,
+  timeoutMs: 45_000,
 })
 const DOCS_TOOL_LIMITS = Object.freeze({
   maxQueryChars: 240,
