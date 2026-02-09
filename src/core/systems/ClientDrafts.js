@@ -5,6 +5,18 @@ import { hashFile } from '../utils-client'
 function buildPlaceholderScript({ blueprintId }) {
   return `export default (world, app, fetch, props, setTimeout) => {
   // Draft placeholder: ${blueprintId}
+  const cube = app.create('prim', {
+    type: 'box',
+    scale: [0.3, 0.3, 0.3],
+    position: [0, 0.5, 0],
+    color: '#ffffff',
+    emissive: '#a78bfa',
+    emissiveIntensity: 0.8,
+    metalness: 0.2,
+    roughness: 0.4,
+  })
+  app.add(cube)
+
   const aura = app.create('particles', {
     shape: ['sphere', 0.6, 1],
     rate: 30,
@@ -23,6 +35,11 @@ function buildPlaceholderScript({ blueprintId }) {
   aura.sizeOverLife = '0,0.6|0.5,1|1,0.8'
   aura.position.set(0, 0.5, 0)
   app.add(aura)
+
+  app.on('update', dt => {
+    cube.rotation.y += dt * 0.8
+    cube.rotation.x += dt * 0.4
+  })
 }
 `
 }

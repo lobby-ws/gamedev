@@ -149,6 +149,22 @@ Inherits all [Node](/docs/scripting/nodes/Node.md) properties
 ## Examples
 
 ```javascript
+// Spinning cube (handy as a placeholder you can click)
+const cube = app.create('prim', {
+  type: 'box',
+  scale: [0.3, 0.3, 0.3],
+  position: [0, 0.5, 0],
+  color: '#ffffff',
+  emissive: '#a78bfa',
+  emissiveIntensity: 0.8
+})
+app.add(cube)
+
+app.on('update', (dt) => {
+  cube.rotation.y += dt * 0.8
+  cube.rotation.x += dt * 0.4
+})
+
 // Create various primitives with different materials
 const box = app.create('prim', {
   type: 'box',
