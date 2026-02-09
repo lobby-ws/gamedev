@@ -1,29 +1,4 @@
 import { System } from './System'
-import { uuid } from '../utils'
-import { hashFile } from '../utils-client'
-
-const PLACEHOLDER_SCRIPT = `export default (world, app, fetch, props, setTimeout) => {
-  // AI placeholder while generation runs
-  const box = app.create('prim', {
-    type: 'box',
-    size: [1, 1, 1],
-    color: '#4b5563',
-  })
-  app.add(box)
-}
-`
-const DEFAULT_ENTRY = 'index.js'
-
-function deriveLockScopeFromBlueprintId(id) {
-  if (typeof id !== 'string' || !id.trim()) return 'global'
-  if (id === '$scene') return '$scene'
-  const idx = id.indexOf('__')
-  if (idx !== -1) {
-    const appName = id.slice(0, idx)
-    return appName ? appName : 'global'
-  }
-  return id
-}
 
 function normalizePrompt(value) {
   if (typeof value !== 'string') return ''
@@ -84,124 +59,34 @@ export class ClientAI extends System {
       err.code = 'ai_disabled'
       throw err
     }
-    if (!this.world.builder?.canBuild?.()) {
-      const err = new Error('builder_required')
-      err.code = 'builder_required'
-      throw err
-    }
-    if (!this.world.admin?.upload || !this.world.admin?.blueprintAdd || !this.world.admin?.acquireDeployLock) {
-      const err = new Error('admin_required')
-      err.code = 'admin_required'
-      throw err
-    }
 
     const normalizedAttachments = normalizeAttachments(payload.attachments)
     const scriptRootId = typeof payload.scriptRootId === 'string' ? payload.scriptRootId.trim() : ''
-    let lockToken = null
-    let blueprint = null
-    let app = null
-    try {
-      const blueprintId = uuid()
-      const scope = deriveLockScopeFromBlueprintId(blueprintId)
-      const lockResult = await this.world.admin.acquireDeployLock({
-        owner: this.world.network.id,
-        scope,
-      })
-      lockToken = lockResult?.token || this.world.admin.deployLockToken
 
-      const file = new File([PLACEHOLDER_SCRIPT], 'script.js', { type: 'text/javascript' })
-      const hash = await hashFile(file)
-      const scriptUrl = `asset://${hash}.js`
-      await this.world.admin.upload(file)
-
-      const resolvedUrl = this.world.resolveURL ? this.world.resolveURL(scriptUrl) : scriptUrl
-      this.world.loader?.setFile?.(resolvedUrl, file)
-
-      const createdAt = this.world.network?.getTime?.() ?? Date.now() / 1000
-      const entryPath = DEFAULT_ENTRY
-      const scriptFiles = { [entryPath]: scriptUrl }
-      blueprint = {
-        id: blueprintId,
-        version: 0,
-        name: 'AI Draft',
-        image: null,
-        author: null,
-        url: null,
-        desc: null,
-        model: 'asset://empty.glb',
-        script: scriptUrl,
-        scriptEntry: entryPath,
-        scriptFiles,
-        scriptFormat: 'module',
-        props: {
-          prompt: trimmed.length > 100 ? `${trimmed.slice(0, 100)}...` : trimmed,
-          createdAt,
-        },
-        preload: false,
-        public: false,
-        locked: false,
-        frozen: false,
-        unique: false,
-        scene: false,
-        disabled: false,
-      }
-      this.world.blueprints.add(blueprint)
-      this.world.admin.blueprintAdd(blueprint, { ignoreNetworkId: this.world.network.id, lockToken })
-
-      const transform = this.world.builder.getSpawnTransform(true)
-      this.world.builder.toggle(true)
-      this.world.builder.control.pointer.lock()
-      await new Promise(resolve => setTimeout(resolve, 100))
-      const appData = {
-        id: uuid(),
-        type: 'app',
-        blueprint: blueprint.id,
-        position: transform.position,
-        quaternion: transform.quaternion,
-        scale: [1, 1, 1],
-        mover: this.world.network.id,
-        uploader: null,
-        pinned: false,
-        props: {},
-        state: {},
-      }
-      app = this.world.entities.add(appData)
-      this.world.admin.entityAdd(appData, { ignoreNetworkId: this.world.network.id })
-      this.world.builder.select(app)
-
-      const request = {
-        blueprintId: blueprint.id,
-        appId: appData.id,
-        prompt: trimmed,
-      }
-      if (normalizedAttachments) {
-        request.attachments = normalizedAttachments
-      }
-      if (scriptRootId) {
-        request.scriptRootId = scriptRootId
-      }
-      this.world.network.send('aiCreateRequest', request)
-
-      return { blueprintId: blueprint.id, appId: appData.id }
-    } catch (err) {
-      if (app) {
-        app.destroy(true)
-      }
-      if (blueprint) {
-        this.world.blueprints.remove(blueprint.id)
-        this.world.admin
-          ?.blueprintRemove?.(blueprint.id)
-          .catch(removeErr => console.error('failed to remove blueprint', removeErr))
-      }
+    if (!this.world.drafts?.createDraftApp) {
+      const err = new Error('drafts_unavailable')
+      err.code = 'drafts_unavailable'
       throw err
-    } finally {
-      if (lockToken && this.world.admin?.releaseDeployLock) {
-        try {
-          await this.world.admin.releaseDeployLock(lockToken)
-        } catch (releaseErr) {
-          console.error('failed to release deploy lock', releaseErr)
-        }
-      }
     }
+    const promptPreview = trimmed.length > 100 ? `${trimmed.slice(0, 100)}...` : trimmed
+    const result = await this.world.drafts.createDraftApp({
+      name: 'AI Draft',
+      props: {
+        prompt: promptPreview,
+      },
+    })
+    const request = {
+      blueprintId: result.blueprintId,
+      appId: result.appId,
+      prompt: trimmed,
+    }
+    if (normalizedAttachments) {
+      request.attachments = normalizedAttachments
+    }
+    if (scriptRootId) {
+      request.scriptRootId = scriptRootId
+    }
+    this.world.network.send('aiCreateRequest', request)
+    return result
   }
 }

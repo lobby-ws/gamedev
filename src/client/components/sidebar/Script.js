@@ -10,7 +10,6 @@ import {
 import { cls } from '../cls'
 import { theme } from '../theme'
 import { isArray } from 'lodash-es'
-import { ScriptEditor } from '../ScriptEditor'
 import { ScriptFilesEditor } from '../ScriptFilesEditor'
 import { buildScriptGroups, getScriptGroupMain } from '../../../core/extras/blueprintGroups'
 import { storage } from '../../../core/storage'
@@ -130,6 +129,7 @@ export function Script({ world, hidden }) {
   const [aiMode, setAiMode] = useState('edit')
   const [aiStatus, setAiStatus] = useState(null)
   const [aiExpanded, setAiExpanded] = useState(true)
+  const [editorCollapsed, setEditorCollapsed] = useState(false)
   const aiRequestRef = useRef(null)
   const aiPromptRef = useRef(null)
   const [aiAttachments, setAiAttachments] = useState([])
@@ -233,7 +233,7 @@ export function Script({ world, hidden }) {
     const apiUrl = world.network?.apiUrl
     if (!apiUrl) {
       setAiDocsIndex([])
-      return () => {}
+      return () => { }
     }
     const loadDocs = async () => {
       try {
@@ -615,6 +615,16 @@ export function Script({ world, hidden }) {
           justify-content: space-between;
           gap: 1rem;
           color: rgba(255, 255, 255, 0.85);
+        }
+        .script-editor-shell {
+          flex: 1;
+          min-height: 0;
+          display: flex;
+        }
+        .script-editor-shell.collapsed {
+          flex: 0 0 auto;
+          height: 0;
+          overflow: hidden;
         }
         .script-ai-actions {
           display: flex;
@@ -1010,6 +1020,15 @@ export function Script({ world, hidden }) {
           <button className='script-action' type='button' onClick={() => handle?.copy?.()}>
             Copy
           </button>
+          {moduleRoot && (
+            <button
+              className='script-action'
+              type='button'
+              onClick={() => setEditorCollapsed(collapsed => !collapsed)}
+            >
+              {editorCollapsed ? 'Show Editor' : 'Hide Editor'}
+            </button>
+          )}
         </div>
       </div>
       {moduleRoot && (handle?.error || handle?.conflict) && (
@@ -1040,8 +1059,7 @@ export function Script({ world, hidden }) {
                   <div className='script-ai-proposal-title'>AI proposal ready</div>
                   <div className='script-ai-proposal-summary'>
                     {handle?.ai?.summary ||
-                      `${handle?.ai?.fileCount || 0} file${
-                        handle?.ai?.fileCount === 1 ? '' : 's'
+                      `${handle?.ai?.fileCount || 0} file${handle?.ai?.fileCount === 1 ? '' : 's'
                       } changed`}
                   </div>
                   <div className='script-ai-proposal-meta'>
@@ -1229,11 +1247,9 @@ export function Script({ world, hidden }) {
           )}
         </div>
       )}
-      {moduleRoot ? (
+      <div className={cls('script-editor-shell', { collapsed: editorCollapsed })}>
         <ScriptFilesEditor scriptRoot={moduleRoot} world={world} onHandle={setHandle} />
-      ) : (
-        <ScriptEditor key={app.data.id} app={app} onHandle={setHandle} />
-      )}
+      </div>
       <div className='script-resizer' ref={resizeRef} />
     </div>
   )

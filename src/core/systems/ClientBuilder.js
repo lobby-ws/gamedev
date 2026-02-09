@@ -75,6 +75,12 @@ const SCRIPT_BLUEPRINT_FIELDS = new Set([
   'scriptRef',
 ])
 
+const DEFAULT_MODULE_SCRIPT_ENTRY = 'index.js'
+const DEFAULT_MODULE_SCRIPT_SOURCE = `export default (world, app, fetch, props, setTimeout) => {
+
+}
+`
+
 function hasScriptFields(data) {
   if (!data || typeof data !== 'object') return false
   for (const field of SCRIPT_BLUEPRINT_FIELDS) {
@@ -83,6 +89,12 @@ function hasScriptFields(data) {
     return true
   }
   return false
+}
+
+function normalizeScope(value) {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed || null
 }
 
 /**
@@ -194,6 +206,14 @@ export class ClientBuilder extends System {
       this.world.emit('toast', 'Deploy lock required.')
       return
     }
+    if (code === 'scope_unknown') {
+      this.world.emit('toast', 'Scope metadata missing for deploy operation.')
+      return
+    }
+    if (code === 'scope_mismatch' || code === 'multi_scope_not_supported') {
+      this.world.emit('toast', 'Scope metadata mismatch for deploy operation.')
+      return
+    }
     if (code === 'locked' || code === 'deploy_locked') {
       const owner = err?.lock?.owner
       this.world.emit('toast', owner ? `Deploy locked by ${owner}.` : 'Deploy locked by another session.')
@@ -279,6 +299,19 @@ export class ClientBuilder extends System {
 
   async forkTemplateFromBlueprint(sourceBlueprint, actionLabel = 'Template fork', mergedProps, overrides) {
     if (!this.ensureAdminReady(actionLabel)) return null
+    const sourceScope = normalizeScope(sourceBlueprint.scope)
+    const sourceId =
+      typeof sourceBlueprint?.id === 'string' && sourceBlueprint.id.trim() ? sourceBlueprint.id.trim() : null
+    const sourceInWorld = sourceId ? this.world.blueprints.get(sourceId) : null
+    const sourceScriptRef =
+      typeof sourceBlueprint.scriptRef === 'string' && sourceBlueprint.scriptRef.trim()
+        ? sourceBlueprint.scriptRef.trim()
+        : null
+    const scriptRootId = sourceScriptRef || (sourceInWorld ? sourceId : null)
+    const scriptRoot =
+      (scriptRootId && this.world.blueprints.get(scriptRootId)) || sourceInWorld || sourceBlueprint
+    const shouldUseScriptRef = !!(scriptRootId && this.world.blueprints.get(scriptRootId))
+    const sharedScript = typeof scriptRoot?.script === 'string' ? scriptRoot.script : sourceBlueprint.script
     const baseProps =
       sourceBlueprint.props &&
       typeof sourceBlueprint.props === 'object' &&
@@ -297,11 +330,15 @@ export class ClientBuilder extends System {
       url: sourceBlueprint.url,
       desc: sourceBlueprint.desc,
       model: sourceBlueprint.model,
-      script: sourceBlueprint.script,
-      scriptEntry: sourceBlueprint.scriptEntry,
-      scriptFiles: sourceBlueprint.scriptFiles ? cloneDeep(sourceBlueprint.scriptFiles) : sourceBlueprint.scriptFiles,
-      scriptFormat: sourceBlueprint.scriptFormat,
-      scriptRef: sourceBlueprint.scriptRef,
+      script: sharedScript,
+      scriptEntry: shouldUseScriptRef ? null : scriptRoot?.scriptEntry ?? null,
+      scriptFiles:
+        shouldUseScriptRef || !scriptRoot?.scriptFiles || Array.isArray(scriptRoot.scriptFiles)
+          ? null
+          : cloneDeep(scriptRoot.scriptFiles),
+      scriptFormat: shouldUseScriptRef ? null : scriptRoot?.scriptFormat ?? null,
+      scriptRef: shouldUseScriptRef ? scriptRootId : null,
+      scope: sourceScope,
       props: cloneDeep(props),
       preload: sourceBlueprint.preload,
       public: sourceBlueprint.public,
@@ -315,16 +352,19 @@ export class ClientBuilder extends System {
       const { id: _id, version: _version, ...rest } = overrides
       Object.assign(blueprint, rest)
     }
+    if (hasScriptFields(blueprint) && !normalizeScope(blueprint.scope)) {
+      blueprint.scope = blueprint.id
+    }
     this.world.blueprints.add(blueprint)
     let lockToken
     let lockScope = null
     let releaseLock = false
     try {
       if (hasScriptFields(blueprint)) {
-        lockScope =
-          typeof blueprint.scriptRef === 'string' && blueprint.scriptRef.trim()
-            ? blueprint.scriptRef.trim()
-            : blueprint.id
+        lockScope = normalizeScope(blueprint.scope)
+        if (!lockScope) {
+          throw new Error('scope_unknown')
+        }
         const admin = this.world.admin
         const currentScope = admin?.deployLockScope || 'global'
         if (admin?.deployLockToken && (currentScope === 'global' || currentScope === lockScope)) {
@@ -1278,7 +1318,7 @@ export class ClientBuilder extends System {
   }
 
   async addApp(file, transform) {
-    if (!this.ensureAdminReady('Import')) return
+    if (typeof this.ensureAdminReady === 'function' && !this.ensureAdminReady('Import')) return
     let lockToken = null
     let blueprint = null
     let app = null
@@ -1326,6 +1366,7 @@ export class ClientBuilder extends System {
         const change = {
           id: scene.id,
           version: scene.version + 1,
+          scope: normalizeScope(scene?.scope) || '$scene',
           name: info.blueprint.name,
           image: info.blueprint.image,
           author: info.blueprint.author,
@@ -1349,7 +1390,7 @@ export class ClientBuilder extends System {
         if (hasScriptFields(change)) {
           const result = await this.world.admin.acquireDeployLock({
             owner: this.world.network.id,
-            scope: '$scene',
+            scope: change.scope,
           })
           lockToken = result?.token || this.world.admin.deployLockToken
         }
@@ -1370,6 +1411,7 @@ export class ClientBuilder extends System {
       blueprint = {
         id: uuid(),
         version: 0,
+        scope: normalizeScope(info.blueprint.scope),
         name: info.blueprint.name,
         image: info.blueprint.image,
         author: info.blueprint.author,
@@ -1391,9 +1433,12 @@ export class ClientBuilder extends System {
         disabled: info.blueprint.disabled,
       }
       if (hasScriptFields(blueprint)) {
+        if (!normalizeScope(blueprint.scope)) {
+          blueprint.scope = blueprint.id
+        }
         const result = await this.world.admin.acquireDeployLock({
           owner: this.world.network.id,
-          scope: blueprint.id,
+          scope: blueprint.scope,
         })
         lockToken = result?.token || this.world.admin.deployLockToken
       }
@@ -1454,18 +1499,33 @@ export class ClientBuilder extends System {
     const filename = `${hash}.glb`
     // canonical url to this file
     const url = `asset://${filename}`
+    // create a blank module script entry
+    const scriptFile = new File([DEFAULT_MODULE_SCRIPT_SOURCE], DEFAULT_MODULE_SCRIPT_ENTRY, {
+      type: 'text/javascript',
+    })
+    const scriptHash = await hashFile(scriptFile)
+    const scriptUrl = `asset://${scriptHash}.js`
     // cache file locally so this client can insta-load it
     this.world.loader.insert('model', url, file)
+    this.world.loader.insert('script', scriptUrl, scriptFile)
     // make blueprint
     const blueprint = {
       id: uuid(),
       version: 0,
+      scope: null,
       name: file.name.split('.')[0],
       image: null,
       author: null,
       url: null,
       desc: null,
       model: url,
+      script: scriptUrl,
+      scriptEntry: DEFAULT_MODULE_SCRIPT_ENTRY,
+      scriptFiles: {
+        [DEFAULT_MODULE_SCRIPT_ENTRY]: scriptUrl,
+      },
+      scriptFormat: 'module',
+      scriptRef: null,
       props: {},
       preload: false,
       public: false,
@@ -1474,12 +1534,29 @@ export class ClientBuilder extends System {
       scene: false,
       disabled: false,
     }
+    if (hasScriptFields(blueprint) && !normalizeScope(blueprint.scope)) {
+      blueprint.scope = blueprint.id
+    }
     let app = null
+    let lockToken = null
+    let lockScope = null
     try {
+      if (hasScriptFields(blueprint)) {
+        lockScope = normalizeScope(blueprint.scope)
+        if (!lockScope) {
+          throw new Error('scope_unknown')
+        }
+        const result = await this.world.admin.acquireDeployLock({
+          owner: this.world.network.id,
+          scope: lockScope,
+        })
+        lockToken = result?.token || this.world.admin.deployLockToken
+      }
       // register blueprint
       this.world.blueprints.add(blueprint)
       await this.world.admin.blueprintAdd(blueprint, {
         ignoreNetworkId: this.world.network.id,
+        lockToken,
         request: true,
       })
       // spawn the app moving
@@ -1500,8 +1577,8 @@ export class ClientBuilder extends System {
       }
       app = this.world.entities.add(data)
       await this.world.admin.entityAdd(data, { ignoreNetworkId: this.world.network.id, request: true })
-      // upload the glb
-      await this.world.admin.upload(file)
+      // upload the model + blank module script
+      await Promise.all([this.world.admin.upload(file), this.world.admin.upload(scriptFile)])
       // mark as uploaded so other clients can load it in
       app.onUploaded()
     } catch (err) {
@@ -1515,6 +1592,14 @@ export class ClientBuilder extends System {
           .catch(removeErr => console.error('failed to remove blueprint', removeErr))
       }
       this.handleAdminError(err, 'Import failed')
+    } finally {
+      if (lockToken && this.world.admin?.releaseDeployLock) {
+        try {
+          await this.world.admin.releaseDeployLock(lockToken, lockScope)
+        } catch (releaseErr) {
+          console.error('failed to release deploy lock', releaseErr)
+        }
+      }
     }
   }
 

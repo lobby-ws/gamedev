@@ -11,10 +11,164 @@ const SCRIPT_BLUEPRINT_FIELDS = new Set([
   'scriptFormat',
   'scriptRef',
 ])
+const CHANGEFEED_TABLE = 'sync_changes'
+const CHANGEFEED_DEFAULT_LIMIT = 200
+const CHANGEFEED_MAX_LIMIT = 1000
 
 function normalizeHeader(value) {
   if (Array.isArray(value)) return value[0]
   return value
+}
+
+function normalizeOperationValue(value) {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed || null
+}
+
+function normalizeIsoTimestamp(value) {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const parsed = Date.parse(trimmed)
+  if (!Number.isFinite(parsed)) return null
+  return new Date(parsed).toISOString()
+}
+
+function toCursorNumber(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.max(0, Math.floor(value))
+  }
+  if (typeof value === 'bigint') {
+    const asNumber = Number(value)
+    if (Number.isFinite(asNumber)) {
+      return Math.max(0, Math.floor(asNumber))
+    }
+    return 0
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return 0
+    if (!/^\d+$/.test(trimmed)) return 0
+    const parsed = Number.parseInt(trimmed, 10)
+    return Number.isFinite(parsed) ? Math.max(0, parsed) : 0
+  }
+  return 0
+}
+
+function parseChangefeedCursor(value) {
+  if (value === undefined || value === null) {
+    return { ok: true, mode: 'head', cursor: null }
+  }
+  const normalized = typeof value === 'string' ? value.trim() : value
+  if (normalized === '') {
+    return { ok: true, mode: 'head', cursor: null }
+  }
+  if (typeof normalized === 'string' && normalized.toLowerCase() === 'latest') {
+    return { ok: true, mode: 'head', cursor: null }
+  }
+  if (typeof normalized === 'number' && Number.isFinite(normalized) && Number.isInteger(normalized) && normalized >= 0) {
+    return { ok: true, mode: 'after', cursor: normalized }
+  }
+  if (typeof normalized === 'string' && /^\d+$/.test(normalized)) {
+    const cursor = Number.parseInt(normalized, 10)
+    return { ok: true, mode: 'after', cursor }
+  }
+  return { ok: false, error: 'invalid_cursor' }
+}
+
+function parseChangefeedLimit(value) {
+  if (value === undefined || value === null || value === '') {
+    return { ok: true, limit: CHANGEFEED_DEFAULT_LIMIT }
+  }
+  const normalized = typeof value === 'string' ? value.trim() : value
+  if (typeof normalized === 'number' && Number.isFinite(normalized) && Number.isInteger(normalized)) {
+    if (normalized < 1 || normalized > CHANGEFEED_MAX_LIMIT) {
+      return { ok: false, error: 'invalid_limit' }
+    }
+    return { ok: true, limit: normalized }
+  }
+  if (typeof normalized === 'string' && /^\d+$/.test(normalized)) {
+    const parsed = Number.parseInt(normalized, 10)
+    if (parsed < 1 || parsed > CHANGEFEED_MAX_LIMIT) {
+      return { ok: false, error: 'invalid_limit' }
+    }
+    return { ok: true, limit: parsed }
+  }
+  return { ok: false, error: 'invalid_limit' }
+}
+
+function parseChangePayload(value) {
+  if (typeof value !== 'string') return null
+  try {
+    return JSON.parse(value)
+  } catch {
+    return null
+  }
+}
+
+function serializeChangePayload(value) {
+  if (value === undefined) return null
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return null
+  }
+}
+
+function serializeChangeRow(operation) {
+  if (!operation || typeof operation !== 'object') return null
+  const opId = normalizeOperationValue(operation.opId)
+  const kind = normalizeOperationValue(operation.kind)
+  const objectUid = normalizeOperationValue(operation.objectUid)
+  if (!opId || !kind || !objectUid) return null
+  const ts = normalizeIsoTimestamp(operation.ts) || new Date().toISOString()
+  const actor = normalizeOperationValue(operation.actor) || 'runtime'
+  const source = normalizeOperationValue(operation.source) || 'runtime'
+  return {
+    opId,
+    ts,
+    actor,
+    source,
+    kind,
+    objectUid,
+    patch: serializeChangePayload(operation.patch),
+    snapshot: serializeChangePayload(operation.snapshot),
+    createdAt: ts,
+  }
+}
+
+function deserializeChangeRow(row) {
+  if (!row || typeof row !== 'object') return null
+  const opId = normalizeOperationValue(row.opId)
+  const kind = normalizeOperationValue(row.kind)
+  const objectUid = normalizeOperationValue(row.objectUid)
+  if (!opId || !kind || !objectUid) return null
+  const op = {
+    cursor: toCursorNumber(row.cursor),
+    opId,
+    ts: normalizeIsoTimestamp(typeof row.ts === 'string' ? row.ts : row.ts?.toISOString?.()) || new Date().toISOString(),
+    actor: normalizeOperationValue(row.actor) || 'runtime',
+    source: normalizeOperationValue(row.source) || 'runtime',
+    kind,
+    objectUid,
+  }
+  if (row.patch !== null && row.patch !== undefined) {
+    op.patch = parseChangePayload(row.patch)
+  }
+  if (row.snapshot !== null && row.snapshot !== undefined) {
+    op.snapshot = parseChangePayload(row.snapshot)
+  }
+  return op
+}
+
+function isUniqueConstraintError(err) {
+  const code = normalizeOperationValue(err?.code)
+  if (code === '23505' || code === 'SQLITE_CONSTRAINT' || code === 'SQLITE_CONSTRAINT_UNIQUE') {
+    return true
+  }
+  const message = (err?.message || '').toString()
+  return /unique|constraint/i.test(message)
 }
 
 function isCodeValid(expected, code) {
@@ -70,6 +224,7 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
   const playerSubscribers = new Set()
   const runtimeSubscribers = new Set()
   const db = world?.network?.db
+  let changefeedWriteQueue = Promise.resolve()
   const deployLocks = new Map()
   const lockTtlSeconds = Number.parseInt(process.env.DEPLOY_LOCK_TTL || '120', 10)
   const lockTtlMs = Number.isFinite(lockTtlSeconds) && lockTtlSeconds > 0 ? lockTtlSeconds * 1000 : 120000
@@ -84,6 +239,37 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
     for (const ws of playerSubscribers) {
       sendPacket(ws, name, payload)
     }
+  }
+
+  function broadcastRuntime(name, payload) {
+    for (const ws of runtimeSubscribers) {
+      sendPacket(ws, name, payload)
+    }
+  }
+
+  function queueChangefeedOperation(operation) {
+    if (!db) return
+    const row = serializeChangeRow(operation)
+    if (!row) return
+    changefeedWriteQueue = changefeedWriteQueue
+      .then(async () => {
+        try {
+          await db(CHANGEFEED_TABLE).insert(row).onConflict('opId').ignore()
+        } catch (err) {
+          if (!isUniqueConstraintError(err)) {
+            throw err
+          }
+        }
+      })
+      .catch(err => {
+        console.error('[admin] changefeed insert failed', err)
+      })
+  }
+
+  async function getChangefeedHeadCursor() {
+    if (!db) return 0
+    const row = await db(CHANGEFEED_TABLE).max({ cursor: 'cursor' }).first()
+    return toCursorNumber(row?.cursor)
   }
 
   function requireAdmin(req, reply) {
@@ -195,31 +381,144 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
     return { ok: true }
   }
 
-  function deriveLockScopeFromBlueprintId(id) {
-    if (typeof id !== 'string' || !id.trim()) return 'global'
-    if (id === '$scene') return '$scene'
-    const idx = id.indexOf('__')
-    if (idx !== -1) {
-      const appName = id.slice(0, idx)
-      return appName ? appName : 'global'
+  function normalizeMetadataScope(scope) {
+    if (typeof scope !== 'string') return null
+    const trimmed = scope.trim()
+    return trimmed || null
+  }
+
+  function getBlueprintMetadataScope(blueprint) {
+    if (!blueprint || typeof blueprint !== 'object') return null
+    return normalizeMetadataScope(blueprint.scope)
+  }
+
+  function resolveBlueprintScopeById(id) {
+    const normalizedId = normalizeOperationValue(id)
+    if (!normalizedId) return null
+    const blueprint = world.blueprints.get(normalizedId)
+    return getBlueprintMetadataScope(blueprint)
+  }
+
+  function hasScriptFields(data) {
+    if (!data || typeof data !== 'object') return false
+    for (const field of SCRIPT_BLUEPRINT_FIELDS) {
+      if (!Object.prototype.hasOwnProperty.call(data, field)) continue
+      if (field === 'script' && data.script === '') continue
+      return true
     }
-    return id
+    return false
   }
 
-function hasScriptFields(data) {
-  if (!data || typeof data !== 'object') return false
-  for (const field of SCRIPT_BLUEPRINT_FIELDS) {
-    if (!Object.prototype.hasOwnProperty.call(data, field)) continue
-    if (field === 'script' && data.script === '') continue
-    return true
-  }
-  return false
-}
+  function resolveScriptOperationScope(data, currentBlueprint = null) {
+    if (!data || typeof data !== 'object') {
+      return { ok: false, error: 'scope_unknown' }
+    }
+    const explicitScope = getBlueprintMetadataScope(data)
+    const currentScope = getBlueprintMetadataScope(currentBlueprint)
+    const scriptRef = normalizeOperationValue(data.scriptRef)
+    const refScope = scriptRef ? resolveBlueprintScopeById(scriptRef) : null
 
-  function deriveScriptLockScope(data) {
-    const refId =
-      data && typeof data.scriptRef === 'string' && data.scriptRef.trim() ? data.scriptRef : data?.id
-    return deriveLockScopeFromBlueprintId(refId)
+    if (explicitScope && currentScope && explicitScope !== currentScope) {
+      return {
+        ok: false,
+        error: 'scope_mismatch',
+        details: { requestedScope: explicitScope, currentScope },
+      }
+    }
+    if (explicitScope && refScope && explicitScope !== refScope) {
+      return {
+        ok: false,
+        error: 'scope_mismatch',
+        details: { requestedScope: explicitScope, refScope, refId: scriptRef },
+      }
+    }
+    if (currentScope && refScope && currentScope !== refScope) {
+      return {
+        ok: false,
+        error: 'scope_mismatch',
+        details: { currentScope, refScope, refId: scriptRef },
+      }
+    }
+
+    const resolvedScope = explicitScope || currentScope || refScope
+    if (!resolvedScope) {
+      const details = scriptRef ? { refId: scriptRef } : undefined
+      return { ok: false, error: 'scope_unknown', details }
+    }
+    return { ok: true, scope: resolvedScope }
+  }
+
+  function collectScopeSetFromBlueprintIds(ids) {
+    const list = Array.isArray(ids) ? ids : []
+    const scopeSet = new Set()
+    const unknown = []
+    const missing = []
+    for (const rawId of list) {
+      const id = normalizeOperationValue(rawId)
+      if (!id) continue
+      const blueprint = world.blueprints.get(id)
+      if (!blueprint) {
+        missing.push(id)
+        continue
+      }
+      const scope = getBlueprintMetadataScope(blueprint)
+      if (!scope) {
+        unknown.push(id)
+        continue
+      }
+      scopeSet.add(scope)
+    }
+    return { scopeSet, unknown, missing }
+  }
+
+  function collectScopeSetFromBlueprintList(blueprints) {
+    const list = Array.isArray(blueprints) ? blueprints : []
+    const scopeSet = new Set()
+    const unknown = []
+    for (const blueprint of list) {
+      const id = normalizeOperationValue(blueprint?.id) || 'unknown'
+      const scope = getBlueprintMetadataScope(blueprint)
+      if (!scope) {
+        unknown.push(id)
+        continue
+      }
+      scopeSet.add(scope)
+    }
+    return { scopeSet, unknown }
+  }
+
+  function validateScopedOperation(scopeSet, requestedScope) {
+    if (!(scopeSet instanceof Set) || scopeSet.size === 0) {
+      return { ok: true }
+    }
+    if (requestedScope === 'global') {
+      return { ok: true }
+    }
+    if (scopeSet.size > 1) {
+      return {
+        ok: false,
+        error: 'multi_scope_not_supported',
+        scopes: Array.from(scopeSet.values()),
+      }
+    }
+    const [scope] = Array.from(scopeSet.values())
+    if (scope !== requestedScope) {
+      return {
+        ok: false,
+        error: 'scope_mismatch',
+        scope: requestedScope,
+        scopes: [scope],
+      }
+    }
+    return { ok: true }
+  }
+
+  function resolveSnapshotScope(scopeSet, { hasExplicitScope, requestedScope } = {}) {
+    if (hasExplicitScope) return requestedScope
+    if (scopeSet instanceof Set && scopeSet.size === 1) {
+      return Array.from(scopeSet.values())[0]
+    }
+    return null
   }
 
   async function createDeploySnapshot({ ids, target, note, scope } = {}) {
@@ -298,6 +597,9 @@ function hasScriptFields(data) {
   world.network.on('blueprintModified', data => {
     broadcast('blueprintModified', data)
   })
+  world.network.on('blueprintRemoved', data => {
+    broadcast('blueprintRemoved', data)
+  })
   world.network.on('settingsModified', data => {
     broadcast('settingsModified', data)
   })
@@ -312,6 +614,10 @@ function hasScriptFields(data) {
   })
   world.network.on('playerLeft', data => {
     broadcastPlayers('playerLeft', data)
+  })
+  world.network.on('operation', operation => {
+    queueChangefeedOperation(operation)
+    broadcastRuntime('runtimeOperation', operation)
   })
 
   fastify.route({
@@ -397,6 +703,9 @@ function hasScriptFields(data) {
         const requestId = data?.requestId
         const ignoreNetworkId = data?.networkId || defaultNetworkId || undefined
         const network = world.network
+        const actor = normalizeOperationValue(data?.actor) || ignoreNetworkId || 'admin'
+        const source = normalizeOperationValue(data?.source) || 'admin'
+        const lastOpId = normalizeOperationValue(data?.lastOpId) || undefined
 
         try {
           if (data.type === 'blueprint_add') {
@@ -409,8 +718,17 @@ function hasScriptFields(data) {
               return
             }
             if (hasScriptFields(data.blueprint)) {
-              const scope = deriveScriptLockScope(data.blueprint)
-              const lockCheck = ensureDeployLock(data?.lockToken, scope)
+              const scopeResult = resolveScriptOperationScope(data.blueprint)
+              if (!scopeResult.ok) {
+                sendPacket(ws, 'adminResult', {
+                  ok: false,
+                  error: scopeResult.error,
+                  details: scopeResult.details,
+                  requestId,
+                })
+                return
+              }
+              const lockCheck = ensureDeployLock(data?.lockToken, scopeResult.scope)
               if (!lockCheck.ok) {
                 sendPacket(ws, 'adminResult', {
                   ok: false,
@@ -421,7 +739,12 @@ function hasScriptFields(data) {
                 return
               }
             }
-            const result = network.applyBlueprintAdded(data.blueprint, { ignoreNetworkId })
+            const result = network.applyBlueprintAdded(data.blueprint, {
+              ignoreNetworkId,
+              actor,
+              source,
+              lastOpId,
+            })
             if (!result.ok) {
               sendPacket(ws, 'adminResult', { ok: false, error: result.error, requestId })
               return
@@ -449,8 +772,22 @@ function hasScriptFields(data) {
               return
             }
             if (hasScriptChange) {
-              const scope = deriveScriptLockScope(change)
-              const lockCheck = ensureDeployLock(data?.lockToken, scope)
+              const currentBlueprint = world.blueprints.get(change.id)
+              if (!currentBlueprint) {
+                sendPacket(ws, 'adminResult', { ok: false, error: 'not_found', requestId })
+                return
+              }
+              const scopeResult = resolveScriptOperationScope(change, currentBlueprint)
+              if (!scopeResult.ok) {
+                sendPacket(ws, 'adminResult', {
+                  ok: false,
+                  error: scopeResult.error,
+                  details: scopeResult.details,
+                  requestId,
+                })
+                return
+              }
+              const lockCheck = ensureDeployLock(data?.lockToken, scopeResult.scope)
               if (!lockCheck.ok) {
                 sendPacket(ws, 'adminResult', {
                   ok: false,
@@ -461,7 +798,12 @@ function hasScriptFields(data) {
                 return
               }
             }
-            const result = network.applyBlueprintModified(data.change, { ignoreNetworkId })
+            const result = network.applyBlueprintModified(data.change, {
+              ignoreNetworkId,
+              actor,
+              source,
+              lastOpId,
+            })
             if (!result.ok) {
               sendPacket(ws, 'adminResult', {
                 ok: false,
@@ -487,7 +829,12 @@ function hasScriptFields(data) {
               sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
               return
             }
-            const result = network.applyEntityAdded(data.entity, { ignoreNetworkId })
+            const result = network.applyEntityAdded(data.entity, {
+              ignoreNetworkId,
+              actor,
+              source,
+              lastOpId,
+            })
             if (!result.ok) {
               sendPacket(ws, 'adminResult', { ok: false, error: result.error, requestId })
               return
@@ -505,7 +852,12 @@ function hasScriptFields(data) {
               sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
               return
             }
-            const result = await network.applyEntityModified(data.change, { ignoreNetworkId })
+            const result = await network.applyEntityModified(data.change, {
+              ignoreNetworkId,
+              actor,
+              source,
+              lastOpId,
+            })
             if (!result.ok) {
               sendPacket(ws, 'adminResult', { ok: false, error: result.error, requestId })
               return
@@ -523,7 +875,12 @@ function hasScriptFields(data) {
               sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
               return
             }
-            const result = network.applyEntityRemoved(data.id, { ignoreNetworkId })
+            const result = network.applyEntityRemoved(data.id, {
+              ignoreNetworkId,
+              actor,
+              source,
+              lastOpId,
+            })
             if (!result.ok) {
               sendPacket(ws, 'adminResult', { ok: false, error: result.error, requestId })
               return
@@ -541,7 +898,15 @@ function hasScriptFields(data) {
               sendPacket(ws, 'adminResult', { ok: false, error: 'invalid_payload', requestId })
               return
             }
-            const result = network.applySettingsModified({ key: data.key, value: data.value }, { ignoreNetworkId })
+            const result = network.applySettingsModified(
+              { key: data.key, value: data.value },
+              {
+                ignoreNetworkId,
+                actor,
+                source,
+                lastOpId,
+              }
+            )
             if (!result.ok) {
               sendPacket(ws, 'adminResult', { ok: false, error: result.error, requestId })
               return
@@ -562,6 +927,10 @@ function hasScriptFields(data) {
             const result = await network.applySpawnModified({
               op: data.op,
               networkId: data.networkId || defaultNetworkId,
+            }, {
+              actor,
+              source,
+              lastOpId,
             })
             if (!result.ok) {
               sendPacket(ws, 'adminResult', { ok: false, error: result.error, requestId })
@@ -651,6 +1020,49 @@ function hasScriptFields(data) {
     }
   })
 
+  fastify.get('/admin/changes', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    if (!db) {
+      return reply.code(500).send({ error: 'db_unavailable' })
+    }
+
+    const cursorInput = normalizeHeader(req.query?.cursor)
+    const limitInput = normalizeHeader(req.query?.limit)
+    const cursorResult = parseChangefeedCursor(cursorInput)
+    if (!cursorResult.ok) {
+      return reply.code(400).send({ error: cursorResult.error })
+    }
+    const limitResult = parseChangefeedLimit(limitInput)
+    if (!limitResult.ok) {
+      return reply.code(400).send({ error: limitResult.error })
+    }
+
+    await changefeedWriteQueue
+    const headCursor = await getChangefeedHeadCursor()
+    if (cursorResult.mode === 'head') {
+      return {
+        cursor: headCursor,
+        headCursor,
+        operations: [],
+        hasMore: false,
+      }
+    }
+
+    const rows = await db(CHANGEFEED_TABLE)
+      .where('cursor', '>', cursorResult.cursor)
+      .orderBy('cursor', 'asc')
+      .limit(limitResult.limit)
+    const operations = rows.map(deserializeChangeRow).filter(Boolean)
+    const nextCursor = operations.length > 0 ? operations[operations.length - 1].cursor : cursorResult.cursor
+
+    return {
+      cursor: nextCursor,
+      headCursor,
+      operations,
+      hasMore: nextCursor < headCursor,
+    }
+  })
+
   fastify.get('/admin/deploy-lock', async (req, reply) => {
     if (!requireDeploy(req, reply)) return
     const scope = normalizeHeader(req.query?.scope)
@@ -729,18 +1141,23 @@ function hasScriptFields(data) {
 
   fastify.post('/admin/deploy-snapshots', async (req, reply) => {
     if (!requireDeploy(req, reply)) return
+    const rawScope = normalizeHeader(req.body?.scope)
+    const hasExplicitScope = typeof rawScope === 'string' && rawScope.trim()
+    const normalizedScope = normalizeLockScope(rawScope)
     const ids = req.body?.ids
-    const scopeSet = new Set()
-    if (Array.isArray(ids)) {
-      for (const id of ids) {
-        scopeSet.add(deriveLockScopeFromBlueprintId(id))
-      }
+    const { scopeSet, unknown } = collectScopeSetFromBlueprintIds(ids)
+    if (unknown.length > 0) {
+      return reply.code(400).send({ error: 'scope_unknown', ids: unknown })
     }
-    if (scopeSet.size > 1) {
-      return reply.code(400).send({ error: 'multi_scope_not_supported' })
+    const scopeValidation = validateScopedOperation(scopeSet, normalizedScope)
+    if (!scopeValidation.ok) {
+      return reply.code(400).send(scopeValidation)
     }
-    const scope = normalizeHeader(req.body?.scope)
-    const lockCheck = ensureDeployLock(req.body?.lockToken, scope)
+    const effectiveScope = resolveSnapshotScope(scopeSet, {
+      hasExplicitScope,
+      requestedScope: normalizedScope,
+    })
+    const lockCheck = ensureDeployLock(req.body?.lockToken, effectiveScope)
     if (!lockCheck.ok) {
       return reply.code(409).send({ error: lockCheck.error, lock: lockCheck.lock })
     }
@@ -749,7 +1166,7 @@ function hasScriptFields(data) {
         ids,
         target: req.body?.target,
         note: req.body?.note,
-        scope,
+        scope: effectiveScope,
       })
       return { ok: true, ...result }
     } catch (err) {
@@ -760,11 +1177,9 @@ function hasScriptFields(data) {
 
   fastify.post('/admin/deploy-snapshots/rollback', async (req, reply) => {
     if (!requireDeploy(req, reply)) return
-    const scope = normalizeHeader(req.body?.scope)
-    const lockCheck = ensureDeployLock(req.body?.lockToken, scope)
-    if (!lockCheck.ok) {
-      return reply.code(409).send({ error: lockCheck.error, lock: lockCheck.lock })
-    }
+    const rawScope = normalizeHeader(req.body?.scope)
+    const hasExplicitScope = typeof rawScope === 'string' && rawScope.trim()
+    const normalizedScope = normalizeLockScope(rawScope)
     try {
       const snapshotId = req.body?.id
       const row = snapshotId ? await getDeploySnapshotById(snapshotId) : await getLatestDeploySnapshot()
@@ -772,13 +1187,36 @@ function hasScriptFields(data) {
         return reply.code(404).send({ error: 'not_found' })
       }
       const blueprints = JSON.parse(row.data || '[]')
+      const meta = row.meta ? JSON.parse(row.meta) : null
+      const { scopeSet, unknown } = collectScopeSetFromBlueprintList(blueprints)
+      if (unknown.length > 0) {
+        return reply.code(400).send({ error: 'scope_unknown', ids: unknown })
+      }
+      const scopeValidation = validateScopedOperation(scopeSet, normalizedScope)
+      if (!scopeValidation.ok) {
+        return reply.code(400).send(scopeValidation)
+      }
+      const metaScope = normalizeMetadataScope(meta?.scope)
+      const effectiveScope =
+        resolveSnapshotScope(scopeSet, {
+          hasExplicitScope,
+          requestedScope: normalizedScope,
+        }) || (!hasExplicitScope ? metaScope : null)
+      const lockCheck = ensureDeployLock(req.body?.lockToken, effectiveScope)
+      if (!lockCheck.ok) {
+        return reply.code(409).send({ error: lockCheck.error, lock: lockCheck.lock })
+      }
+
       const restored = []
       const failed = []
       for (const blueprint of blueprints) {
         if (!blueprint?.id) continue
         const current = world.blueprints.get(blueprint.id)
         if (!current) {
-          const result = world.network.applyBlueprintAdded(blueprint)
+          const result = world.network.applyBlueprintAdded(blueprint, {
+            actor: 'admin',
+            source: 'admin.rollback',
+          })
           if (result.ok) {
             restored.push(blueprint.id)
           } else {
@@ -787,7 +1225,10 @@ function hasScriptFields(data) {
           continue
         }
         const change = { ...blueprint, version: (current.version || 0) + 1 }
-        const result = world.network.applyBlueprintModified(change)
+        const result = world.network.applyBlueprintModified(change, {
+          actor: 'admin',
+          source: 'admin.rollback',
+        })
         if (result.ok) {
           restored.push(blueprint.id)
         } else {
@@ -812,7 +1253,13 @@ function hasScriptFields(data) {
 
   fastify.delete('/admin/blueprints/:id', async (req, reply) => {
     if (!requireAdmin(req, reply)) return
-    const result = await world.network.applyBlueprintRemoved({ id: req.params.id })
+    const result = await world.network.applyBlueprintRemoved(
+      { id: req.params.id },
+      {
+        actor: 'admin',
+        source: 'admin.http',
+      }
+    )
     if (!result.ok) {
       if (result.error === 'not_found') {
         return reply.code(404).send({ error: result.error })
@@ -822,7 +1269,6 @@ function hasScriptFields(data) {
       }
       return reply.code(400).send({ error: result.error })
     }
-    broadcast('blueprintRemoved', { id: req.params.id })
     return { ok: true }
   })
 
@@ -845,7 +1291,13 @@ function hasScriptFields(data) {
   fastify.put('/admin/spawn', async (req, reply) => {
     if (!requireAdmin(req, reply)) return
     const { position, quaternion } = req.body || {}
-    const result = await world.network.applySpawnSet({ position, quaternion })
+    const result = await world.network.applySpawnSet(
+      { position, quaternion },
+      {
+        actor: 'admin',
+        source: 'admin.http',
+      }
+    )
     if (!result.ok) {
       return reply.code(400).send({ error: result.error })
     }
