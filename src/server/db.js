@@ -34,7 +34,7 @@ export async function getDB({ worldDir, deploymentId }) {
         useNullAsDefault: true,
       })
     }
-    // await migrate(db, { deploymentId })
+    await migrate(db, { deploymentId })
   }
   return db
 }
