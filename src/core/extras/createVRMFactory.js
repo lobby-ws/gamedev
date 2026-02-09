@@ -459,7 +459,7 @@ export function createVRMFactory(glb, setupMaterial) {
         }
         // apply weight
         if (weight < 1.0) {
-          targetRotation.slerp(bone.quaternion, 1.0 - weight)
+          targetRotation.slerp(smoothState.current, 1.0 - weight)
         }
         // update smooth state target
         smoothState.target.copy(targetRotation)
