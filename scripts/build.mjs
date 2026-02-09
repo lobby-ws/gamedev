@@ -72,6 +72,10 @@ const adminHtmlDest = path.join(rootDir, 'build/public/admin.html')
             const adminJsPath = outputFiles
               .find(file => file.includes('/admin-') && file.endsWith('.js'))
               .split('build/public')[1]
+            // write stable aliases to avoid hardcoding hashes in other services
+            await fs.writeFile(path.join(clientBuildDir, 'index.js'), `import '${jsPath}';\n`)
+            await fs.writeFile(path.join(clientBuildDir, 'particles.js'), `import '${particlesPath}';\n`)
+            await fs.writeFile(path.join(clientBuildDir, 'admin.js'), `import '${adminJsPath}';\n`)
             // inject into html and copy over
             let htmlContent = await fs.readFile(clientHtmlSrc, 'utf-8')
             htmlContent = htmlContent.replace('{jsPath}', jsPath)
