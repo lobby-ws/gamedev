@@ -110,10 +110,16 @@ export function createPlayerProxy(entity, player) {
       // effect.id = uuid()
       if (opts.anchor) effect.anchorId = opts.anchor.anchorId
       if (opts.emote) effect.emote = opts.emote
+      const emoteGaze = opts.emoteGaze ?? opts.gaze
+      if (emoteGaze !== undefined) effect.emoteGaze = !!emoteGaze
       if (opts.snare) effect.snare = opts.snare
       if (opts.freeze) effect.freeze = opts.freeze
       if (opts.turn) effect.turn = opts.turn
       if (opts.duration) effect.duration = opts.duration
+      if (opts.upperBody) effect.upperBody = opts.upperBody
+      if (typeof opts.torsoYaw === 'number') {
+        effect.torsoYaw = Math.max(-90, Math.min(90, opts.torsoYaw))
+      }
       if (opts.cancellable) {
         effect.cancellable = opts.cancellable
         delete effect.freeze // overrides

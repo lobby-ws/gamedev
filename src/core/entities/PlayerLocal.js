@@ -998,17 +998,31 @@ export class PlayerLocal extends Entity {
 
     // apply emote
     let emote
+    let emoteUpperBody
+    let emoteGaze
+    let emoteTorsoYaw = 0
     if (this.data.effect?.emote) {
       emote = this.data.effect.emote
+      emoteUpperBody = this.data.effect.upperBody || false
+      emoteGaze = this.data.effect.emoteGaze ?? this.data.effect.gaze
+      emoteTorsoYaw = this.data.effect.torsoYaw ?? 0
     }
-    if (this.emote !== emote) {
+    if (
+      this.emote !== emote ||
+      this.emoteUpperBody !== emoteUpperBody ||
+      this.emoteGaze !== emoteGaze ||
+      this.emoteTorsoYaw !== emoteTorsoYaw
+    ) {
       this.emote = emote
+      this.emoteUpperBody = emoteUpperBody
+      this.emoteGaze = emoteGaze
+      this.emoteTorsoYaw = emoteTorsoYaw
     }
-    this.avatar?.setEmote(this.emote)
+    this.avatar?.setEmote(this.emote, this.emoteUpperBody, this.emoteGaze, this.emoteTorsoYaw)
 
     // get locomotion mode
     let mode
-    if (this.data.effect?.emote) {
+    if (this.data.effect?.emote && !this.data.effect?.upperBody) {
       // emote = this.data.effect.emote
     } else if (this.flying) {
       mode = Modes.FLY
@@ -1059,6 +1073,9 @@ export class PlayerLocal extends Entity {
           a: this.axis.clone(),
           g: this.gaze.clone(),
           e: null,
+          ub: null,
+          eg: null,
+          ty: 0,
         }
       }
       const data = {
@@ -1090,9 +1107,20 @@ export class PlayerLocal extends Entity {
         this.lastState.g.copy(this.gaze)
         hasChanges = true
       }
-      if (this.lastState.e !== this.emote) {
+      if (
+        this.lastState.e !== this.emote ||
+        this.lastState.ub !== this.emoteUpperBody ||
+        this.lastState.eg !== this.emoteGaze ||
+        this.lastState.ty !== this.emoteTorsoYaw
+      ) {
         data.e = this.emote
+        data.ub = this.emoteUpperBody
+        data.eg = this.emoteGaze
+        data.ty = this.emoteTorsoYaw
         this.lastState.e = this.emote
+        this.lastState.ub = this.emoteUpperBody
+        this.lastState.eg = this.emoteGaze
+        this.lastState.ty = this.emoteTorsoYaw
         hasChanges = true
       }
       if (hasChanges) {
@@ -1136,7 +1164,7 @@ export class PlayerLocal extends Entity {
       if (!this.firstPerson) {
         const forward = v1.copy(FORWARD).applyQuaternion(this.cam.quaternion)
         const right = v2.crossVectors(forward, UP).normalize()
-        this.cam.position.add(right.multiplyScalar(0.3))
+        this.cam.position.add(right.multiplyScalar(0.35))
       }
     }
     if (xr) {

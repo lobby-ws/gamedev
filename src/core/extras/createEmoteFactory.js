@@ -1,5 +1,17 @@
 import * as THREE from 'three'
 
+const LOWER_BODY_BONES = new Set([
+  'hips',
+  'leftUpperLeg',
+  'leftLowerLeg',
+  'leftFoot',
+  'leftToes',
+  'rightUpperLeg',
+  'rightLowerLeg',
+  'rightFoot',
+  'rightToes',
+])
+
 const q1 = new THREE.Quaternion()
 const restRotationInverse = new THREE.Quaternion()
 const parentRestWorldRotation = new THREE.Quaternion()
@@ -82,7 +94,7 @@ export function createEmoteFactory(glb, url) {
   // console.log(clip)
 
   return {
-    toClip({ rootToHips, version, getBoneName }) {
+    toClip({ rootToHips, version, getBoneName, upperBody, lowerBody }) {
       // we're going to resize animation to match vrm height
       const height = rootToHips
 
@@ -92,6 +104,8 @@ export function createEmoteFactory(glb, url) {
         const trackSplitted = track.name.split('.')
         const ogBoneName = trackSplitted[0]
         const vrmBoneName = normalizedBoneNames[ogBoneName]
+        if (upperBody && LOWER_BODY_BONES.has(vrmBoneName)) return
+        if (lowerBody && !LOWER_BODY_BONES.has(vrmBoneName)) return
         // TODO: use vrm.bones[name] not getBoneNode
         const vrmNodeName = getBoneName(vrmBoneName)
 

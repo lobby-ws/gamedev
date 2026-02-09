@@ -232,40 +232,67 @@ export function createVRMFactory(glb, setupMaterial) {
       // }
     }
     let currentEmote
-    const setEmote = url => {
-      if (currentEmote?.url === url) return
-      if (currentEmote) {
-        currentEmote.action?.fadeOut(0.15)
-        currentEmote = null
+    let upperBodyYaw = 0
+    const torsoYawStates = new Map()
+    let lastEmoteTime = null
+    let torsoYawLoopFade = 0
+    const torsoYawLoopFadeDuration = 0.15
+    const setEmote = (url, upperBody, gazeOverride, torsoYaw) => {
+      const yawDeg = typeof torsoYaw === 'number' ? THREE.MathUtils.clamp(torsoYaw, -90, 90) : 0
+      upperBodyYaw = THREE.MathUtils.degToRad(yawDeg)
+      if (!url) {
+        upperBodyYaw = 0
+        torsoYawStates.clear()
+        if (currentEmote) {
+          currentEmote.action?.fadeOut(0.15)
+          currentEmote = null
+          setLocoLower(false)
+        }
+        return
       }
-      if (!url) return
       const opts = getQueryParams(url)
       const loop = opts.l !== '0'
       const speed = parseFloat(opts.s || 1)
-      const gaze = opts.g == '1'
+      let gaze = opts.g != null ? opts.g == '1' : !!upperBody
+      if (typeof gazeOverride === 'boolean') gaze = gazeOverride
+      if (currentEmote?.url === url && currentEmote?.upperBody === !!upperBody) {
+        currentEmote.gaze = gaze
+        return
+      }
+      if (currentEmote) {
+        currentEmote.action?.fadeOut(0.15)
+        currentEmote = null
+        setLocoLower(false)
+      }
+      torsoYawStates.clear()
+      const cacheKey = upperBody ? url + '__upper' : url
 
-      if (emotes[url]) {
-        currentEmote = emotes[url]
+      if (emotes[cacheKey]) {
+        currentEmote = emotes[cacheKey]
+        currentEmote.gaze = gaze
         if (currentEmote.action) {
           currentEmote.action.clampWhenFinished = !loop
           currentEmote.action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce)
           currentEmote.action.reset().fadeIn(0.15).play()
-          clearLocomotion()
+          if (upperBody) setLocoLower(true)
+          else clearLocomotion()
         }
       } else {
         const emote = {
           url,
+          upperBody: !!upperBody,
           loading: true,
           action: null,
           gaze,
         }
-        emotes[url] = emote
+        emotes[cacheKey] = emote
         currentEmote = emote
         hooks.loader.load('emote', url).then(emo => {
           const clip = emo.toClip({
             rootToHips,
             version,
             getBoneName,
+            upperBody,
           })
           const action = mixer.clipAction(clip)
           action.timeScale = speed
@@ -275,7 +302,8 @@ export function createVRMFactory(glb, setupMaterial) {
             action.clampWhenFinished = !loop
             action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce)
             action.play()
-            clearLocomotion()
+            if (upperBody) setLocoLower(true)
+            else clearLocomotion()
           }
         })
       }
@@ -300,6 +328,57 @@ export function createVRMFactory(glb, setupMaterial) {
       // console.log('rate per second', 1 / rate)
     }
 
+    const upperYawBones = [
+      { name: 'spine', weight: 0.4 },
+      { name: 'chest', weight: 0.4 },
+      { name: 'upperChest', weight: 0.2 },
+    ]
+    const yawAxis = new THREE.Vector3(0, 1, 0)
+    const yawQuat = new THREE.Quaternion()
+    const yawTarget = new THREE.Quaternion()
+    const torsoYawAnimSpeed = 12
+    const torsoYawSpeed = 18
+    const applyUpperBodyYaw = delta => {
+      if (!currentEmote?.upperBody || upperBodyYaw === 0) {
+        if (torsoYawStates.size) torsoYawStates.clear()
+        return
+      }
+      if (torsoYawLoopFade > 0) {
+        torsoYawLoopFade = Math.max(0, torsoYawLoopFade - delta)
+      }
+      const loopBlend = torsoYawLoopFadeDuration
+        ? Math.min(torsoYawLoopFade / torsoYawLoopFadeDuration, 1)
+        : 0
+      let total = 0
+      for (const entry of upperYawBones) {
+        if (findBone(entry.name)) total += entry.weight
+      }
+      if (!total) return
+      for (const entry of upperYawBones) {
+        const bone = findBone(entry.name)
+        if (!bone) continue
+        const weight = entry.weight / total
+        yawQuat.setFromAxisAngle(yawAxis, upperBodyYaw * weight)
+        let state = torsoYawStates.get(bone.uuid)
+        if (!state) {
+          state = {
+            anim: bone.quaternion.clone(),
+            current: bone.quaternion.clone(),
+          }
+          torsoYawStates.set(bone.uuid, state)
+        }
+        const animSpeed = torsoYawAnimSpeed * (1 - 0.85 * loopBlend)
+        const yawSpeed = torsoYawSpeed * (1 - 0.85 * loopBlend)
+        const animAlpha = 1 - Math.exp(-animSpeed * delta)
+        const yawAlpha = 1 - Math.exp(-yawSpeed * delta)
+        state.anim.slerp(bone.quaternion, animAlpha)
+        yawTarget.copy(state.anim).premultiply(yawQuat)
+        state.current.slerp(yawTarget, yawAlpha)
+        bone.quaternion.copy(state.current)
+        bone.updateMatrixWorld(true)
+      }
+    }
+
     const update = delta => {
       elapsed += delta
       const should = rateCheck ? elapsed >= rate : true
@@ -307,9 +386,10 @@ export function createVRMFactory(glb, setupMaterial) {
         mixer.update(elapsed)
         skeleton.bones.forEach(bone => bone.updateMatrixWorld())
         skeleton.update = THREE.Skeleton.prototype.update
-        if (!currentEmote) {
+        if (!currentEmote || currentEmote.upperBody) {
           updateLocomotion(delta)
         }
+        applyUpperBodyYaw(delta)
         if (loco.gazeDir && distance < MAX_GAZE_DISTANCE && (currentEmote ? currentEmote.gaze : true)) {
           // aimBone('chest', loco.gazeDir, delta, {
           //   minAngle: -90,
@@ -329,6 +409,15 @@ export function createVRMFactory(glb, setupMaterial) {
             smoothing: 0.4,
             weight: 0.6,
           })
+        }
+        if (currentEmote?.action) {
+          const t = currentEmote.action.time
+          if (lastEmoteTime != null && t + 1e-6 < lastEmoteTime) {
+            torsoYawLoopFade = torsoYawLoopFadeDuration
+          }
+          lastEmoteTime = t
+        } else {
+          lastEmoteTime = null
         }
         // tvrm.humanoid.update(elapsed)
         elapsed = 0
@@ -441,7 +530,7 @@ export function createVRMFactory(glb, setupMaterial) {
         }
         // apply weight
         if (weight < 1.0) {
-          targetRotation.slerp(bone.quaternion, 1.0 - weight)
+          targetRotation.slerp(smoothState.current, 1.0 - weight)
         }
         // update smooth state target
         smoothState.target.copy(targetRotation)
@@ -479,6 +568,29 @@ export function createVRMFactory(glb, setupMaterial) {
     //   console.log('hi2')
     // })
 
+    let locoLower = false
+    function setLocoLower(enabled) {
+      if (locoLower === enabled) return
+      locoLower = enabled
+      for (const key in poses) {
+        const pose = poses[key]
+        if (!pose.action || !pose.lowerAction) continue
+        if (enabled) {
+          // crossfade from full-body to lower-body-only
+          pose.lowerAction.weight = pose.action.weight
+          pose.lowerAction.time = pose.action.time
+          pose.lowerAction.reset().fadeIn(0.15).play()
+          pose.action.fadeOut(0.15)
+        } else {
+          // crossfade from lower-body-only to full-body
+          pose.action.weight = pose.lowerAction.weight
+          pose.action.time = pose.lowerAction.time
+          pose.action.reset().fadeIn(0.15).play()
+          pose.lowerAction.fadeOut(0.15)
+        }
+      }
+    }
+
     const poses = {}
     function addPose(key, url) {
       const opts = getQueryParams(url)
@@ -487,14 +599,16 @@ export function createVRMFactory(glb, setupMaterial) {
         loading: true,
         active: false,
         action: null,
+        lowerAction: null,
         weight: 0,
         target: 0,
         setWeight: value => {
           pose.weight = value
-          if (pose.action) {
-            pose.action.weight = value
+          const active = locoLower ? pose.lowerAction : pose.action
+          if (active) {
+            active.weight = value
             if (!pose.active) {
-              pose.action.reset().fadeIn(0.15).play()
+              active.reset().fadeIn(0.15).play()
               pose.active = true
             }
           }
@@ -502,6 +616,7 @@ export function createVRMFactory(glb, setupMaterial) {
         fadeOut: () => {
           pose.weight = 0
           pose.action?.fadeOut(0.15)
+          pose.lowerAction?.fadeOut(0.15)
           pose.active = false
         },
       }
@@ -515,6 +630,18 @@ export function createVRMFactory(glb, setupMaterial) {
         pose.action.timeScale = speed
         pose.action.weight = pose.weight
         pose.action.play()
+
+        const lowerClip = emo.toClip({
+          rootToHips,
+          version,
+          getBoneName,
+          lowerBody: true,
+        })
+        lowerClip.name = clip.name + '_lower'
+        pose.lowerAction = mixer.clipAction(lowerClip)
+        pose.lowerAction.timeScale = speed
+        pose.lowerAction.weight = 0
+        pose.lowerAction.play()
       })
       poses[key] = pose
     }
