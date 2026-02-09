@@ -34,9 +34,9 @@ http:
     http-0-game-server:
       loadBalancer:
         servers:
-          - url: "http://localhost:3000"
+          - url: "http://host.docker.internal:3000"
 
     https-0-game-server:
       loadBalancer:
         servers:
-          - url: "http://localhost:3000"
+          - url: "http://host.docker.internal:3000"
