@@ -50,6 +50,8 @@ function deriveAdminUrlFromRequest(req) {
   let proto = headers['x-forwarded-proto']
   if (Array.isArray(proto)) proto = proto[0]
   if (proto) proto = String(proto).split(',')[0].trim()
+  if (proto === 'wss') proto = 'https'
+  if (proto === 'ws') proto = 'http'
   if (!proto && req?.protocol) proto = req.protocol
   if (!proto) proto = 'https'
 
