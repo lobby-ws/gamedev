@@ -998,17 +998,20 @@ export class PlayerLocal extends Entity {
 
     // apply emote
     let emote
+    let emoteUpperBody
     if (this.data.effect?.emote) {
       emote = this.data.effect.emote
+      emoteUpperBody = this.data.effect.upperBody || false
     }
     if (this.emote !== emote) {
       this.emote = emote
+      this.emoteUpperBody = emoteUpperBody
     }
-    this.avatar?.setEmote(this.emote)
+    this.avatar?.setEmote(this.emote, this.emoteUpperBody)
 
     // get locomotion mode
     let mode
-    if (this.data.effect?.emote) {
+    if (this.data.effect?.emote && !this.data.effect?.upperBody) {
       // emote = this.data.effect.emote
     } else if (this.flying) {
       mode = Modes.FLY
@@ -1092,6 +1095,7 @@ export class PlayerLocal extends Entity {
       }
       if (this.lastState.e !== this.emote) {
         data.e = this.emote
+        data.ub = this.emoteUpperBody
         this.lastState.e = this.emote
         hasChanges = true
       }
@@ -1136,7 +1140,7 @@ export class PlayerLocal extends Entity {
       if (!this.firstPerson) {
         const forward = v1.copy(FORWARD).applyQuaternion(this.cam.quaternion)
         const right = v2.crossVectors(forward, UP).normalize()
-        this.cam.position.add(right.multiplyScalar(0.3))
+        this.cam.position.add(right.multiplyScalar(0.35))
       }
     }
     if (xr) {

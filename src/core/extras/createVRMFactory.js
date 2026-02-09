@@ -232,7 +232,7 @@ export function createVRMFactory(glb, setupMaterial) {
       // }
     }
     let currentEmote
-    const setEmote = url => {
+    const setEmote = (url, upperBody) => {
       if (currentEmote?.url === url) return
       if (currentEmote) {
         currentEmote.action?.fadeOut(0.15)
@@ -243,29 +243,32 @@ export function createVRMFactory(glb, setupMaterial) {
       const loop = opts.l !== '0'
       const speed = parseFloat(opts.s || 1)
       const gaze = opts.g == '1'
+      const cacheKey = upperBody ? url + '__upper' : url
 
-      if (emotes[url]) {
-        currentEmote = emotes[url]
+      if (emotes[cacheKey]) {
+        currentEmote = emotes[cacheKey]
         if (currentEmote.action) {
           currentEmote.action.clampWhenFinished = !loop
           currentEmote.action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce)
           currentEmote.action.reset().fadeIn(0.15).play()
-          clearLocomotion()
+          if (!upperBody) clearLocomotion()
         }
       } else {
         const emote = {
           url,
+          upperBody: !!upperBody,
           loading: true,
           action: null,
           gaze,
         }
-        emotes[url] = emote
+        emotes[cacheKey] = emote
         currentEmote = emote
         hooks.loader.load('emote', url).then(emo => {
           const clip = emo.toClip({
             rootToHips,
             version,
             getBoneName,
+            upperBody,
           })
           const action = mixer.clipAction(clip)
           action.timeScale = speed
@@ -275,7 +278,7 @@ export function createVRMFactory(glb, setupMaterial) {
             action.clampWhenFinished = !loop
             action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce)
             action.play()
-            clearLocomotion()
+            if (!upperBody) clearLocomotion()
           }
         })
       }
@@ -307,7 +310,7 @@ export function createVRMFactory(glb, setupMaterial) {
         mixer.update(elapsed)
         skeleton.bones.forEach(bone => bone.updateMatrixWorld())
         skeleton.update = THREE.Skeleton.prototype.update
-        if (!currentEmote) {
+        if (!currentEmote || currentEmote.upperBody) {
           updateLocomotion(delta)
         }
         if (loco.gazeDir && distance < MAX_GAZE_DISTANCE && (currentEmote ? currentEmote.gaze : true)) {

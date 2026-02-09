@@ -140,7 +140,7 @@ export class PlayerRemote extends Entity {
       this.position.update(delta)
       this.quaternion.update(delta)
     }
-    this.avatar?.setEmote(this.data.emote)
+    this.avatar?.setEmote(this.data.emote, this.data.emoteUpperBody)
     this.avatar?.instance?.setLocomotion(this.mode, this.axis, this.gaze)
   }
 
@@ -207,6 +207,7 @@ export class PlayerRemote extends Entity {
     }
     if (data.hasOwnProperty('e')) {
       this.data.emote = data.e
+      this.data.emoteUpperBody = data.ub || false
     }
     if (data.hasOwnProperty('ef')) {
       this.setEffect(data.ef)
