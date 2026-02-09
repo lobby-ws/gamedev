@@ -862,6 +862,8 @@ interface Player {
     options: {
       anchor?: AnchorNode
       emote?: string
+      upperBody?: boolean
+      emoteGaze?: boolean
       snare?: number
       freeze?: boolean
       turn?: boolean

@@ -37,7 +37,7 @@ export class Avatar extends Node {
     }
     if (this.factory) {
       this.instance = this.factory.create(this.matrixWorld, this.hooks, this)
-      this.instance.setEmote(this._emote, this._emoteUpperBody)
+      this.instance.setEmote(this._emote, this._emoteUpperBody, this._emoteGaze)
       this.instance.setVisible(this._visible)
       if (this._disableRateCheck) {
         this.instance.disableRateCheck()
@@ -97,7 +97,7 @@ export class Avatar extends Node {
     }
     if (this._emote === value) return
     this._emote = value
-    this.instance?.setEmote(value, this._emoteUpperBody)
+    this.instance?.setEmote(value, this._emoteUpperBody, this._emoteGaze)
   }
 
   get visible() {
@@ -145,8 +145,9 @@ export class Avatar extends Node {
     this.instance?.setLocomotion(mode, axis, gazeDir)
   }
 
-  setEmote(url, upperBody) {
+  setEmote(url, upperBody, gaze) {
     this._emoteUpperBody = upperBody || false
+    this._emoteGaze = gaze
     // DEPRECATED: use .emote
     this.emote = url
   }
@@ -160,6 +161,8 @@ export class Avatar extends Node {
     super.copy(source, recursive)
     this._src = source._src
     this._emote = source._emote
+    this._emoteUpperBody = source._emoteUpperBody
+    this._emoteGaze = source._emoteGaze
     this._visible = source._visible
     this._onLoad = source._onLoad
 

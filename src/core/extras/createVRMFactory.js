@@ -232,22 +232,34 @@ export function createVRMFactory(glb, setupMaterial) {
       // }
     }
     let currentEmote
-    const setEmote = (url, upperBody) => {
-      if (currentEmote?.url === url) return
+    const setEmote = (url, upperBody, gazeOverride) => {
+      if (!url) {
+        if (currentEmote) {
+          currentEmote.action?.fadeOut(0.15)
+          currentEmote = null
+          setLocoLower(false)
+        }
+        return
+      }
+      const opts = getQueryParams(url)
+      const loop = opts.l !== '0'
+      const speed = parseFloat(opts.s || 1)
+      let gaze = opts.g != null ? opts.g == '1' : !!upperBody
+      if (typeof gazeOverride === 'boolean') gaze = gazeOverride
+      if (currentEmote?.url === url && currentEmote?.upperBody === !!upperBody) {
+        currentEmote.gaze = gaze
+        return
+      }
       if (currentEmote) {
         currentEmote.action?.fadeOut(0.15)
         currentEmote = null
         setLocoLower(false)
       }
-      if (!url) return
-      const opts = getQueryParams(url)
-      const loop = opts.l !== '0'
-      const speed = parseFloat(opts.s || 1)
-      const gaze = opts.g == '1'
       const cacheKey = upperBody ? url + '__upper' : url
 
       if (emotes[cacheKey]) {
         currentEmote = emotes[cacheKey]
+        currentEmote.gaze = gaze
         if (currentEmote.action) {
           currentEmote.action.clampWhenFinished = !loop
           currentEmote.action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce)

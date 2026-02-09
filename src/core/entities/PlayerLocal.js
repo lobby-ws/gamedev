@@ -999,15 +999,22 @@ export class PlayerLocal extends Entity {
     // apply emote
     let emote
     let emoteUpperBody
+    let emoteGaze
     if (this.data.effect?.emote) {
       emote = this.data.effect.emote
       emoteUpperBody = this.data.effect.upperBody || false
+      emoteGaze = this.data.effect.emoteGaze ?? this.data.effect.gaze
     }
-    if (this.emote !== emote) {
+    if (
+      this.emote !== emote ||
+      this.emoteUpperBody !== emoteUpperBody ||
+      this.emoteGaze !== emoteGaze
+    ) {
       this.emote = emote
       this.emoteUpperBody = emoteUpperBody
+      this.emoteGaze = emoteGaze
     }
-    this.avatar?.setEmote(this.emote, this.emoteUpperBody)
+    this.avatar?.setEmote(this.emote, this.emoteUpperBody, this.emoteGaze)
 
     // get locomotion mode
     let mode
@@ -1062,6 +1069,8 @@ export class PlayerLocal extends Entity {
           a: this.axis.clone(),
           g: this.gaze.clone(),
           e: null,
+          ub: null,
+          eg: null,
         }
       }
       const data = {
@@ -1093,10 +1102,17 @@ export class PlayerLocal extends Entity {
         this.lastState.g.copy(this.gaze)
         hasChanges = true
       }
-      if (this.lastState.e !== this.emote) {
+      if (
+        this.lastState.e !== this.emote ||
+        this.lastState.ub !== this.emoteUpperBody ||
+        this.lastState.eg !== this.emoteGaze
+      ) {
         data.e = this.emote
         data.ub = this.emoteUpperBody
+        data.eg = this.emoteGaze
         this.lastState.e = this.emote
+        this.lastState.ub = this.emoteUpperBody
+        this.lastState.eg = this.emoteGaze
         hasChanges = true
       }
       if (hasChanges) {
