@@ -17,6 +17,23 @@ const defaultSpawn = '{ "position": [0, 0, 0], "quaternion": [0, 0, 0, 1] }'
 const HEALTH_MAX = 100
 const PUBLIC_ADMIN_URL = process.env.PUBLIC_ADMIN_URL || ''
 
+function normalizeForwardedPrefix(value) {
+  if (typeof value !== 'string') return ''
+  const first = value.split(',')[0].trim()
+  if (!first || first === '/') return ''
+  const prefixed = first.startsWith('/') ? first : `/${first}`
+  return prefixed.replace(/\/+$/, '')
+}
+
+function extractWorldPrefixFromPath(value) {
+  if (typeof value !== 'string') return ''
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  const [pathname] = trimmed.split('?')
+  const match = pathname.match(/^(\/worlds\/[^/]+)/)
+  return match ? match[1] : ''
+}
+
 function deriveAdminUrlFromRequest(req) {
   const headers = req?.headers || {}
   let host = headers['x-forwarded-host'] || headers['host']
@@ -29,7 +46,16 @@ function deriveAdminUrlFromRequest(req) {
   if (!proto && req?.protocol) proto = req.protocol
   if (!proto) proto = 'https'
 
-  return `${proto}://${host}`
+  let prefix = normalizeForwardedPrefix(headers['x-forwarded-prefix'])
+  if (!prefix) {
+    const forwardedUri = headers['x-forwarded-uri'] || headers['x-original-uri'] || headers['x-rewrite-url']
+    prefix = extractWorldPrefixFromPath(Array.isArray(forwardedUri) ? forwardedUri[0] : forwardedUri)
+  }
+  if (!prefix) {
+    prefix = extractWorldPrefixFromPath(req?.url)
+  }
+
+  return `${proto}://${host}${prefix}`
 }
 
 function deriveAdminUrlFromEnv() {
@@ -483,7 +509,7 @@ export class ServerNetwork extends System {
       )
 
       // send snapshot
-      const adminUrl = PUBLIC_ADMIN_URL || deriveAdminUrlFromRequest(req) || deriveAdminUrlFromEnv()
+      const adminUrl = deriveAdminUrlFromRequest(req) || PUBLIC_ADMIN_URL || deriveAdminUrlFromEnv()
       socket.send('snapshot', {
         id: socket.id,
         serverTime: performance.now(),

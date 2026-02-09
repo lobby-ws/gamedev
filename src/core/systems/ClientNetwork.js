@@ -45,9 +45,26 @@ export class ClientNetwork extends System {
 
   connect() {
     const authToken = storage.get('authToken')
-    let url = `${this.wsUrl}?authToken=${authToken}`
-    if (this.connectParams.name) url += `&name=${encodeURIComponent(this.connectParams.name)}`
-    if (this.connectParams.avatar) url += `&avatar=${encodeURIComponent(this.connectParams.avatar)}`
+    let url = this.wsUrl
+    try {
+      const parsed = new URL(this.wsUrl)
+      if (authToken && !parsed.searchParams.get('authToken')) {
+        parsed.searchParams.set('authToken', authToken)
+      }
+      if (this.connectParams.name) parsed.searchParams.set('name', this.connectParams.name)
+      if (this.connectParams.avatar) parsed.searchParams.set('avatar', this.connectParams.avatar)
+      url = parsed.toString()
+    } catch {
+      const [base, query = ''] = this.wsUrl.split('?')
+      const params = new URLSearchParams(query)
+      if (authToken && !params.get('authToken')) {
+        params.set('authToken', authToken)
+      }
+      if (this.connectParams.name) params.set('name', this.connectParams.name)
+      if (this.connectParams.avatar) params.set('avatar', this.connectParams.avatar)
+      const nextQuery = params.toString()
+      url = nextQuery ? `${base}?${nextQuery}` : base
+    }
     this.ws = new WebSocket(url)
     this.ws.binaryType = 'arraybuffer'
     this.ws.addEventListener('open', this.onOpen)
