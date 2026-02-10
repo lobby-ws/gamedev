@@ -13,6 +13,13 @@ import { ensureBlueprintSyncMetadata, ensureEntitySyncMetadata } from '../../ser
 const SAVE_INTERVAL = parseInt(process.env.SAVE_INTERVAL || '60') // seconds
 const PING_RATE = 10 // seconds
 const defaultSpawn = '{ "position": [0, 0, 0], "quaternion": [0, 0, 0, 1] }'
+const SCRIPT_BLUEPRINT_FIELDS = new Set([
+  'script',
+  'scriptEntry',
+  'scriptFiles',
+  'scriptFormat',
+  'scriptRef',
+])
 
 const HEALTH_MAX = 100
 const PUBLIC_ADMIN_URL = process.env.PUBLIC_ADMIN_URL || ''
@@ -133,6 +140,16 @@ function normalizeScriptReferenceBlueprint(data, { currentBlueprint = null, worl
   }
 
   return normalized
+}
+
+function hasScriptFields(data) {
+  if (!data || typeof data !== 'object') return false
+  for (const field of SCRIPT_BLUEPRINT_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(data, field)) continue
+    if (field === 'script' && data.script === '') continue
+    return true
+  }
+  return false
 }
 
 function applySyncMetadata(target, source) {
@@ -714,6 +731,19 @@ export class ServerNetwork extends System {
     const normalizedChange = normalizeScriptReferenceBlueprint(change, { currentBlueprint: blueprint, world: this.world })
     const validation = validateBlueprintScriptFields(normalizedChange)
     if (!validation.ok) return validation
+    const hasScriptChange = hasScriptFields(normalizedChange)
+    if (hasScriptChange && source !== 'ai-scripts') {
+      const busy = this.world.aiScripts?.getBusyStateForBlueprint?.(blueprint)
+      if (busy?.scriptRootId) {
+        return {
+          ok: false,
+          error: 'ai_request_pending',
+          scriptRootId: busy.scriptRootId,
+          targetBlueprintId: busy.targetBlueprintId || blueprint.id,
+          requestId: busy.requestId || null,
+        }
+      }
+    }
     // if new version is greater than current version, allow it
     if (normalizedChange.version > blueprint.version) {
       const now = moment().toISOString()

@@ -66,6 +66,7 @@ export function ScriptFilesTree({
   onSelectPath,
   editorReady,
   saving,
+  aiLocked,
   canRenameSelected,
   canDeleteSelected,
   canMoveToShared,
@@ -78,7 +79,7 @@ export function ScriptFilesTree({
           <button
             className='script-files-add'
             type='button'
-            disabled={!editorReady}
+            disabled={!editorReady || aiLocked}
             onClick={() => {
               if (!newFileOpen) {
                 onOpenNewFile()
@@ -90,7 +91,7 @@ export function ScriptFilesTree({
           <button
             className='script-files-add'
             type='button'
-            disabled={!editorReady}
+            disabled={!editorReady || aiLocked}
             onClick={onOpenNewSharedFile}
           >
             Shared
@@ -103,6 +104,7 @@ export function ScriptFilesTree({
             ref={newFileInputRef}
             value={newFilePath}
             placeholder='new-file.js'
+            disabled={aiLocked}
             onChange={onNewFileChange}
             onKeyDown={onNewFileKeyDown}
           />
@@ -110,12 +112,12 @@ export function ScriptFilesTree({
             <button
               className='script-files-new-btn primary'
               type='button'
-              disabled={!newFilePath.trim()}
+              disabled={!newFilePath.trim() || aiLocked}
               onClick={onCreateNewFile}
             >
               Add
             </button>
-            <button className='script-files-new-btn' type='button' onClick={onCancelNewFile}>
+            <button className='script-files-new-btn' type='button' disabled={aiLocked} onClick={onCancelNewFile}>
               Cancel
             </button>
           </div>
@@ -128,6 +130,7 @@ export function ScriptFilesTree({
             ref={renameFileInputRef}
             value={renameFilePath}
             placeholder='helpers/util.js'
+            disabled={aiLocked}
             onChange={onRenameFileChange}
             onKeyDown={onRenameFileKeyDown}
           />
@@ -135,12 +138,12 @@ export function ScriptFilesTree({
             <button
               className='script-files-new-btn primary'
               type='button'
-              disabled={!renameFilePath.trim()}
+              disabled={!renameFilePath.trim() || aiLocked}
               onClick={onRenameSelectedFile}
             >
               Rename
             </button>
-            <button className='script-files-new-btn' type='button' onClick={onCancelRenameFile}>
+            <button className='script-files-new-btn' type='button' disabled={aiLocked} onClick={onCancelRenameFile}>
               Cancel
             </button>
           </div>
@@ -152,7 +155,7 @@ export function ScriptFilesTree({
         <button
           className='script-files-move'
           type='button'
-          disabled={!editorReady || saving}
+          disabled={!editorReady || saving || aiLocked}
           onClick={onOpenRenameFile}
         >
           Rename
@@ -162,7 +165,7 @@ export function ScriptFilesTree({
         <button
           className='script-files-move danger'
           type='button'
-          disabled={!editorReady || saving}
+          disabled={!editorReady || saving || aiLocked}
           onClick={onDeleteSelectedFile}
         >
           Delete
@@ -172,7 +175,7 @@ export function ScriptFilesTree({
         <button
           className='script-files-move'
           type='button'
-          disabled={!editorReady || saving}
+          disabled={!editorReady || saving || aiLocked}
           onClick={onMoveSelectedToShared}
         >
           Move to shared

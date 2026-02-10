@@ -147,8 +147,6 @@ LIVEKIT_WS_URL=
 LIVEKIT_API_KEY=
 LIVEKIT_API_SECRET=
 
-# Hooks to connect to a local app dev server
-PUBLIC_DEV_SERVER=false
 `
 }
 

@@ -57,16 +57,15 @@ function normalizeAttachments(input) {
 export class ClientAIScripts extends System {
   constructor(world) {
     super(world)
-    this.pendingByRoot = new Map()
+    this.inFlightByBlueprint = new Map()
   }
 
   init() {
-    this.world.on('ui', this.onUi)
+    // no-op
   }
 
   destroy() {
-    this.world.off('ui', this.onUi)
-    this.pendingByRoot.clear()
+    this.inFlightByBlueprint.clear()
   }
 
   requestEdit = ({ prompt, app, attachments } = {}) => {
@@ -91,6 +90,10 @@ export class ClientAIScripts extends System {
     if (!targetApp) {
       targetApp = this.world.builder?.getEntityAtReticle?.() || null
     }
+    const targetBlueprint =
+      targetApp?.blueprint ||
+      this.world.blueprints.get(targetApp?.data?.blueprint) ||
+      (scriptRootId ? this.world.blueprints.get(scriptRootId) : null)
     let scriptRoot = null
     if (scriptRootId) {
       const blueprint = this.world.blueprints.get(scriptRootId)
@@ -100,6 +103,15 @@ export class ClientAIScripts extends System {
     }
     if (!scriptRoot || !hasScriptFiles(scriptRoot)) {
       this.world.emit('toast', 'No module script root found for this app.')
+      return null
+    }
+    const targetBlueprintId = targetBlueprint?.id || scriptRoot.id
+    if (!targetBlueprintId) {
+      this.world.emit('toast', 'No script target found for this app.')
+      return null
+    }
+    if (this.inFlightByBlueprint.has(targetBlueprintId)) {
+      this.world.emit('toast', 'AI request already in progress for this app.')
       return null
     }
     const entryPath = scriptRoot.scriptEntry
@@ -131,6 +143,7 @@ export class ClientAIScripts extends System {
     const payload = {
       requestId,
       scriptRootId: scriptRoot.id,
+      targetBlueprintId,
       mode,
       prompt: prompt || null,
       error: requestError || null,
@@ -142,21 +155,87 @@ export class ClientAIScripts extends System {
     if (targetApp?.data?.id) {
       payload.appId = targetApp.data.id
     }
+    this.inFlightByBlueprint.set(targetBlueprintId, {
+      requestId,
+      scriptRootId: scriptRoot.id,
+      startedAt: Date.now(),
+    })
+    this.world.emit?.('script-ai-pending', {
+      scriptRootId: scriptRoot.id,
+      targetBlueprintId,
+      requestId,
+      pending: true,
+    })
     this.world.network.send('scriptAiRequest', payload)
     this.world.emit?.('script-ai-request', payload)
     return requestId
   }
 
+  isBlueprintPending = blueprintId => {
+    if (typeof blueprintId !== 'string' || !blueprintId) return false
+    return this.inFlightByBlueprint.has(blueprintId)
+  }
+
+  isRootPending = scriptRootId => {
+    if (typeof scriptRootId !== 'string' || !scriptRootId) return false
+    for (const pending of this.inFlightByBlueprint.values()) {
+      if (pending?.scriptRootId === scriptRootId) return true
+    }
+    return false
+  }
+
   onProposal = payload => {
     if (!payload) return
+    const scriptRootId = typeof payload.scriptRootId === 'string' ? payload.scriptRootId : null
+    const targetBlueprintId =
+      typeof payload.targetBlueprintId === 'string' ? payload.targetBlueprintId : null
+    let clearedBlueprintId = targetBlueprintId
+    if (targetBlueprintId) {
+      this.inFlightByBlueprint.delete(targetBlueprintId)
+    } else if (payload.requestId) {
+      for (const [blueprintId, pending] of this.inFlightByBlueprint.entries()) {
+        if (pending?.requestId === payload.requestId) {
+          this.inFlightByBlueprint.delete(blueprintId)
+          clearedBlueprintId = blueprintId
+          break
+        }
+      }
+    }
+    if (!clearedBlueprintId && scriptRootId) {
+      for (const [blueprintId, pending] of this.inFlightByBlueprint.entries()) {
+        if (pending?.scriptRootId === scriptRootId) {
+          this.inFlightByBlueprint.delete(blueprintId)
+          clearedBlueprintId = blueprintId
+          break
+        }
+      }
+    }
+    if (scriptRootId || clearedBlueprintId) {
+      this.world.emit?.('script-ai-pending', {
+        scriptRootId,
+        targetBlueprintId: clearedBlueprintId,
+        requestId: payload.requestId || null,
+        pending: false,
+      })
+    }
     const response = {
       requestId: payload.requestId || null,
-      scriptRootId: typeof payload.scriptRootId === 'string' ? payload.scriptRootId : null,
+      scriptRootId,
+      targetBlueprintId: clearedBlueprintId,
       error: payload.error || null,
       message: payload.message || null,
       summary: typeof payload.summary === 'string' ? payload.summary : '',
       source: typeof payload.source === 'string' ? payload.source : '',
-      fileCount: Array.isArray(payload.files) ? payload.files.length : 0,
+      fileCount:
+        Number.isFinite(payload.fileCount) && payload.fileCount >= 0
+          ? payload.fileCount
+          : Array.isArray(payload.files)
+            ? payload.files.length
+            : 0,
+      applied: payload.applied !== false,
+      forked: payload.forked === true,
+      appliedScriptRootId:
+        typeof payload.appliedScriptRootId === 'string' ? payload.appliedScriptRootId : null,
     }
     this.world.emit?.('script-ai-response', response)
     if (payload.error) {
@@ -164,33 +243,7 @@ export class ClientAIScripts extends System {
       this.world.emit('toast', message)
       return
     }
-    const scriptRootId = typeof payload.scriptRootId === 'string' ? payload.scriptRootId : null
-    const api = this.world.ui?.scriptEditorAI
-    const activeRoot = resolveScriptRootForApp(this.world.ui?.state?.app, this.world)
-    const activeRootId = activeRoot?.id || null
-    if (api?.proposeChanges && (!scriptRootId || scriptRootId === activeRootId)) {
-      api.proposeChanges(payload)
-      return
-    }
-    if (scriptRootId) {
-      this.pendingByRoot.set(scriptRootId, payload)
-    } else {
-      const fallbackId = payload.requestId || `pending-${Date.now()}`
-      this.pendingByRoot.set(fallbackId, payload)
-    }
-    this.world.emit('toast', 'AI changes ready. Open the Script pane to review.')
-  }
-
-  onUi = () => {
-    if (!this.pendingByRoot.size) return
-    const api = this.world.ui?.scriptEditorAI
-    if (!api?.proposeChanges) return
-    const activeRoot = resolveScriptRootForApp(this.world.ui?.state?.app, this.world)
-    const activeRootId = activeRoot?.id
-    if (!activeRootId) return
-    const pending = this.pendingByRoot.get(activeRootId)
-    if (!pending) return
-    this.pendingByRoot.delete(activeRootId)
-    api.proposeChanges(pending)
+    const successMessage = payload.message || 'AI changes applied.'
+    this.world.emit('toast', successMessage)
   }
 }

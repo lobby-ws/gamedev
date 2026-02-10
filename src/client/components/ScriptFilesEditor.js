@@ -22,7 +22,7 @@ import {
 
 const aiDebugEnabled = (process?.env?.PUBLIC_DEBUG_AI_SCRIPT || globalThis?.env?.PUBLIC_DEBUG_AI_SCRIPT) === 'true'
 
-export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
+export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = false }) {
   const mountRef = useRef(null)
   const editorRef = useRef(null)
   const monacoRef = useRef(null)
@@ -39,6 +39,8 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
   const applyScriptUpdateRef = useRef(null)
   const newFileInputRef = useRef(null)
   const renameFileInputRef = useRef(null)
+  const aiLockedRef = useRef(!!aiLocked)
+  const prevAiLockedRef = useRef(!!aiLocked)
 
   const [selectedPath, setSelectedPath] = useState(null)
   const [fontSize, setFontSize] = useState(() => 12 * world.prefs.ui)
@@ -127,6 +129,11 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     setConflict('Script changed on the server. Refresh or retry.')
   }, [])
 
+  const setAiPendingError = useCallback(() => {
+    setConflict(null)
+    setError('AI request is running for this script. Wait for it to finish.')
+  }, [])
+
   const clearAiProposal = useCallback(() => {
     setAiProposal(null)
     setAiPreviewOpen(false)
@@ -139,6 +146,39 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     }
     diffOriginalsRef.current.clear()
   }, [])
+
+  const revertDirtyEditsForAi = useCallback(() => {
+    let changed = false
+    const removed = new Set()
+    for (const [path, state] of fileStatesRef.current.entries()) {
+      if (!state?.dirty) continue
+      changed = true
+      if (state.isNew) {
+        state.disposable?.dispose()
+        state.model?.dispose()
+        fileStatesRef.current.delete(path)
+        removed.add(path)
+        continue
+      }
+      if (state.model && state.model.getValue() !== state.originalText) {
+        state.model.setValue(state.originalText)
+      }
+      state.dirty = false
+    }
+    if (removed.size) {
+      setExtraPaths(current => current.filter(path => !removed.has(path)))
+      if (selectedPath && removed.has(selectedPath)) {
+        const remaining = validPaths.filter(path => !removed.has(path))
+        setSelectedPath(remaining[0] || null)
+      }
+    }
+    if (changed) {
+      setDirtyTick(tick => tick + 1)
+      world.emit('toast', 'Reverted local edits while AI request runs')
+    }
+    setConflict(null)
+    setError(null)
+  }, [selectedPath, validPaths, world])
 
   useEffect(() => {
     if (!rootId) return
@@ -164,6 +204,20 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     if (!aiProposal) return
     clearAiProposal()
   }, [rootVersion, aiProposal, clearAiProposal])
+
+  useEffect(() => {
+    if (aiLocked && !prevAiLockedRef.current) {
+      revertDirtyEditsForAi()
+      setNewFileOpen(false)
+      setNewFilePath('')
+      setNewFileError(null)
+      setRenameFileOpen(false)
+      setRenameFilePath('')
+      setRenameFileError(null)
+      clearAiProposal()
+    }
+    prevAiLockedRef.current = !!aiLocked
+  }, [aiLocked, revertDirtyEditsForAi, clearAiProposal])
 
   useEffect(() => {
     if (!extraPaths.length || !scriptFiles) return
@@ -210,6 +264,13 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       editorRef.current.updateOptions({ fontSize })
     }
   }, [fontSize])
+
+  useEffect(() => {
+    aiLockedRef.current = !!aiLocked
+    if (editorRef.current) {
+      editorRef.current.updateOptions({ readOnly: !!aiLocked })
+    }
+  }, [aiLocked])
 
   useEffect(() => {
     if (diffEditorRef.current) {
@@ -382,6 +443,10 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
 
   const openNewFile = useCallback(() => {
     if (!scriptRoot || !scriptFiles) return
+    if (aiLockedRef.current) {
+      setAiPendingError()
+      return
+    }
     setRenameFileOpen(false)
     setRenameFilePath('')
     setRenameFileError(null)
@@ -391,10 +456,14 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     requestAnimationFrame(() => {
       newFileInputRef.current?.focus()
     })
-  }, [scriptRoot, scriptFiles])
+  }, [scriptRoot, scriptFiles, setAiPendingError])
 
   const openNewSharedFile = useCallback(() => {
     if (!scriptRoot || !scriptFiles) return
+    if (aiLockedRef.current) {
+      setAiPendingError()
+      return
+    }
     setRenameFileOpen(false)
     setRenameFilePath('')
     setRenameFileError(null)
@@ -410,7 +479,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         input.setSelectionRange(end, end)
       }
     })
-  }, [scriptRoot, scriptFiles])
+  }, [scriptRoot, scriptFiles, setAiPendingError])
 
   const cancelNewFile = useCallback(() => {
     setNewFileOpen(false)
@@ -420,6 +489,10 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
 
   const createNewFile = useCallback(async () => {
     if (!scriptRoot || !scriptFiles) return
+    if (aiLockedRef.current) {
+      setAiPendingError()
+      return
+    }
     const trimmed = newFilePath.trim()
     if (!trimmed) {
       setNewFileError('Enter a file path.')
@@ -458,10 +531,14 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       console.error(err)
       setNewFileError('Failed to create file.')
     }
-  }, [scriptRoot, scriptFiles, newFilePath, extraPaths, ensureFileState])
+  }, [scriptRoot, scriptFiles, newFilePath, extraPaths, ensureFileState, setAiPendingError])
 
   const openRenameFile = useCallback(() => {
     if (!scriptRoot || !scriptFiles) return
+    if (aiLockedRef.current) {
+      setAiPendingError()
+      return
+    }
     if (!selectedPath || !isValidScriptPath(selectedPath)) return
     setNewFileOpen(false)
     setNewFilePath('')
@@ -478,7 +555,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         input.setSelectionRange(end, end)
       }
     })
-  }, [scriptRoot, scriptFiles, selectedPath])
+  }, [scriptRoot, scriptFiles, selectedPath, setAiPendingError])
 
   const cancelRenameFile = useCallback(() => {
     setRenameFileOpen(false)
@@ -488,6 +565,10 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
 
   const moveSelectedToShared = useCallback(async () => {
     if (!scriptRoot || !scriptFiles) return
+    if (aiLockedRef.current) {
+      setAiPendingError()
+      return
+    }
     if (saving) return
     const path = selectedPath
     if (!path) return
@@ -590,6 +671,8 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       const code = err?.code || err?.message
       if (code === 'version_mismatch') {
         setServerConflict()
+      } else if (code === 'ai_request_pending') {
+        setAiPendingError()
       } else if (code === 'admin_required' || code === 'admin_code_missing' || code === 'deploy_required') {
         setError('Admin code required.')
       } else if (code === 'locked' || code === 'deploy_locked' || code === 'deploy_lock_required') {
@@ -618,6 +701,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     rekeyFileState,
     getStateStaleReason,
     setServerConflict,
+    setAiPendingError,
   ])
 
   const setEditorModel = useCallback(path => {
@@ -935,12 +1019,17 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         tabSize: 2,
         insertSpaces: true,
         fontSize: fontSize,
+        readOnly: aiLockedRef.current,
       })
       editor.addAction({
         id: 'script-editor-save',
         label: 'Save Script',
         keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS],
         run: async () => {
+          if (aiLockedRef.current) {
+            setAiPendingError()
+            return
+          }
           if (saveAllRef.current) {
             const savedAny = await saveAllRef.current()
             if (savedAny) return
@@ -988,6 +1077,10 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       event.preventDefault()
       event.stopPropagation()
       ;(async () => {
+        if (aiLockedRef.current) {
+          setAiPendingError()
+          return
+        }
         if (saveAllRef.current) {
           const savedAny = await saveAllRef.current()
           if (savedAny) return
@@ -1001,7 +1094,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     return () => {
       window.removeEventListener('keydown', onKeyDown)
     }
-  }, [])
+  }, [setAiPendingError])
 
   useEffect(() => {
     if (!aiPreviewOpen) return
@@ -1074,6 +1167,10 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
   }, [world])
 
   const refreshCurrent = useCallback(async () => {
+    if (aiLockedRef.current) {
+      setAiPendingError()
+      return
+    }
     if (!selectedPath) return
     const state = fileStatesRef.current.get(selectedPath)
     if (state?.dirty) {
@@ -1087,7 +1184,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     }
     await loadPath(selectedPath, { force: true })
     world.emit('toast', 'Script refreshed')
-  }, [selectedPath, loadPath, world])
+  }, [selectedPath, loadPath, world, setAiPendingError])
 
   const resolveScriptUpdateMode = useCallback(async () => {
     const app = world.ui?.state?.app || null
@@ -1099,20 +1196,21 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     const groups = buildScriptGroups(world.blueprints.items)
     const group = (targetBlueprint?.id && groups.byId.get(targetBlueprint.id)) || groups.byId.get(scriptRoot.id) || null
     const groupSize = group?.items?.length || 0
-    if (groupSize <= 1 || !world.ui?.confirm) {
-      return { mode: 'group', group, targetBlueprint }
-    }
-    const applyAll = await world.ui.confirm({
-      title: 'Apply code changes?',
-      message: `This script is shared by ${groupSize} blueprints. Apply to all or fork this app?`,
-      confirmText: 'Apply to all',
-      cancelText: 'Fork',
-    })
-    return { mode: applyAll ? 'group' : 'fork', group, targetBlueprint }
+    const targetId = typeof targetBlueprint?.id === 'string' ? targetBlueprint.id : null
+    const scriptRootId = typeof scriptRoot?.id === 'string' ? scriptRoot.id : null
+    const shouldFork =
+      !!app &&
+      (groupSize > 1 || (!!targetId && !!scriptRootId && targetId !== scriptRootId))
+    return { mode: shouldFork ? 'fork' : 'group', group, targetBlueprint }
   }, [world, scriptRoot])
 
   const applyScriptUpdate = useCallback(
     async scriptUpdate => {
+      if (aiLockedRef.current) {
+        const err = new Error('ai_request_pending')
+        err.code = 'ai_request_pending'
+        throw err
+      }
       const updateMode = await resolveScriptUpdateMode()
 
       if (updateMode.mode === 'fork') {
@@ -1213,6 +1311,10 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
 
   const renameSelectedFile = useCallback(async () => {
     if (!scriptRoot || !scriptFiles) return
+    if (aiLockedRef.current) {
+      setAiPendingError()
+      return
+    }
     if (saving) return
     const fromPath = selectedPath
     if (!fromPath || !isValidScriptPath(fromPath)) {
@@ -1314,6 +1416,8 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       const code = err?.code || err?.message
       if (code === 'version_mismatch') {
         setServerConflict()
+      } else if (code === 'ai_request_pending') {
+        setAiPendingError()
       } else if (code === 'admin_required' || code === 'admin_code_missing' || code === 'deploy_required') {
         setError('Admin code required.')
       } else if (code === 'locked' || code === 'deploy_locked' || code === 'deploy_lock_required') {
@@ -1347,10 +1451,15 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     world,
     applyScriptUpdate,
     setServerConflict,
+    setAiPendingError,
   ])
 
   const deleteSelectedFile = useCallback(async () => {
     if (!scriptRoot || !scriptFiles) return
+    if (aiLockedRef.current) {
+      setAiPendingError()
+      return
+    }
     if (saving) return
     const path = selectedPath
     if (!path || !isValidScriptPath(path)) return
@@ -1424,6 +1533,8 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       const code = err?.code || err?.message
       if (code === 'version_mismatch') {
         setServerConflict()
+      } else if (code === 'ai_request_pending') {
+        setAiPendingError()
       } else if (code === 'admin_required' || code === 'admin_code_missing' || code === 'deploy_required') {
         setError('Admin code required.')
       } else if (code === 'locked' || code === 'deploy_locked' || code === 'deploy_lock_required') {
@@ -1451,10 +1562,15 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     removeFileState,
     applyScriptUpdate,
     setServerConflict,
+    setAiPendingError,
   ])
 
   const saveCurrent = useCallback(async () => {
     if (!scriptRoot || !scriptFiles) return
+    if (aiLockedRef.current) {
+      setAiPendingError()
+      return
+    }
     const path = currentPathRef.current
     if (!path) return
     const state = fileStatesRef.current.get(path)
@@ -1589,7 +1705,9 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       world.emit('toast', 'Script saved')
     } catch (err) {
       const code = err?.code || err?.message
-      if (code === 'admin_required' || code === 'admin_code_missing' || code === 'deploy_required') {
+      if (code === 'ai_request_pending') {
+        setAiPendingError()
+      } else if (code === 'admin_required' || code === 'admin_code_missing' || code === 'deploy_required') {
         setError('Admin code required.')
       } else if (code === 'locked' || code === 'deploy_locked' || code === 'deploy_lock_required') {
         const owner = err?.lock?.owner
@@ -1619,11 +1737,16 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     getStateStaleReason,
     resolveScriptUpdateMode,
     setServerConflict,
+    setAiPendingError,
   ])
 
   const saveAll = useCallback(
     async ({ paths } = {}) => {
       if (!scriptRoot || !scriptFiles) return false
+      if (aiLockedRef.current) {
+        setAiPendingError()
+        return false
+      }
       if (saving) return false
       const pending = []
       for (const [path, state] of fileStatesRef.current.entries()) {
@@ -1780,7 +1903,9 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         return true
       } catch (err) {
         const code = err?.code || err?.message
-        if (code === 'admin_required' || code === 'admin_code_missing' || code === 'deploy_required') {
+        if (code === 'ai_request_pending') {
+          setAiPendingError()
+        } else if (code === 'admin_required' || code === 'admin_code_missing' || code === 'deploy_required') {
           setError('Admin code required.')
         } else if (code === 'locked' || code === 'deploy_locked' || code === 'deploy_lock_required') {
           const owner = err?.lock?.owner
@@ -1813,6 +1938,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       resolveScriptUpdateMode,
       getStateStaleReason,
       setServerConflict,
+      setAiPendingError,
     ]
   )
 
@@ -1911,6 +2037,10 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
   }, [world, applyAiPatchSet, openAiPreview, closeAiPreview, toggleAiPreview, commitAiProposal, discardAiProposal])
 
   const retrySave = useCallback(async () => {
+    if (aiLockedRef.current) {
+      setAiPendingError()
+      return
+    }
     const path = currentPathRef.current
     if (!path) return
     const state = fileStatesRef.current.get(path)
@@ -1925,7 +2055,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     state.version = rootVersion
     setConflict(null)
     await saveCurrent()
-  }, [rootVersion, saveCurrent, scriptFiles])
+  }, [rootVersion, saveCurrent, scriptFiles, setAiPendingError])
 
   useEffect(() => {
     onHandle?.({
@@ -1955,6 +2085,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       error,
       conflict,
       selectedPath,
+      aiLocked,
     })
   }, [
     copy,
@@ -1976,6 +2107,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     error,
     conflict,
     selectedPath,
+    aiLocked,
     onHandle,
   ])
 
@@ -2337,6 +2469,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         onSelectPath={path => setSelectedPath(path)}
         editorReady={editorReady}
         saving={saving}
+        aiLocked={aiLocked}
         canRenameSelected={canRenameSelected}
         canDeleteSelected={canDeleteSelected}
         canMoveToShared={canMoveToShared}

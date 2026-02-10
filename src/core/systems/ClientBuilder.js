@@ -219,6 +219,10 @@ export class ClientBuilder extends System {
       this.world.emit('toast', owner ? `Deploy locked by ${owner}.` : 'Deploy locked by another session.')
       return
     }
+    if (code === 'ai_request_pending') {
+      this.world.emit('toast', 'AI request already in progress for this script.')
+      return
+    }
     if (code === 'admin_url_missing') {
       this.world.emit('toast', 'Admin connection unavailable.')
       return

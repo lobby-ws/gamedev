@@ -118,6 +118,7 @@ function fuzzyMatchList(query, entries) {
 
 export function Script({ world, hidden }) {
   const app = world.ui.state.app
+  const targetBlueprintId = app?.data?.blueprint || app?.blueprint?.id || null
   const containerRef = useRef()
   const resizeRef = useRef()
   const [handle, setHandle] = useState(null)
@@ -140,8 +141,14 @@ export function Script({ world, hidden }) {
   const fileCount = moduleRoot?.scriptFiles ? Object.keys(moduleRoot.scriptFiles).length : 0
   const entryPath = moduleRoot?.scriptEntry || ''
   const scriptFormat = moduleRoot?.scriptFormat || 'module'
-  const aiHasProposal = !!handle?.ai?.active
-  const aiPending = aiStatus?.type === 'pending'
+  const [aiPending, setAiPending] = useState(() =>
+    targetBlueprintId
+      ? !!world.aiScripts?.isBlueprintPending?.(targetBlueprintId)
+      : moduleRoot?.id
+        ? !!world.aiScripts?.isRootPending?.(moduleRoot.id)
+        : false
+  )
+  const aiLocked = aiPending || !!handle?.aiLocked
   const canBuild = !!world.builder?.canBuild?.()
   const aiAccessIssue = world.isAdminClient
     ? 'AI requests are not available on admin connections.'
@@ -149,23 +156,23 @@ export function Script({ world, hidden }) {
       ? 'Builder access required.'
       : null
   const aiCanUse = !!moduleRoot && !aiAccessIssue && !!world.aiScripts?.requestEdit
-  const aiCanSendEdit = aiCanUse && !aiPending && !aiHasProposal && !!aiPrompt.trim()
-  const aiCanSendFix = aiCanUse && !aiPending && !aiHasProposal && !!scriptError
+  const aiCanSendEdit = aiCanUse && !aiLocked && !!aiPrompt.trim()
+  const aiCanSendFix = aiCanUse && !aiLocked && !!scriptError
   const aiCanSend = aiMode === 'fix' ? aiCanSendFix : aiCanSendEdit
   const aiMetaClass = cls('script-ai-meta', {
-    ready: aiHasProposal,
-    pending: aiPending,
+    ready: aiStatus?.type === 'success',
+    pending: aiLocked,
     error: aiStatus?.type === 'error',
   })
   const aiMeta = useMemo(() => {
-    if (aiHasProposal) return 'Changes ready to review'
-    if (aiPending) return 'Generating changes...'
+    if (aiLocked) return 'Generating changes...'
+    if (aiStatus?.type === 'success') return aiStatus.message || 'Last request applied'
     if (aiStatus?.type === 'error') return 'Last request failed'
     if (aiMode === 'fix') {
       return scriptError ? 'Fix the latest script error' : 'No script error to fix'
     }
     return 'Ask for edits or fixes'
-  }, [aiHasProposal, aiPending, aiStatus?.type, aiMode, scriptError])
+  }, [aiLocked, aiStatus?.type, aiStatus?.message, aiMode, scriptError])
   const aiAttachmentSet = useMemo(() => {
     const set = new Set()
     for (const item of aiAttachments) {
@@ -227,7 +234,7 @@ export function Script({ world, hidden }) {
     setAiAttachments([])
     setAiMention(null)
     aiRequestRef.current = null
-  }, [moduleRoot?.id])
+  }, [moduleRoot?.id, targetBlueprintId])
   useEffect(() => {
     let active = true
     const apiUrl = world.network?.apiUrl
@@ -266,61 +273,92 @@ export function Script({ world, hidden }) {
     }
   }, [aiMode])
   useEffect(() => {
-    if (aiPending || aiHasProposal || aiStatus?.type === 'error') {
+    setAiPending(
+      targetBlueprintId
+        ? !!world.aiScripts?.isBlueprintPending?.(targetBlueprintId)
+        : moduleRoot?.id
+          ? !!world.aiScripts?.isRootPending?.(moduleRoot.id)
+          : false
+    )
+  }, [world, targetBlueprintId, moduleRoot?.id])
+  useEffect(() => {
+    if (aiLocked || aiStatus?.type === 'error' || aiStatus?.type === 'success') {
       setAiExpanded(true)
     }
-  }, [aiPending, aiHasProposal, aiStatus?.type])
+  }, [aiLocked, aiStatus?.type])
   useEffect(() => {
-    if (!aiHasProposal && aiStatus?.type === 'ready') {
-      setAiStatus(null)
+    const matchesCurrent = payload => {
+      if (!payload) return false
+      const payloadBlueprintId =
+        typeof payload.targetBlueprintId === 'string' ? payload.targetBlueprintId : null
+      if (targetBlueprintId && payloadBlueprintId) {
+        return payloadBlueprintId === targetBlueprintId
+      }
+      const payloadRootId = typeof payload.scriptRootId === 'string' ? payload.scriptRootId : null
+      if (moduleRoot?.id && payloadRootId) {
+        return payloadRootId === moduleRoot.id
+      }
+      return true
     }
-  }, [aiHasProposal, aiStatus?.type])
-  useEffect(() => {
     const onRequest = payload => {
       if (!payload) return
-      const rootId = typeof payload.scriptRootId === 'string' ? payload.scriptRootId : null
-      if (moduleRoot?.id && rootId && rootId !== moduleRoot.id) return
+      if (!matchesCurrent(payload)) return
       aiRequestRef.current = payload.requestId || null
       const mode = payload.mode === 'fix' ? 'fix' : 'edit'
       setAiMode(mode)
       if (typeof payload.prompt === 'string') {
         setAiPrompt(payload.prompt)
       }
+      setAiPending(true)
       setAiStatus({
         type: 'pending',
         message: mode === 'fix' ? 'Fixing script error...' : 'Generating changes...',
       })
       setAiExpanded(true)
     }
+    const onPending = payload => {
+      if (!payload) return
+      if (!matchesCurrent(payload)) return
+      if (aiRequestRef.current && payload.requestId && payload.requestId !== aiRequestRef.current) return
+      setAiPending(payload.pending === true)
+    }
     const onResponse = payload => {
       if (!payload) return
-      const rootId = typeof payload.scriptRootId === 'string' ? payload.scriptRootId : null
-      if (moduleRoot?.id && rootId && rootId !== moduleRoot.id) return
+      if (!matchesCurrent(payload)) return
       if (aiRequestRef.current && payload.requestId && payload.requestId !== aiRequestRef.current) return
       aiRequestRef.current = null
+      setAiPending(false)
       if (payload.error) {
         setAiStatus({
           type: 'error',
           message: payload.message || 'AI request failed.',
         })
       } else {
+        const appliedMessage =
+          payload.message ||
+          (payload.forked ? 'AI changes applied to a new fork.' : 'AI changes applied.')
         setAiStatus({
-          type: 'ready',
-          message: 'AI changes ready to review.',
+          type: 'success',
+          message: appliedMessage,
           summary: payload.summary || '',
           source: payload.source || '',
           fileCount: payload.fileCount || 0,
+          forked: payload.forked === true,
+          appliedScriptRootId:
+            typeof payload.appliedScriptRootId === 'string' ? payload.appliedScriptRootId : null,
         })
       }
       setAiExpanded(true)
     }
     world.on('script-ai-request', onRequest)
+    world.on('script-ai-pending', onPending)
     world.on('script-ai-response', onResponse)
     return () => {
       world.off('script-ai-request', onRequest)
+      world.off('script-ai-pending', onPending)
       world.off('script-ai-response', onResponse)
     }
-  }, [world, moduleRoot?.id])
+  }, [world, moduleRoot?.id, targetBlueprintId])
   const updateAiMention = useCallback(
     (value, caret) => {
       if (!aiFileIndex.length) {
@@ -394,10 +432,10 @@ export function Script({ world, hidden }) {
       setAiStatus({ type: 'error', message: 'AI scripts are not available in this session.' })
       return
     }
-    if (aiPending || aiHasProposal) {
+    if (aiLocked) {
       setAiStatus({
         type: 'error',
-        message: 'Apply or discard the current AI changes before requesting new ones.',
+        message: 'AI request already in progress for this script.',
       })
       return
     }
@@ -412,10 +450,12 @@ export function Script({ world, hidden }) {
       attachments: aiAttachmentPayload,
     })
     if (!requestId) return
+    aiPromptRef.current?.blur?.()
     aiRequestRef.current = requestId
+    setAiPending(true)
     setAiStatus({ type: 'pending', message: 'Generating changes...' })
     setAiExpanded(true)
-  }, [aiAccessIssue, aiPending, aiHasProposal, aiPrompt, world, app, aiAttachmentPayload])
+  }, [aiAccessIssue, aiLocked, aiPrompt, world, app, aiAttachmentPayload])
   const sendAiFix = useCallback(() => {
     if (aiAccessIssue) {
       setAiStatus({ type: 'error', message: aiAccessIssue })
@@ -425,10 +465,10 @@ export function Script({ world, hidden }) {
       setAiStatus({ type: 'error', message: 'AI scripts are not available in this session.' })
       return
     }
-    if (aiPending || aiHasProposal) {
+    if (aiLocked) {
       setAiStatus({
         type: 'error',
-        message: 'Apply or discard the current AI changes before requesting new ones.',
+        message: 'AI request already in progress for this script.',
       })
       return
     }
@@ -438,10 +478,12 @@ export function Script({ world, hidden }) {
     }
     const requestId = world.aiScripts.requestFix({ app, attachments: aiAttachmentPayload })
     if (!requestId) return
+    aiPromptRef.current?.blur?.()
     aiRequestRef.current = requestId
+    setAiPending(true)
     setAiStatus({ type: 'pending', message: 'Fixing script error...' })
     setAiExpanded(true)
-  }, [aiAccessIssue, aiPending, aiHasProposal, scriptError, world, app, aiAttachmentPayload])
+  }, [aiAccessIssue, aiLocked, scriptError, world, app, aiAttachmentPayload])
   const sendAiRequest = useCallback(() => {
     if (aiMode === 'fix') {
       sendAiFix()
@@ -462,7 +504,7 @@ export function Script({ world, hidden }) {
     e => {
       if ((e.metaKey || e.ctrlKey) && (e.key === 'Enter' || e.code === 'Enter')) {
         e.preventDefault()
-        sendAiEdit()
+        sendAiRequest()
         return
       }
       if (!aiMention?.open) return
@@ -503,7 +545,7 @@ export function Script({ world, hidden }) {
         setAiMention(null)
       }
     },
-    [aiMention, addAiAttachment, sendAiEdit]
+    [aiMention, addAiAttachment, sendAiRequest]
   )
   const handlePromptKeyUp = useCallback(
     e => {
@@ -512,12 +554,17 @@ export function Script({ world, hidden }) {
     [updateAiMention]
   )
   useEffect(() => {
+    if (!hidden || typeof document === 'undefined') return
+    const active = document.activeElement
+    if (active && containerRef.current?.contains(active) && typeof active.blur === 'function') {
+      active.blur()
+    }
+  }, [hidden])
+  useEffect(() => {
     const elem = resizeRef.current
     const container = containerRef.current
     container.style.width = `${storage.get('code-editor-width', 500)}px`
-    let active
     function onPointerDown(e) {
-      active = true
       elem.addEventListener('pointermove', onPointerMove)
       elem.addEventListener('pointerup', onPointerUp)
       e.currentTarget.setPointerCapture(e.pointerId)
@@ -992,7 +1039,7 @@ export function Script({ world, hidden }) {
               <button
                 className='script-action'
                 type='button'
-                disabled={!handle?.dirty || handle?.saving}
+                disabled={!handle?.dirty || handle?.saving || aiLocked}
                 onClick={() => handle?.save?.()}
               >
                 {handle?.saving ? 'Saving...' : 'Save'}
@@ -1000,7 +1047,7 @@ export function Script({ world, hidden }) {
               <button
                 className='script-action'
                 type='button'
-                disabled={handle?.saving || !handle?.refresh}
+                disabled={handle?.saving || !handle?.refresh || aiLocked}
                 onClick={() => handle?.refresh?.()}
               >
                 Refresh
@@ -1009,7 +1056,7 @@ export function Script({ world, hidden }) {
                 <button
                   className='script-action'
                   type='button'
-                  disabled={handle?.saving}
+                  disabled={handle?.saving || aiLocked}
                   onClick={() => handle?.retry?.()}
                 >
                   Retry
@@ -1054,201 +1101,163 @@ export function Script({ world, hidden }) {
           </button>
           {aiExpanded && (
             <div className='script-ai-panel-body'>
-              {aiHasProposal ? (
-                <div className='script-ai-proposal'>
-                  <div className='script-ai-proposal-title'>AI proposal ready</div>
-                  <div className='script-ai-proposal-summary'>
-                    {handle?.ai?.summary ||
-                      `${handle?.ai?.fileCount || 0} file${handle?.ai?.fileCount === 1 ? '' : 's'
-                      } changed`}
-                  </div>
-                  <div className='script-ai-proposal-meta'>
-                    {handle?.ai?.source ? `Source: ${handle.ai.source}` : 'Review and apply changes'}
-                  </div>
-                  <div className='script-ai-actions'>
-                    <button
-                      className='script-ai-action'
-                      type='button'
-                      onClick={() => handle?.ai?.togglePreview?.()}
-                    >
-                      {handle?.ai?.previewOpen ? 'Close Review' : 'Review'}
-                    </button>
-                    <button
-                      className='script-ai-action'
-                      type='button'
-                      disabled={handle?.saving}
-                      onClick={() => handle?.ai?.commit?.()}
-                    >
-                      Apply
-                    </button>
-                    <button
-                      className='script-ai-action'
-                      type='button'
-                      disabled={handle?.saving}
-                      onClick={() => handle?.ai?.discard?.()}
-                    >
-                      Discard
-                    </button>
-                  </div>
+              <div className='script-ai-modes'>
+                <button
+                  className={cls('script-ai-mode', { active: aiMode === 'edit' })}
+                  type='button'
+                  onClick={() => {
+                    if (aiStatus?.type === 'error') setAiStatus(null)
+                    setAiMode('edit')
+                  }}
+                >
+                  Edit
+                </button>
+                <button
+                  className={cls('script-ai-mode', { active: aiMode === 'fix' })}
+                  type='button'
+                  disabled={!scriptError}
+                  title={scriptError ? 'Fix the latest script error' : 'No script error detected'}
+                  onClick={() => {
+                    if (aiStatus?.type === 'error') setAiStatus(null)
+                    setAiMode('fix')
+                  }}
+                >
+                  Fix Error
+                </button>
+              </div>
+              {aiMode === 'edit' ? (
+                <div className='script-ai-input'>
+                  <textarea
+                    ref={aiPromptRef}
+                    value={aiPrompt}
+                    disabled={!aiCanUse || aiLocked}
+                    placeholder='Describe the change you want the AI to make. Use @ to attach files.'
+                    onChange={handlePromptChange}
+                    onKeyDown={handlePromptKeyDown}
+                    onKeyUp={handlePromptKeyUp}
+                    onBlur={() => setAiMention(null)}
+                  />
+                  {aiMention?.open && (
+                    <div className='script-ai-mentions' onMouseDown={e => e.preventDefault()}>
+                      {aiMention.items.length ? (
+                        aiMention.items.map((item, index) => {
+                          const attached = aiAttachmentSet.has(item.id)
+                          return (
+                            <div
+                              key={item.id}
+                              className={cls('script-ai-mention-item', {
+                                active: index === aiMention.activeIndex,
+                                disabled: attached,
+                              })}
+                              onMouseDown={e => e.preventDefault()}
+                              onClick={() => {
+                                if (!attached) addAiAttachment(item)
+                              }}
+                            >
+                              <span className='script-ai-mention-icon'>
+                                {item.type === 'doc' ? (
+                                  <BookTextIcon size='0.85rem' />
+                                ) : (
+                                  <CodeIcon size='0.85rem' />
+                                )}
+                              </span>
+                              <span className='script-ai-mention-path'>{item.path}</span>
+                              <span className='script-ai-mention-tag'>
+                                {attached ? 'attached' : item.type}
+                              </span>
+                            </div>
+                          )
+                        })
+                      ) : (
+                        <div className='script-ai-mention-empty'>No matches</div>
+                      )}
+                    </div>
+                  )}
                 </div>
               ) : (
-                <>
-                  <div className='script-ai-modes'>
-                    <button
-                      className={cls('script-ai-mode', { active: aiMode === 'edit' })}
-                      type='button'
-                      onClick={() => {
-                        if (aiStatus?.type === 'error') setAiStatus(null)
-                        setAiMode('edit')
-                      }}
-                    >
-                      Edit
-                    </button>
-                    <button
-                      className={cls('script-ai-mode', { active: aiMode === 'fix' })}
-                      type='button'
-                      disabled={!scriptError}
-                      title={scriptError ? 'Fix the latest script error' : 'No script error detected'}
-                      onClick={() => {
-                        if (aiStatus?.type === 'error') setAiStatus(null)
-                        setAiMode('fix')
-                      }}
-                    >
-                      Fix Error
-                    </button>
-                  </div>
-                  {aiMode === 'edit' ? (
-                    <div className='script-ai-input'>
-                      <textarea
-                        ref={aiPromptRef}
-                        value={aiPrompt}
-                        disabled={!aiCanUse || aiPending}
-                        placeholder='Describe the change you want the AI to make. Use @ to attach files.'
-                        onChange={handlePromptChange}
-                        onKeyDown={handlePromptKeyDown}
-                        onKeyUp={handlePromptKeyUp}
-                        onBlur={() => setAiMention(null)}
-                      />
-                      {aiMention?.open && (
-                        <div className='script-ai-mentions' onMouseDown={e => e.preventDefault()}>
-                          {aiMention.items.length ? (
-                            aiMention.items.map((item, index) => {
-                              const attached = aiAttachmentSet.has(item.id)
-                              return (
-                                <div
-                                  key={item.id}
-                                  className={cls('script-ai-mention-item', {
-                                    active: index === aiMention.activeIndex,
-                                    disabled: attached,
-                                  })}
-                                  onMouseDown={e => e.preventDefault()}
-                                  onClick={() => {
-                                    if (!attached) addAiAttachment(item)
-                                  }}
-                                >
-                                  <span className='script-ai-mention-icon'>
-                                    {item.type === 'doc' ? (
-                                      <BookTextIcon size='0.85rem' />
-                                    ) : (
-                                      <CodeIcon size='0.85rem' />
-                                    )}
-                                  </span>
-                                  <span className='script-ai-mention-path'>{item.path}</span>
-                                  <span className='script-ai-mention-tag'>
-                                    {attached ? 'attached' : item.type}
-                                  </span>
-                                </div>
-                              )
-                            })
-                          ) : (
-                            <div className='script-ai-mention-empty'>No matches</div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className='script-ai-error'>
-                      <div className='script-ai-error-title'>Latest script error</div>
-                      <div className='script-ai-error-summary'>{errorInfo.title}</div>
-                      {errorInfo.detail && (
-                        <pre className='script-ai-error-text'>{errorInfo.detail}</pre>
-                      )}
-                    </div>
+                <div className='script-ai-error'>
+                  <div className='script-ai-error-title'>Latest script error</div>
+                  <div className='script-ai-error-summary'>{errorInfo.title}</div>
+                  {errorInfo.detail && (
+                    <pre className='script-ai-error-text'>{errorInfo.detail}</pre>
                   )}
-                  {aiAttachments.length > 0 && (
-                    <div className='script-ai-attachments'>
-                      {aiAttachments.map(item => (
-                        <div key={`${item.type}:${item.path}`} className='script-ai-attachment'>
-                          <span className='script-ai-attachment-icon'>
-                            {item.type === 'doc' ? (
-                              <BookTextIcon size='0.75rem' />
-                            ) : (
-                              <CodeIcon size='0.75rem' />
-                            )}
-                          </span>
-                          <span className='script-ai-attachment-path'>{item.path}</span>
-                          <button
-                            className='script-ai-attachment-remove'
-                            type='button'
-                            onClick={() => removeAiAttachment(item)}
-                          >
-                            x
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div className='script-ai-footer'>
-                    <div className='script-ai-hint'>
-                      Entry: {entryPath || 'Unknown'} | {fileCount} file{fileCount === 1 ? '' : 's'} |{' '}
-                      {scriptFormat}
-                    </div>
-                    <div className='script-ai-buttons'>
-                      <button
-                        className='script-ai-btn'
-                        type='button'
-                        disabled={!aiPrompt || aiPending}
-                        onClick={() => {
-                          setAiPrompt('')
-                          if (aiStatus?.type === 'error') setAiStatus(null)
-                          setAiMention(null)
-                        }}
-                      >
-                        Clear
-                      </button>
-                      <button
-                        className='script-ai-btn primary'
-                        type='button'
-                        disabled={!aiCanSend}
-                        onClick={sendAiRequest}
-                      >
-                        {aiMode === 'fix' ? 'Fix Error' : 'Send Prompt'}
-                      </button>
-                    </div>
-                  </div>
-                  {aiAccessIssue && <div className='script-ai-status error'>{aiAccessIssue}</div>}
-                  {aiPending && (
-                    <div className='script-ai-status pending'>
-                      <LoaderPinwheelIcon size='0.9rem' className='script-ai-spinner' />
-                      {aiStatus?.message || 'Generating changes...'}
-                    </div>
-                  )}
-                  {aiStatus?.type === 'error' && !aiAccessIssue && (
-                    <div className='script-ai-status error'>{aiStatus.message}</div>
-                  )}
-                  {handle?.dirtyCount ? (
-                    <div className='script-ai-status'>
-                      You have unsaved edits. AI requests use the last saved code.
-                    </div>
-                  ) : null}
-                </>
+                </div>
               )}
+              {aiAttachments.length > 0 && (
+                <div className='script-ai-attachments'>
+                  {aiAttachments.map(item => (
+                    <div key={`${item.type}:${item.path}`} className='script-ai-attachment'>
+                      <span className='script-ai-attachment-icon'>
+                        {item.type === 'doc' ? (
+                          <BookTextIcon size='0.75rem' />
+                        ) : (
+                          <CodeIcon size='0.75rem' />
+                        )}
+                      </span>
+                      <span className='script-ai-attachment-path'>{item.path}</span>
+                      <button
+                        className='script-ai-attachment-remove'
+                        type='button'
+                        onClick={() => removeAiAttachment(item)}
+                      >
+                        x
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className='script-ai-footer'>
+                <div className='script-ai-hint'>
+                  Entry: {entryPath || 'Unknown'} | {fileCount} file{fileCount === 1 ? '' : 's'} |{' '}
+                  {scriptFormat}
+                </div>
+                <div className='script-ai-buttons'>
+                  <button
+                    className='script-ai-btn'
+                    type='button'
+                    disabled={!aiPrompt || aiLocked}
+                    onClick={() => {
+                      setAiPrompt('')
+                      if (aiStatus?.type === 'error' || aiStatus?.type === 'success') setAiStatus(null)
+                      setAiMention(null)
+                    }}
+                  >
+                    Clear
+                  </button>
+                  <button
+                    className='script-ai-btn primary'
+                    type='button'
+                    disabled={!aiCanSend}
+                    onClick={sendAiRequest}
+                  >
+                    {aiMode === 'fix' ? 'Fix Error' : 'Send Prompt'}
+                  </button>
+                </div>
+              </div>
+              {aiAccessIssue && <div className='script-ai-status error'>{aiAccessIssue}</div>}
+              {aiLocked && (
+                <div className='script-ai-status pending'>
+                  <LoaderPinwheelIcon size='0.9rem' className='script-ai-spinner' />
+                  {aiStatus?.message || 'Generating changes...'}
+                </div>
+              )}
+              {aiStatus?.type === 'error' && !aiAccessIssue && (
+                <div className='script-ai-status error'>{aiStatus.message}</div>
+              )}
+              {aiStatus?.type === 'success' && !aiAccessIssue && !aiLocked && (
+                <div className='script-ai-status'>{aiStatus.message}</div>
+              )}
+              {handle?.dirtyCount && !aiLocked ? (
+                <div className='script-ai-status'>
+                  Unsaved edits will be reverted when an AI request starts.
+                </div>
+              ) : null}
             </div>
           )}
         </div>
       )}
       <div className={cls('script-editor-shell', { collapsed: editorCollapsed })}>
-        <ScriptFilesEditor scriptRoot={moduleRoot} world={world} onHandle={setHandle} />
+        <ScriptFilesEditor scriptRoot={moduleRoot} world={world} onHandle={setHandle} aiLocked={aiLocked} />
       </div>
       <div className='script-resizer' ref={resizeRef} />
     </div>
