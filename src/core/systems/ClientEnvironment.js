@@ -68,6 +68,51 @@ THREE.ShaderChunk.fog_vertex = `
  * - Sets up the sky, hdr, sun, shadows, fog etc
  *
  */
+const skyVertexShader = `
+varying vec3 vPosition;
+varying vec2 vUv;
+void main() {
+  vPosition = position;
+  vUv = uv;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`
+
+function buildSkyFragmentShader(userCode) {
+  return `
+varying vec3 vPosition;
+varying vec2 vUv;
+uniform float uTime;
+uniform vec2 uResolution;
+void main() {
+  vec3 direction = normalize(vPosition);
+  vec3 color = vec3(0.0);
+  float alpha = 1.0;
+  ${userCode}
+  gl_FragColor = vec4(color, alpha);
+}
+`
+}
+
+function buildShaderUniforms(userUniforms) {
+  const uniforms = {
+    uTime: { value: 0 },
+    uResolution: { value: new THREE.Vector2() },
+  }
+  if (!userUniforms) return uniforms
+  for (const key in userUniforms) {
+    const v = userUniforms[key]
+    if (typeof v === 'number') {
+      uniforms[key] = { value: v }
+    } else if (Array.isArray(v)) {
+      if (v.length === 2) uniforms[key] = { value: new THREE.Vector2(v[0], v[1]) }
+      else if (v.length === 3) uniforms[key] = { value: new THREE.Vector3(v[0], v[1], v[2]) }
+      else if (v.length === 4) uniforms[key] = { value: new THREE.Vector4(v[0], v[1], v[2], v[3]) }
+    }
+  }
+  return uniforms
+}
+
 export class ClientEnvironment extends System {
   constructor(world) {
     super(world)
@@ -78,6 +123,9 @@ export class ClientEnvironment extends System {
     this.skyN = 0
     this.bgUrl = null
     this.hdrUrl = null
+    this.skyShaderMaterial = null
+    this.skyBasicMaterial = null
+    this.skyElapsed = 0
   }
 
   init({ baseEnvironment }) {
@@ -128,6 +176,8 @@ export class ClientEnvironment extends System {
 
     const base = this.base
     const node = this.skys[this.skys.length - 1]?.node
+    const shaderCode = node?._shader || null
+    const shaderUniforms = node?._shaderUniforms || null
     const bgUrl = node?._bg || base.bg
     const hdrUrl = node?._hdr || base.hdr
     const rotationY = isNumber(node?._rotationY) ? node._rotationY : base.rotationY
@@ -145,15 +195,79 @@ export class ClientEnvironment extends System {
     if (hdrUrl) hdrTexture = await this.world.loader.load('hdr', hdrUrl)
     if (n !== this.skyN) return
 
-    if (bgTexture) {
-      // bgTexture = bgTexture.clone()
+    if (shaderCode) {
+      if (this.skyShaderMaterial) {
+        this.skyShaderMaterial.dispose()
+        this.skyShaderMaterial = null
+      }
+      try {
+        const uniforms = buildShaderUniforms(shaderUniforms)
+        const material = new THREE.ShaderMaterial({
+          vertexShader: skyVertexShader,
+          fragmentShader: buildSkyFragmentShader(shaderCode),
+          uniforms,
+          side: THREE.BackSide,
+          depthWrite: false,
+        })
+        material.fog = false
+        material.toneMapped = false
+        const renderer = this.world.graphics.renderer
+        if (!renderer) {
+          material.dispose()
+          this.sky.visible = false
+        } else {
+          const prevOnError = renderer.debug.onShaderError
+          let compileError = null
+          renderer.debug.onShaderError = (gl, program, vs, fs) => {
+            const fsLog = gl.getShaderInfoLog(fs)
+            const vsLog = gl.getShaderInfoLog(vs)
+            compileError = fsLog || vsLog || 'unknown shader error'
+          }
+          const testScene = new THREE.Scene()
+          const testCamera = new THREE.Camera()
+          const testMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material)
+          testScene.add(testMesh)
+          renderer.compile(testScene, testCamera)
+          renderer.debug.onShaderError = prevOnError
+          testMesh.geometry.dispose()
+          if (compileError) {
+            console.warn('[sky] shader compile error:', compileError)
+            material.dispose()
+            this.sky.visible = false
+          } else {
+            if (!this.skyBasicMaterial) {
+              this.skyBasicMaterial = this.sky.material
+            }
+            this.skyShaderMaterial = material
+            this.sky.material = this.skyShaderMaterial
+            this.sky.visible = true
+          }
+        }
+      } catch (err) {
+        console.warn('[sky] shader error:', err)
+        this.sky.visible = false
+      }
+    } else if (bgTexture) {
+      if (this.skyBasicMaterial) {
+        this.sky.material = this.skyBasicMaterial
+      }
+      if (this.skyShaderMaterial) {
+        this.skyShaderMaterial.dispose()
+        this.skyShaderMaterial = null
+      }
       bgTexture.minFilter = bgTexture.magFilter = THREE.LinearFilter
       bgTexture.mapping = THREE.EquirectangularReflectionMapping
-      // bgTexture.encoding = Encoding[this.encoding]
       bgTexture.colorSpace = THREE.SRGBColorSpace
       this.sky.material.map = bgTexture
       this.sky.visible = true
     } else {
+      if (this.skyBasicMaterial) {
+        this.sky.material = this.skyBasicMaterial
+      }
+      if (this.skyShaderMaterial) {
+        this.skyShaderMaterial.dispose()
+        this.skyShaderMaterial = null
+      }
       this.sky.visible = false
     }
 
@@ -198,6 +312,17 @@ export class ClientEnvironment extends System {
 
   update(delta) {
     this.csm.update()
+    if (this.skyShaderMaterial) {
+      this.skyElapsed += delta
+      this.skyShaderMaterial.uniforms.uTime.value = this.skyElapsed
+      const renderer = this.world.graphics.renderer
+      if (renderer) {
+        this.skyShaderMaterial.uniforms.uResolution.value.set(
+          renderer.domElement.width,
+          renderer.domElement.height
+        )
+      }
+    }
   }
 
   lateUpdate(delta) {
