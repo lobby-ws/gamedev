@@ -23,7 +23,7 @@ test('mods deployer builds manifest and bundles per target', async () => {
   )
   await writeFile(
     path.join(rootDir, 'mods', 'client', 'components', 'Panel.jsx'),
-    'export default function Panel() { return null }\n'
+    "import { useMemo } from 'react'\nexport default function Panel() { const value = useMemo(() => 1, []); return <div>{value}</div> }\n"
   )
   await writeFile(
     path.join(rootDir, 'mods', 'client', 'sidebar', 'Tools.jsx'),
@@ -59,6 +59,12 @@ test('mods deployer builds manifest and bundles per target', async () => {
   for (const filename of bundles.keys()) {
     assert.ok(filename.startsWith('mods/'))
   }
+
+  const panel = manifest.modules.find(module => module.id === 'client.components.Panel')
+  const panelFilename = panel.clientUrl.slice('asset://'.length)
+  const panelSource = bundles.get(panelFilename).toString('utf8')
+  assert.match(panelSource, /__HYPERFY_MODS_REACT__/)
+  assert.match(panelSource, /__HYPERFY_MODS_REACT_JSX_RUNTIME__/)
 })
 
 test('mods deployer infers sidebar exports when module contains JSX', async () => {

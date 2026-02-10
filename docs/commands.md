@@ -54,3 +54,4 @@ Options:
 - `mods_load_order_override_ignored:*`: DB override exists but is invalid for the deployed module ids.
 - Browser import failures from S3: ensure uploaded `.js/.mjs/.cjs` assets are served as `text/javascript` with correct CORS.
 - If `CLEAN=true`, stale `assets/mods/*` bundles are removed from persisted `mods_manifest`; `SAVE_INTERVAL` does not manage mods.
+- `React is not defined` in mod UI: redeploy mods with current toolchain and restart client so UI bundles use host React runtime shims.

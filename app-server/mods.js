@@ -11,6 +11,9 @@ import { normalizeModOrderSpec, resolveModOrder } from '../src/core/mods/order.j
 const MOD_FILE_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'])
 const MODS_SCOPE = 'mods'
 const MODS_ASSET_PREFIX = 'mods'
+const MODS_REACT_GLOBAL = '__HYPERFY_MODS_REACT__'
+const MODS_REACT_JSX_RUNTIME_GLOBAL = '__HYPERFY_MODS_REACT_JSX_RUNTIME__'
+const MODS_RUNTIME_SHIM_NAMESPACE = 'mods-runtime-shim'
 
 const SCAN_TARGETS = [
   {
@@ -280,6 +283,39 @@ function toModsAssetFilename(filename) {
   return `${MODS_ASSET_PREFIX}/${filename}`
 }
 
+function createClientReactShimPlugin() {
+  return {
+    name: 'mods-client-react-shim',
+    setup(build) {
+      build.onResolve({ filter: /^react$/ }, () => ({
+        path: 'react',
+        namespace: MODS_RUNTIME_SHIM_NAMESPACE,
+      }))
+      build.onResolve({ filter: /^react\/jsx-runtime$/ }, () => ({
+        path: 'react/jsx-runtime',
+        namespace: MODS_RUNTIME_SHIM_NAMESPACE,
+      }))
+      build.onResolve({ filter: /^react\/jsx-dev-runtime$/ }, () => ({
+        path: 'react/jsx-dev-runtime',
+        namespace: MODS_RUNTIME_SHIM_NAMESPACE,
+      }))
+
+      build.onLoad({ filter: /^react$/, namespace: MODS_RUNTIME_SHIM_NAMESPACE }, () => ({
+        loader: 'js',
+        contents: `module.exports = globalThis.${MODS_REACT_GLOBAL};`,
+      }))
+      build.onLoad({ filter: /^react\/jsx-runtime$/, namespace: MODS_RUNTIME_SHIM_NAMESPACE }, () => ({
+        loader: 'js',
+        contents: `module.exports = globalThis.${MODS_REACT_JSX_RUNTIME_GLOBAL};`,
+      }))
+      build.onLoad({ filter: /^react\/jsx-dev-runtime$/, namespace: MODS_RUNTIME_SHIM_NAMESPACE }, () => ({
+        loader: 'js',
+        contents: `module.exports = globalThis.${MODS_REACT_JSX_RUNTIME_GLOBAL};`,
+      }))
+    },
+  }
+}
+
 async function bundleModule(absPath, { platform }) {
   const isServer = platform === 'server'
   const result = await esbuildBuild({
@@ -292,13 +328,15 @@ async function bundleModule(absPath, { platform }) {
     logLevel: 'silent',
     sourcemap: false,
     legalComments: 'none',
-    jsx: 'transform',
-    jsxFactory: 'React.createElement',
-    jsxFragment: 'React.Fragment',
+    jsx: isServer ? 'transform' : 'automatic',
+    jsxImportSource: undefined,
+    jsxFactory: isServer ? 'React.createElement' : undefined,
+    jsxFragment: isServer ? 'React.Fragment' : undefined,
     loader: ESBUILD_LOADERS,
     define: {
       'process.env.NODE_ENV': '"production"',
     },
+    plugins: isServer ? [] : [createClientReactShimPlugin()],
   })
   const output = Array.isArray(result.outputFiles) ? result.outputFiles[0] : null
   if (!output) {

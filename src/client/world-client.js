@@ -1,6 +1,8 @@
 // import 'ses'
 // import '../core/lockdown'
 import * as THREE from 'three'
+import React from 'react'
+import * as ReactJSXRuntime from 'react/jsx-runtime'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { css } from '@firebolt-dev/css'
 
@@ -10,6 +12,11 @@ import { loadClientUIMods } from '../core/mods/loadClientUIMods.js'
 import { CoreUI } from './components/CoreUI'
 
 export { System } from '../core/systems/System'
+
+function ensureModsReactRuntimeGlobals() {
+  globalThis.__HYPERFY_MODS_REACT__ = React
+  globalThis.__HYPERFY_MODS_REACT_JSX_RUNTIME__ = ReactJSXRuntime
+}
 
 export function Client({ wsUrl, onSetup }) {
   const viewportRef = useRef()
@@ -46,6 +53,7 @@ export function Client({ wsUrl, onSetup }) {
       }
       const config = { viewport, cssLayer, ui, wsUrl, baseEnvironment }
       onSetup?.(world, config)
+      ensureModsReactRuntimeGlobals()
       const mods = await loadClientMods(world)
       if (mods.assetsUrl) {
         world.assetsUrl = mods.assetsUrl

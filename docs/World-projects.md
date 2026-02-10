@@ -77,6 +77,12 @@ Authoring contracts:
 - `mods/client/components/**`: UI components (default export component).
 - `mods/client/sidebar/**`: sidebar modules (named exports for button + pane).
 
+JSX runtime notes for UI mods:
+
+- Client mod bundles use automatic JSX runtime.
+- You do not need `import React from 'react'` just to use JSX.
+- If you import hooks from `react`, runtime uses the host React singleton (no duplicate React copy in mod bundles).
+
 Deploy and order control:
 
 - Use `gamedev mods deploy --target <name>` for explicit deploys.
