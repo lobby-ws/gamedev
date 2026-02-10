@@ -1,5 +1,5 @@
-import { normalizeModManifest } from '../core/mods/manifest'
-import { normalizeModOrderSpec } from '../core/mods/order'
+import { normalizeModManifest } from '../core/mods/manifest.js'
+import { normalizeModOrderSpec } from '../core/mods/order.js'
 
 export const MODS_MANIFEST_CONFIG_KEY = 'mods_manifest'
 export const MODS_LOAD_ORDER_OVERRIDE_CONFIG_KEY = 'mods_load_order_override'

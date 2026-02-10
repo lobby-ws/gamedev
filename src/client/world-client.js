@@ -5,8 +5,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { css } from '@firebolt-dev/css'
 
 import { createClientWorld } from '../core/createClientWorld'
-import { loadClientMods } from '../core/mods/loadClientMods'
-import { loadClientUIMods } from '../core/mods/loadClientUIMods'
+import { loadClientMods } from '../core/mods/loadClientMods.js'
+import { loadClientUIMods } from '../core/mods/loadClientUIMods.js'
 import { CoreUI } from './components/CoreUI'
 
 export { System } from '../core/systems/System'

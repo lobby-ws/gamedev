@@ -48,14 +48,46 @@ test('mods deployer builds manifest and bundles per target', async () => {
 
   const shared = manifest.modules.find(module => module.id === 'core.shared.EchoShared')
   assert.equal(shared.kind, 'system')
-  assert.ok(shared.serverUrl?.startsWith('asset://'))
-  assert.ok(shared.clientUrl?.startsWith('asset://'))
+  assert.ok(shared.serverUrl?.startsWith('asset://mods/'))
+  assert.ok(shared.clientUrl?.startsWith('asset://mods/'))
 
   const sidebar = manifest.modules.find(module => module.id === 'client.sidebar.Tools')
   assert.equal(sidebar.buttonExport, 'ToolsButton')
   assert.equal(sidebar.paneExport, 'ToolsPane')
 
   assert.ok(bundles.size >= 4)
+  for (const filename of bundles.keys()) {
+    assert.ok(filename.startsWith('mods/'))
+  }
+})
+
+test('mods deployer infers sidebar exports when module contains JSX', async () => {
+  const rootDir = await createTempDir('hyperfy-mods-sidebar-jsx-')
+  await writeFile(
+    path.join(rootDir, 'mods', 'client', 'sidebar', 'Tools.js'),
+    `
+export function ToolsButton() {
+  return 'Tools'
+}
+
+export function ToolsPane({ hidden }) {
+  if (hidden) return null
+  return <div>pane</div>
+}
+`
+  )
+
+  const deployer = new ModsDeployer({
+    rootDir,
+    adminClient: {
+      getModsState: async () => ({ manifest: null, loadOrderOverride: null }),
+    },
+  })
+
+  const { manifest } = await deployer.buildManifest()
+  const sidebar = manifest.modules.find(module => module.id === 'client.sidebar.Tools')
+  assert.equal(sidebar.buttonExport, 'ToolsButton')
+  assert.equal(sidebar.paneExport, 'ToolsPane')
 })
 
 test('mods deployer dry-run does not upload or publish', async () => {

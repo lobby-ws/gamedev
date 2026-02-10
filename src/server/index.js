@@ -12,7 +12,7 @@ import statics from '@fastify/static'
 import multipart from '@fastify/multipart'
 
 import { createServerWorld } from '../core/createServerWorld'
-import { loadServerMods } from '../core/mods/loadServerMods'
+import { loadServerMods } from '../core/mods/loadServerMods.js'
 import { getDB } from './db'
 import { Storage } from './Storage'
 import { assets } from './assets'

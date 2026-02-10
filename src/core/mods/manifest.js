@@ -1,4 +1,4 @@
-import { resolveModOrder, normalizeModOrderSpec } from './order'
+import { resolveModOrder, normalizeModOrderSpec } from './order.js'
 
 const MODS_MANIFEST_VERSION = 1
 const MOD_KINDS = new Set(['system', 'component', 'sidebar'])

@@ -825,7 +825,7 @@ class WorldAdminClient extends EventEmitter {
     const file = new File([buffer], filename, { type: mimeType || 'application/octet-stream' })
     form.set('file', file)
 
-    const upload = await fetch(joinUrl(this.httpBase, '/admin/upload'), {
+    const upload = await fetch(joinUrl(this.httpBase, `/admin/upload?filename=${encodeURIComponent(filename)}`), {
       method: 'POST',
       headers: this.adminHeaders(),
       body: form,

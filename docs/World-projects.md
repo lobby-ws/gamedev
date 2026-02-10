@@ -88,6 +88,11 @@ Deploy and order control:
 
 When you run `gamedev mods deploy`, the deployer uploads bundled modules and writes a persisted mods manifest to the target world.
 
+Storage details:
+
+- deployed bundles are stored as `asset://mods/<hash>.js`
+- cleaner prunes stale `assets/mods/*` bundles by comparing against persisted `mods_manifest`
+
 Root shape:
 
 ```json

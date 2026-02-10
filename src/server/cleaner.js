@@ -1,4 +1,5 @@
 import { assets } from './assets'
+import { readModsState } from './mods-state.js'
 
 function collectAssetUrls(value, out) {
   if (!out) out = new Set()
@@ -22,16 +23,29 @@ function collectAssetUrls(value, out) {
   return out
 }
 
+function collectManifestAssetUrls(manifest, out) {
+  if (!manifest || !Array.isArray(manifest.modules)) return out
+  for (const module of manifest.modules) {
+    if (typeof module?.serverUrl === 'string' && module.serverUrl.startsWith('asset://')) {
+      out.add(module.serverUrl.replace('asset://', ''))
+    }
+    if (typeof module?.clientUrl === 'string' && module.clientUrl.startsWith('asset://')) {
+      out.add(module.clientUrl.replace('asset://', ''))
+    }
+  }
+  return out
+}
+
 class Cleaner {
   constructor() {
     // ...
   }
 
-  async run({ db, dryrun = false, world = null, broadcast = null } = {}) {
+  async run({ db, dryrun = false, world = null, broadcast = null, assetsApi = assets } = {}) {
     if (!db) throw new Error('db_required')
     console.log(dryrun ? '[clean] dry run' : '[clean] running')
     // get all assets
-    const allAssets = await assets.list() // hash-only assets
+    const allAssets = await assetsApi.list() // hash-only assets
     // get all blueprints
     const blueprints = []
     const blueprintRows = await db('blueprints')
@@ -117,6 +131,23 @@ class Cleaner {
     const settings = JSON.parse(settingsRow.value)
     if (settings.image) assetsToKeep.add(settings.image.url.replace('asset://', ''))
     if (settings.avatar) assetsToKeep.add(settings.avatar.url.replace('asset://', ''))
+    // keep assets referenced by persisted mods manifest
+    const modsState = await readModsState({ db })
+    for (const warning of modsState.warnings) {
+      console.warn(`[clean] ${warning}`)
+    }
+    collectManifestAssetUrls(modsState.manifest, assetsToKeep)
+    // if manifest parsing fails, preserve all namespaced mods assets to avoid accidental data loss
+    const hasInvalidManifest = modsState.warnings.some(
+      warning => typeof warning === 'string' && warning.startsWith('mods_manifest_invalid:')
+    )
+    if (hasInvalidManifest) {
+      for (const asset of allAssets) {
+        if (asset.startsWith('mods/')) {
+          assetsToKeep.add(asset)
+        }
+      }
+    }
     // keep all assets associated with all blueprints (spawned or unspawned)
     for (const blueprint of keptForAssets) {
       // blueprint model
@@ -162,7 +193,7 @@ class Cleaner {
       console.log(`[clean] ${assetsToDelete.size} assets can be deleted`)
       if (!dryrun) {
         console.log(`[clean] ${assetsToDelete.size} assets deleted`)
-        await assets.delete(assetsToDelete)
+        await assetsApi.delete(assetsToDelete)
       }
     }
     console.log('[clean] complete')

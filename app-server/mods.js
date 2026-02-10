@@ -10,6 +10,7 @@ import { normalizeModOrderSpec, resolveModOrder } from '../src/core/mods/order.j
 
 const MOD_FILE_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'])
 const MODS_SCOPE = 'mods'
+const MODS_ASSET_PREFIX = 'mods'
 
 const SCAN_TARGETS = [
   {
@@ -155,6 +156,46 @@ function collectBindingNames(node, names) {
   }
 }
 
+function getNamedExportsFallback(sourceText) {
+  const names = new Set()
+  const addAll = (regex, groupIndex = 1) => {
+    regex.lastIndex = 0
+    let match
+    while ((match = regex.exec(sourceText)) != null) {
+      const name = match[groupIndex]
+      if (!name) continue
+      names.add(name)
+    }
+  }
+
+  addAll(/export\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/g)
+  addAll(/export\s+class\s+([A-Za-z_$][\w$]*)/g)
+  addAll(/export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g)
+
+  const exportListRegex = /export\s*{([^}]+)}/g
+  let listMatch
+  while ((listMatch = exportListRegex.exec(sourceText)) != null) {
+    const list = listMatch[1]
+    const chunks = String(list)
+      .split(',')
+      .map(item => item.trim())
+      .filter(Boolean)
+    for (const chunk of chunks) {
+      const asMatch = chunk.match(/^([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)$/)
+      if (asMatch) {
+        names.add(asMatch[2])
+        continue
+      }
+      const directMatch = chunk.match(/^([A-Za-z_$][\w$]*)$/)
+      if (directMatch) {
+        names.add(directMatch[1])
+      }
+    }
+  }
+
+  return Array.from(names)
+}
+
 function getNamedExports(sourceText) {
   if (typeof sourceText !== 'string' || !sourceText.trim()) return []
   let ast = null
@@ -165,7 +206,7 @@ function getNamedExports(sourceText) {
       allowHashBang: true,
     })
   } catch {
-    return []
+    return getNamedExportsFallback(sourceText)
   }
   const names = new Set()
   for (const node of ast.body) {
@@ -233,6 +274,10 @@ function formatNameList(values) {
   if (!values.length) return ''
   if (values.length <= 5) return values.join(', ')
   return `${values.slice(0, 5).join(', ')}, +${values.length - 5} more`
+}
+
+function toModsAssetFilename(filename) {
+  return `${MODS_ASSET_PREFIX}/${filename}`
 }
 
 async function bundleModule(absPath, { platform }) {
@@ -335,20 +380,23 @@ export class ModsDeployer {
         }
         if (entry.platforms.includes('server')) {
           const bundle = await bundleModule(entry.absPath, { platform: 'server' })
-          bundles.set(bundle.filename, bundle.buffer)
-          row.serverUrl = `asset://${bundle.filename}`
+          const assetFilename = toModsAssetFilename(bundle.filename)
+          bundles.set(assetFilename, bundle.buffer)
+          row.serverUrl = `asset://${assetFilename}`
         }
         if (entry.platforms.includes('client')) {
           const bundle = await bundleModule(entry.absPath, { platform: 'client' })
-          bundles.set(bundle.filename, bundle.buffer)
-          row.clientUrl = `asset://${bundle.filename}`
+          const assetFilename = toModsAssetFilename(bundle.filename)
+          bundles.set(assetFilename, bundle.buffer)
+          row.clientUrl = `asset://${assetFilename}`
         }
         moduleRows.push(row)
         continue
       }
 
       const bundle = await bundleModule(entry.absPath, { platform: 'client' })
-      bundles.set(bundle.filename, bundle.buffer)
+      const assetFilename = toModsAssetFilename(bundle.filename)
+      bundles.set(assetFilename, bundle.buffer)
 
       if (entry.kind === 'component') {
         moduleRows.push({
@@ -356,7 +404,7 @@ export class ModsDeployer {
           kind: 'component',
           sourcePath: entry.sourcePath,
           exportName: 'default',
-          clientUrl: `asset://${bundle.filename}`,
+          clientUrl: `asset://${assetFilename}`,
         })
         continue
       }
@@ -367,7 +415,7 @@ export class ModsDeployer {
         sourcePath: entry.sourcePath,
         buttonExport: entry.buttonExport,
         paneExport: entry.paneExport,
-        clientUrl: `asset://${bundle.filename}`,
+        clientUrl: `asset://${assetFilename}`,
       })
     }
 

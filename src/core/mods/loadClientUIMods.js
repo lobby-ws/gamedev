@@ -1,5 +1,5 @@
-import { getClientUIModEntries, normalizeModManifest } from './manifest'
-import { resolveEffectiveModOrder } from './order'
+import { getClientUIModEntries, normalizeModManifest } from './manifest.js'
+import { resolveEffectiveModOrder } from './order.js'
 
 function joinUrl(base, pathname) {
   const a = (base || '').replace(/\/+$/, '')

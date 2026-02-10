@@ -89,7 +89,18 @@ test('mods workflow: deploy pipeline writes manifest and uploads bundles', async
   assert.equal(adminClient.manifest.modules.length, 4)
   assert.equal(adminClient.manifest.loadOrder.order.length, 2)
   assert.ok(typeof adminClient.manifest.deployedAt === 'string')
+  for (const module of adminClient.manifest.modules) {
+    if (typeof module.serverUrl === 'string') {
+      assert.ok(module.serverUrl.startsWith('asset://mods/'))
+    }
+    if (typeof module.clientUrl === 'string') {
+      assert.ok(module.clientUrl.startsWith('asset://mods/'))
+    }
+  }
   assert.ok(adminClient.uploads.size >= 4)
+  for (const filename of adminClient.uploads.keys()) {
+    assert.ok(filename.startsWith('mods/'))
+  }
   for (const upload of adminClient.uploads.values()) {
     assert.equal(upload.mimeType, 'text/javascript')
   }

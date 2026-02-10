@@ -37,6 +37,45 @@ const contentTypes = {
   zip: 'application/zip',
 }
 
+function normalizeAssetFilename(value) {
+  if (typeof value !== 'string') return null
+  const normalized = value.replace(/\\/g, '/').replace(/^\/+/, '').trim()
+  if (!normalized) return null
+  const parts = normalized.split('/')
+  for (const part of parts) {
+    if (!part || part === '.' || part === '..') {
+      return null
+    }
+  }
+  return parts.join('/')
+}
+
+function isHashedAssetBasename(basename) {
+  if (typeof basename !== 'string' || !basename) return false
+  const prefix = basename.split('.')[0]
+  return /^[a-f0-9]{64}$/i.test(prefix)
+}
+
+function resolveStoredFilename(inputFilename, contentHash) {
+  const normalized = normalizeAssetFilename(inputFilename)
+  const fallbackExt = path.extname(String(inputFilename || '')).toLowerCase()
+  const ext = fallbackExt ? fallbackExt.slice(1) : 'bin'
+  const fallback = `${contentHash}.${ext}`
+  if (!normalized) return fallback
+  const basename = path.posix.basename(normalized)
+  if (!isHashedAssetBasename(basename)) return fallback
+  const expectedPrefix = basename.split('.')[0].toLowerCase()
+  if (expectedPrefix !== contentHash) return fallback
+  return normalized
+}
+
+function isTrackedAssetFilename(filename) {
+  const normalized = normalizeAssetFilename(filename)
+  if (!normalized) return false
+  const basename = path.posix.basename(normalized)
+  return isHashedAssetBasename(basename)
+}
+
 export class AssetsS3 {
   constructor() {
     this.url = process.env.ASSETS_BASE_URL
@@ -181,8 +220,7 @@ export class AssetsS3 {
     const arrayBuffer = await file.arrayBuffer()
     const buffer = Buffer.from(arrayBuffer)
     const hash = await hashFile(buffer)
-    const ext = file.name.split('.').pop().toLowerCase()
-    const filename = `${hash}.${ext}`
+    const filename = resolveStoredFilename(file.name, hash)
 
     // Check if file already exists
     const exists = await this.exists(filename)
@@ -212,7 +250,9 @@ export class AssetsS3 {
   }
 
   async exists(filename) {
-    const key = this.getKey(filename)
+    const normalized = normalizeAssetFilename(filename)
+    if (!normalized) return false
+    const key = this.getKey(normalized)
 
     try {
       await this.client.send(
@@ -250,9 +290,8 @@ export class AssetsS3 {
             const filename = object.Key.replace(this.prefix, '')
 
             // HACK: we only want to include uploaded assets (not core/assets/*) so we do a check
-            // if its filename is a 64 character hash
-            const isAsset = filename.split('.')[0].length === 64
-            if (isAsset) {
+            // if its basename starts with a 64 character hash
+            if (isTrackedAssetFilename(filename)) {
               assets.add(filename)
             }
           }
@@ -268,18 +307,23 @@ export class AssetsS3 {
   }
 
   async delete(assets) {
-    if (assets.length === 0) return
+    const list = Array.from(assets || [])
+    if (list.length === 0) return
 
     // S3 delete can handle up to 1000 objects at once
     const chunks = []
-    for (let i = 0; i < assets.length; i += 1000) {
-      chunks.push(assets.slice(i, i + 1000))
+    for (let i = 0; i < list.length; i += 1000) {
+      chunks.push(list.slice(i, i + 1000))
     }
 
     for (const chunk of chunks) {
-      const objects = chunk.map(asset => ({
-        Key: this.getKey(asset),
-      }))
+      const objects = chunk
+        .map(asset => normalizeAssetFilename(asset))
+        .filter(Boolean)
+        .map(asset => ({
+          Key: this.getKey(asset),
+        }))
+      if (!objects.length) continue
 
       try {
         await this.client.send(

@@ -135,7 +135,7 @@ gamedev mods deploy --target <name> --dry-run
 What deploy does:
 - scans `mods/` (core systems + client UI mods)
 - bundles modules with esbuild
-- uploads JS bundles through `/admin/upload`
+- uploads JS bundles through `/admin/upload` under `assets/mods/<hash>.js`
 - writes persisted mods manifest through `/admin/mods/manifest`
 
 Order controls:
@@ -146,6 +146,8 @@ Order controls:
 Important:
 - server/shared mods load only at world-server startup
 - after deploying server/shared mods, restart the world server to apply them
+- cleaner keeps only mod bundles referenced by persisted `mods_manifest` and prunes stale `assets/mods/*` bundles
+- `SAVE_INTERVAL` only controls world state saves (blueprints/entities/settings); it does not republish or prune mods
 
 ---
 

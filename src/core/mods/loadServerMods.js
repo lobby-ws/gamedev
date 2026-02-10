@@ -2,8 +2,8 @@ import fs from 'fs'
 import path from 'path'
 import { pathToFileURL } from 'url'
 
-import { getSystemModEntries, normalizeModManifest } from './manifest'
-import { resolveEffectiveModOrder } from './order'
+import { getSystemModEntries, normalizeModManifest } from './manifest.js'
+import { resolveEffectiveModOrder } from './order.js'
 
 function joinUrl(base, pathname) {
   const a = (base || '').replace(/\/+$/, '')

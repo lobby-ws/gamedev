@@ -53,3 +53,4 @@ Options:
 - `invalid_mod_load_order`: fix `mods/load-order.json`, or clear DB override with `gamedev mods order clear`.
 - `mods_load_order_override_ignored:*`: DB override exists but is invalid for the deployed module ids.
 - Browser import failures from S3: ensure uploaded `.js/.mjs/.cjs` assets are served as `text/javascript` with correct CORS.
+- If `CLEAN=true`, stale `assets/mods/*` bundles are removed from persisted `mods_manifest`; `SAVE_INTERVAL` does not manage mods.

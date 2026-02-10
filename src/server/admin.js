@@ -3,13 +3,13 @@ import fs from 'fs'
 
 import { readPacket, writePacket } from '../core/packets.js'
 import { cleaner } from './cleaner'
-import { resolveModOrder } from '../core/mods/order'
+import { resolveModOrder } from '../core/mods/order.js'
 import {
   readModsState,
   writeModsManifest,
   writeModsLoadOrderOverride,
   clearModsLoadOrderOverride,
-} from './mods-state'
+} from './mods-state.js'
 
 const SCRIPT_BLUEPRINT_FIELDS = new Set([
   'script',
@@ -22,6 +22,17 @@ const SCRIPT_BLUEPRINT_FIELDS = new Set([
 function normalizeHeader(value) {
   if (Array.isArray(value)) return value[0]
   return value
+}
+
+function normalizeAssetFilename(value) {
+  if (typeof value !== 'string') return null
+  const normalized = value.replace(/\\/g, '/').replace(/^\/+/, '').trim()
+  if (!normalized) return null
+  const parts = normalized.split('/')
+  for (const part of parts) {
+    if (!part || part === '.' || part === '..') return null
+  }
+  return parts.join('/')
 }
 
 function isCodeValid(expected, code) {
@@ -957,6 +968,12 @@ function hasScriptFields(data) {
   fastify.post('/admin/upload', async (req, reply) => {
     if (!requireAdmin(req, reply)) return
     const mp = await req.file()
+    const requestedFilenameRaw = req.query?.filename
+    const requestedFilename = normalizeAssetFilename(requestedFilenameRaw)
+    if (requestedFilenameRaw != null && !requestedFilename) {
+      return reply.code(400).send({ error: 'invalid_filename' })
+    }
+    const uploadFilename = requestedFilename || mp.filename
     // collect into buffer
     const chunks = []
     for await (const chunk of mp.file) {
@@ -964,11 +981,11 @@ function hasScriptFields(data) {
     }
     const buffer = Buffer.concat(chunks)
     // convert to file
-    const file = new File([buffer], mp.filename, {
+    const file = new File([buffer], uploadFilename, {
       type: mp.mimetype || 'application/octet-stream',
     })
     await assets.upload(file)
-    return { ok: true, filename: mp.filename }
+    return { ok: true, filename: uploadFilename }
   })
 
   fastify.post('/admin/clean', async (req, reply) => {
