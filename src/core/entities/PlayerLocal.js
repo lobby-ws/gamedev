@@ -94,6 +94,8 @@ export class PlayerLocal extends Entity {
     this.moving = false
 
     this.firstPerson = false
+    this.firstPersonForced = false
+    this.firstPersonRestoreZoom = null
 
     this.lastJumpAt = 0
     this.flying = false
@@ -319,6 +321,33 @@ export class PlayerLocal extends Entity {
     this.control.camera.zoom = this.cam.zoom
     // this.control.setActions([{ type: 'space', label: 'Jump / Double-Jump' }])
     // this.control.setActions([{ type: 'escape', label: 'Menu' }])
+  }
+
+  firstPerson(value = true) {
+    value = isBoolean(value) ? value : true
+    if (this.isXR) return
+    if (value) {
+      if (!this.firstPersonForced) {
+        this.firstPersonForced = true
+        this.firstPersonRestoreZoom = this.cam.zoom
+      }
+      this.cam.zoom = 0
+    } else {
+      if (!this.firstPersonForced) return
+      this.firstPersonForced = false
+      if (this.firstPersonRestoreZoom !== null) {
+        const restoreZoom = clamp(this.firstPersonRestoreZoom, MIN_ZOOM, MAX_ZOOM)
+        this.cam.zoom = restoreZoom
+        if (restoreZoom < 1) {
+          this.firstPerson = true
+          this.avatar.visible = false
+        } else {
+          this.firstPerson = false
+          this.avatar.visible = true
+        }
+      }
+      this.firstPersonRestoreZoom = null
+    }
   }
 
   onXRSession = session => {
@@ -848,6 +877,10 @@ export class PlayerLocal extends Entity {
     if (!xr) {
       this.cam.zoom += -this.control.scrollDelta.value * ZOOM_SPEED * delta
       this.cam.zoom = clamp(this.cam.zoom, MIN_ZOOM, MAX_ZOOM)
+    }
+
+    if (this.firstPersonForced) {
+      this.cam.zoom = 0
     }
 
     // transition in and out of first person

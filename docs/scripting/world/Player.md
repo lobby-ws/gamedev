@@ -63,6 +63,19 @@ const dir = FORWARD.clone().applyQuaternion(quat).normalize()
 world.getPlayer().push(dir.multiplyScalar(30)) // short forward burst
 ```
 
+### `.firstPerson(value = true)`
+
+Forces the local player into first-person view while `value` is `true`. When set back to `false`, the camera returns to the previous third-person zoom distance that was active when the force began.
+
+Only works on the local player and must be called on the client.
+
+Example:
+```js
+const player = world.getPlayer()
+player.firstPerson(true)
+setTimeout(() => player.firstPerson(false), 1500)
+```
+
 ### `.getBoneTransform(boneName)`: Matrix4
 
 Returns a matrix of the bone transform in world space.

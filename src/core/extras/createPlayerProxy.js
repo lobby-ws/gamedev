@@ -158,6 +158,15 @@ export function createPlayerProxy(entity, player) {
         world.network.sendTo(player.data.owner, 'playerPush', { force })
       }
     },
+    firstPerson(value = true) {
+      if (!world.network.isClient) {
+        return console.error('firstPerson can only be called on the client')
+      }
+      if (player.data.owner !== world.network.id) {
+        return console.error('firstPerson can only be called on local player')
+      }
+      player.firstPerson(value)
+    },
     screenshare(targetId) {
       if (!targetId) {
         return console.error(`screenshare has invalid targetId: ${targetId}`)
