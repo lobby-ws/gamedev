@@ -254,6 +254,7 @@ test('phase 5 writes conflict artifacts and sync resolve can finalize them', asy
         adminCode: world.adminCode,
         rootDir,
       })
+      appServer._canPromptSyncConflictResolution = () => false
       try {
         await assert.rejects(
           () => appServer.start(),
@@ -296,6 +297,76 @@ test('phase 5 writes conflict artifacts and sync resolve can finalize them', asy
   })
 })
 
+test('phase 5 startup prompt can resolve all conflicts from world', async t => {
+  if (!(await canListenOnLoopback())) {
+    t.skip('loopback sockets are unavailable in this environment')
+    return
+  }
+
+  await withWorldServer(async world => {
+    await setupWorldFixture(world)
+    const rootDir = await createTempDir('hyperfy-sync-phase5-prompt-')
+    await seedLocalProjectFromWorld(world, rootDir)
+
+    const blueprintPath = path.join(rootDir, 'apps', 'phase5app', 'main.json')
+    const localBlueprint = readJsonFile(blueprintPath)
+    localBlueprint.desc = 'local-prompt-conflict'
+    fs.writeFileSync(blueprintPath, JSON.stringify(localBlueprint, null, 2) + '\n', 'utf8')
+
+    const admin = new AdminWsClient({
+      worldUrl: world.worldUrl,
+      adminCode: world.adminCode,
+    })
+    await admin.connect()
+    try {
+      const { data: current } = await fetchJson(
+        `${world.worldUrl}/admin/blueprints/${encodeURIComponent(BLUEPRINT_ID)}`,
+        { adminCode: world.adminCode }
+      )
+      const nextVersion = (current?.blueprint?.version || 0) + 1
+      await admin.request('blueprint_modify', {
+        change: {
+          id: BLUEPRINT_ID,
+          version: nextVersion,
+          desc: 'remote-prompt-conflict',
+        },
+      })
+    } finally {
+      admin.close()
+    }
+
+    await withWorldEnv(world, async () => {
+      const appServer = new DirectAppServer({
+        worldUrl: world.worldUrl,
+        adminCode: world.adminCode,
+        rootDir,
+      })
+      const answers = ['1']
+      appServer._canPromptSyncConflictResolution = () => true
+      appServer._promptSyncConflictResolutionLine = async () => answers.shift() || 'q'
+      try {
+        await appServer.start()
+      } finally {
+        await stopAppServer(appServer)
+      }
+    })
+
+    const artifacts = listConflictArtifacts(path.join(rootDir, '.lobby', 'conflicts')).filter(
+      item => item.data.status === 'open'
+    )
+    assert.equal(artifacts.length, 0)
+
+    const resolvedBlueprint = readJsonFile(blueprintPath)
+    assert.equal(resolvedBlueprint.desc, 'remote-prompt-conflict')
+
+    const { data: snapshot } = await fetchJson(`${world.worldUrl}/admin/snapshot`, {
+      adminCode: world.adminCode,
+    })
+    const blueprint = snapshot.blueprints?.find(item => item.id === BLUEPRINT_ID)
+    assert.equal(blueprint?.desc, 'remote-prompt-conflict')
+  })
+})
+
 for (const mode of ['remote', 'local']) {
   test(`phase 5 spawn conflict resolve (${mode}) persists across app-server restart`, async t => {
     if (!(await canListenOnLoopback())) {
@@ -333,6 +404,7 @@ for (const mode of ['remote', 'local']) {
           adminCode: world.adminCode,
           rootDir,
         })
+        appServer._canPromptSyncConflictResolution = () => false
         try {
           await assert.rejects(
             () => appServer.start(),

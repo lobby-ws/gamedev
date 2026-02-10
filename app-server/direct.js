@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
+import readline from 'readline'
 import { EventEmitter } from 'events'
 import { isEqual } from 'lodash-es'
 import { parse as acornParse } from 'acorn'
@@ -2848,7 +2849,7 @@ export class DirectAppServer {
   }
 
   _recordSyncConflicts(conflicts, { cursor, reason = 'startup' } = {}) {
-    if (!Array.isArray(conflicts) || !conflicts.length) return
+    if (!Array.isArray(conflicts) || !conflicts.length) return []
     const previous = this.syncState && typeof this.syncState === 'object' ? this.syncState : {}
     const nowIso = new Date().toISOString()
     const summaries = this._writeSyncConflictArtifacts(conflicts, { cursor, reason, at: nowIso })
@@ -2873,6 +2874,7 @@ export class DirectAppServer {
     }
     this.syncState = next
     this._writeFileAtomic(this.syncStateFile, JSON.stringify(next, null, 2) + '\n')
+    return summaries
   }
 
   _markSyncConflictResolvedInState(conflictId, { use, at }) {
@@ -2930,6 +2932,267 @@ export class DirectAppServer {
     this._writeFileAtomic(artifactPath, JSON.stringify(next, null, 2) + '\n')
     this._markSyncConflictResolvedInState(id, { use, at: resolvedAt })
     return next
+  }
+
+  _canPromptSyncConflictResolution() {
+    return !!process.stdin?.isTTY && !!process.stdout?.isTTY
+  }
+
+  async _promptSyncConflictResolutionLine(message) {
+    if (!this._canPromptSyncConflictResolution()) return null
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    })
+    const answer = await new Promise(resolve => {
+      rl.question(message, resolve)
+    })
+    rl.close()
+    if (typeof answer !== 'string') return ''
+    return answer.trim()
+  }
+
+  _collectOpenSyncConflictArtifacts(conflictIds = null) {
+    if (!Array.isArray(conflictIds) || conflictIds.length === 0) {
+      return this.listSyncConflictArtifacts({ includeResolved: false })
+    }
+    const artifacts = []
+    const seen = new Set()
+    for (const value of conflictIds) {
+      const id = normalizeSyncString(value)
+      if (!id || seen.has(id)) continue
+      seen.add(id)
+      const artifact = this.getSyncConflictArtifact(id)
+      if (!artifact || typeof artifact !== 'object') continue
+      if (normalizeSyncString(artifact.status) === 'resolved') continue
+      artifacts.push(artifact)
+    }
+    return artifacts
+  }
+
+  _countOpenSyncConflictArtifacts(conflictIds = null) {
+    return this._collectOpenSyncConflictArtifacts(conflictIds).length
+  }
+
+  _getSyncConflictFieldSummary(artifact, limit = 5) {
+    const fields = []
+    for (const item of Array.isArray(artifact?.unresolvedFields) ? artifact.unresolvedFields : []) {
+      const normalized = normalizeSyncString(item?.path)
+      if (!normalized) continue
+      fields.push(normalized)
+    }
+    return formatNameList(fields, limit)
+  }
+
+  async _resolveSyncConflictsInBulk(artifacts, { use }) {
+    let resolved = 0
+    let failed = 0
+    const normalizedUse = normalizeSyncString(use)
+    for (const item of artifacts) {
+      const id = normalizeSyncString(item?.id)
+      if (!id) continue
+      try {
+        const result = await this.resolveSyncConflict(id, { use: normalizedUse })
+        if (!result?.alreadyResolved) {
+          resolved += 1
+        }
+      } catch (err) {
+        failed += 1
+        console.error(`❌ Failed to resolve conflict ${id}:`, err?.message || err)
+      }
+    }
+    return {
+      resolved,
+      failed,
+      skipped: 0,
+      cancelled: false,
+    }
+  }
+
+  async _resolveSyncConflictsOneByOne(artifacts) {
+    let resolved = 0
+    let failed = 0
+    let skipped = 0
+    let cancelled = false
+    const total = artifacts.length
+
+    outer: for (let index = 0; index < artifacts.length; index += 1) {
+      const source = artifacts[index]
+      const id = normalizeSyncString(source?.id)
+      if (!id) continue
+      const artifact = this.getSyncConflictArtifact(id)
+      if (!artifact || normalizeSyncString(artifact.status) === 'resolved') continue
+
+      const objectId = normalizeSyncString(artifact.objectId) || 'unknown'
+      const unresolvedCount = Array.isArray(artifact.unresolvedFields) ? artifact.unresolvedFields.length : 0
+      const fieldSummary = this._getSyncConflictFieldSummary(artifact)
+      const hasMergedValue = artifact.merged !== null && artifact.merged !== undefined
+
+      console.log('')
+      console.log(`Conflict ${index + 1}/${total}: ${id}`)
+      console.log(`  Kind: ${artifact.kind || 'unknown'} (${objectId})`)
+      if (unresolvedCount > 0) {
+        console.log(
+          `  Fields: ${fieldSummary || `${unresolvedCount} field conflict${unresolvedCount === 1 ? '' : 's'}`}`
+        )
+      }
+
+      while (true) {
+        const prompt = hasMergedValue
+          ? 'Choose [1=world, 2=project, 3=merged, s=skip, q=cancel]: '
+          : 'Choose [1=world, 2=project, s=skip, q=cancel]: '
+        const answer = ((await this._promptSyncConflictResolutionLine(prompt)) || '').toLowerCase()
+        let use = null
+
+        if (
+          answer === '1' ||
+          answer === 'w' ||
+          answer === 'world' ||
+          answer === 'remote' ||
+          answer === 'accept-world'
+        ) {
+          use = 'remote'
+        } else if (
+          answer === '2' ||
+          answer === 'p' ||
+          answer === 'project' ||
+          answer === 'local' ||
+          answer === 'push-project'
+        ) {
+          use = 'local'
+        } else if (hasMergedValue && (answer === '3' || answer === 'm' || answer === 'merged')) {
+          use = 'merged'
+        } else if (answer === 's' || answer === 'skip') {
+          skipped += 1
+          continue outer
+        } else if (answer === 'q' || answer === 'quit' || answer === 'cancel' || answer === 'n' || answer === 'no') {
+          cancelled = true
+          break outer
+        } else {
+          console.log('Invalid choice. Enter 1, 2, 3, s, or q.')
+          continue
+        }
+
+        try {
+          const result = await this.resolveSyncConflict(id, { use })
+          if (!result?.alreadyResolved) {
+            resolved += 1
+          }
+        } catch (err) {
+          failed += 1
+          console.error(`❌ Failed to resolve conflict ${id}:`, err?.message || err)
+        }
+        continue outer
+      }
+    }
+
+    return { resolved, failed, skipped, cancelled }
+  }
+
+  async promptAndResolveSyncConflicts({ conflictIds = null } = {}) {
+    const artifacts = this._collectOpenSyncConflictArtifacts(conflictIds)
+    if (artifacts.length === 0) {
+      return {
+        prompted: false,
+        changed: false,
+        cancelled: false,
+        resolved: 0,
+        failed: 0,
+        skipped: 0,
+        remaining: 0,
+      }
+    }
+    if (!this._canPromptSyncConflictResolution()) {
+      return {
+        prompted: false,
+        changed: false,
+        cancelled: false,
+        resolved: 0,
+        failed: 0,
+        skipped: 0,
+        remaining: artifacts.length,
+      }
+    }
+
+    console.log('')
+    console.log(`⚠️  Sync conflicts detected (${artifacts.length}).`)
+    console.log('Choose how to resolve:')
+    console.log('  1) Accept all from world (runtime wins)')
+    console.log('  2) Push all from project folder (project wins)')
+    console.log('  3) Choose for each conflict one by one')
+    console.log('  q) Cancel (resolve later with gamedev sync commands)')
+
+    let strategy = null
+    while (!strategy) {
+      const answer = ((await this._promptSyncConflictResolutionLine('Selection [1/2/3/q]: ')) || '').toLowerCase()
+      if (
+        answer === '1' ||
+        answer === 'w' ||
+        answer === 'world' ||
+        answer === 'remote' ||
+        answer === 'accept-world'
+      ) {
+        strategy = 'remote'
+        break
+      }
+      if (
+        answer === '2' ||
+        answer === 'p' ||
+        answer === 'project' ||
+        answer === 'local' ||
+        answer === 'push-project'
+      ) {
+        strategy = 'local'
+        break
+      }
+      if (answer === '3' || answer === 'e' || answer === 'each' || answer === 'interactive') {
+        strategy = 'interactive'
+        break
+      }
+      if (answer === 'q' || answer === 'quit' || answer === 'cancel' || answer === 'n' || answer === 'no') {
+        strategy = 'cancel'
+        break
+      }
+      console.log('Invalid choice. Enter 1, 2, 3, or q.')
+    }
+
+    if (strategy === 'cancel') {
+      return {
+        prompted: true,
+        changed: false,
+        cancelled: true,
+        resolved: 0,
+        failed: 0,
+        skipped: 0,
+        remaining: artifacts.length,
+      }
+    }
+
+    const summary =
+      strategy === 'interactive'
+        ? await this._resolveSyncConflictsOneByOne(artifacts)
+        : await this._resolveSyncConflictsInBulk(artifacts, { use: strategy })
+    const resolved = typeof summary?.resolved === 'number' ? summary.resolved : 0
+    const failed = typeof summary?.failed === 'number' ? summary.failed : 0
+    const skipped = typeof summary?.skipped === 'number' ? summary.skipped : 0
+    const cancelled = summary?.cancelled === true
+    const remaining = this._countOpenSyncConflictArtifacts(artifacts.map(item => item.id))
+
+    if (remaining > 0) {
+      console.warn(`⚠️  ${remaining} sync conflict(s) still unresolved.`)
+    } else {
+      console.log('✅ Sync conflicts resolved.')
+    }
+
+    return {
+      prompted: true,
+      changed: resolved > 0,
+      cancelled,
+      resolved,
+      failed,
+      skipped,
+      remaining,
+    }
   }
 
   _readManifestForSyncResolve() {
@@ -3188,22 +3451,35 @@ export class DirectAppServer {
 
   async _runStartupHandshake(manifest, { reason = 'startup' } = {}) {
     const initialCursor = await this._getRuntimeHeadCursor({ fallback: this.syncState?.cursor })
-    const localIndex = this._indexLocalBlueprints()
-    const localBlueprints = await this._buildLocalBlueprintPayloadIndex(localIndex)
-    const plan = this._computeStartupHandshakePlan({ manifest, localBlueprints })
+    let localIndex = this._indexLocalBlueprints()
+    let localBlueprints = await this._buildLocalBlueprintPayloadIndex(localIndex)
+    let plan = this._computeStartupHandshakePlan({ manifest, localBlueprints })
 
     if (plan.conflicts.length > 0) {
-      this._recordSyncConflicts(plan.conflicts, { cursor: initialCursor, reason })
+      const conflictSummaries = this._recordSyncConflicts(plan.conflicts, { cursor: initialCursor, reason })
       if (this._isStrictSyncConflictsEnabled()) {
+        const promptResult = await this.promptAndResolveSyncConflicts({
+          conflictIds: conflictSummaries.map(item => item.artifactId),
+        })
+        if (promptResult.changed || (promptResult.prompted && !promptResult.cancelled)) {
+          const refreshedManifest = this.manifest.read() || manifest
+          localIndex = this._indexLocalBlueprints()
+          localBlueprints = await this._buildLocalBlueprintPayloadIndex(localIndex)
+          plan = this._computeStartupHandshakePlan({ manifest: refreshedManifest, localBlueprints })
+        }
         const conflictKinds = Array.from(new Set(plan.conflicts.map(conflict => conflict.kind))).join(', ')
-        throw new Error(
-          `Sync conflict detected (${plan.conflicts.length} object${plan.conflicts.length === 1 ? '' : 's'}: ${conflictKinds}). ` +
-            'Inspect with "gamedev sync conflicts" and resolve via "gamedev sync resolve <id> --use ...".'
+        if (plan.conflicts.length > 0) {
+          throw new Error(
+            `Sync conflict detected (${plan.conflicts.length} object${plan.conflicts.length === 1 ? '' : 's'}: ${conflictKinds}). ` +
+              'Inspect with "gamedev sync conflicts" and resolve via "gamedev sync resolve <id> --use ...".'
+          )
+        }
+      }
+      if (plan.conflicts.length > 0) {
+        console.warn(
+          `⚠️  Sync conflicts detected (${plan.conflicts.length}); unresolved objects were skipped and written to .lobby/conflicts/.`
         )
       }
-      console.warn(
-        `⚠️  Sync conflicts detected (${plan.conflicts.length}); unresolved objects were skipped and written to .lobby/conflicts/.`
-      )
     }
 
     await this._withDeferredSyncStateWrites(async () => {

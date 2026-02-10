@@ -184,6 +184,7 @@ function parseSyncConflictsArgs(args = []) {
 
 function parseSyncResolveArgs(args = []) {
   let use = null
+  let useProvided = false
   const rest = []
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i]
@@ -193,11 +194,13 @@ function parseSyncResolveArgs(args = []) {
         throw new Error('Missing value for --use')
       }
       use = next
+      useProvided = true
       i += 1
       continue
     }
     if (arg.startsWith('--use=')) {
       use = arg.slice('--use='.length)
+      useProvided = true
       continue
     }
     if (arg.startsWith('-')) {
@@ -208,6 +211,7 @@ function parseSyncResolveArgs(args = []) {
   return {
     conflictId: rest[0] || null,
     use: use || 'local',
+    useProvided,
   }
 }
 
@@ -606,6 +610,36 @@ export class HyperfyCLI {
     }
   }
 
+  async syncResolveInteractive() {
+    const server = await this._connectAdminClient()
+    try {
+      const summary = await server.promptAndResolveSyncConflicts()
+      if (!summary?.prompted && summary?.remaining > 0) {
+        console.error(
+          '❌ Interactive conflict resolution requires a TTY. ' +
+            'Use "gamedev sync conflicts" then "gamedev sync resolve <id> --use ...".'
+        )
+        return false
+      }
+      if (!summary?.prompted && summary?.remaining === 0) {
+        console.log('✅ No sync conflicts recorded.')
+        return true
+      }
+      if (summary?.cancelled) {
+        console.log('❌ Conflict resolution cancelled.')
+      }
+      if (summary?.failed > 0) {
+        console.error(`❌ Failed to resolve ${summary.failed} conflict(s).`)
+      }
+      return summary?.remaining === 0 && summary?.failed === 0 && !summary?.cancelled
+    } catch (error) {
+      console.error(`❌ Failed to resolve sync conflicts:`, error?.message || error)
+      return false
+    } finally {
+      this._closeAdminClient(server)
+    }
+  }
+
   async reset(options = {}) {
     const force = options.force || false
 
@@ -943,13 +977,14 @@ Usage:
 Commands:
   status                    Show cursor/baseline/conflict summary from .lobby/sync-state.json
   conflicts [--all]         List unresolved conflict artifacts in .lobby/conflicts/
-  resolve <id> --use <mode> Resolve one conflict artifact using local|remote|merged
+  resolve [id] [--use <mode>] Resolve interactively (no id) or one conflict artifact (id)
   help                      Show this help
 
 Options (resolve):
   --use <mode>              local | remote | merged
 
 Examples:
+  ${commandPrefix} resolve
   ${commandPrefix} status
   ${commandPrefix} conflicts
   ${commandPrefix} resolve 4a9f... --use remote
@@ -1000,9 +1035,14 @@ export async function runSyncCommand({ command, args = [], rootDir = process.cwd
       try {
         const parsed = parseSyncResolveArgs(args)
         if (!parsed.conflictId) {
-          console.error('❌ Conflict id is required')
-          console.log(`Usage: ${commandPrefix} resolve <id> --use local|remote|merged`)
-          return 1
+          if (parsed.useProvided) {
+            console.error('❌ --use requires a conflict id')
+            console.log(`Usage: ${commandPrefix} resolve <id> --use local|remote|merged`)
+            return 1
+          }
+          const ok = await cli.syncResolveInteractive()
+          if (!ok) exitCode = 1
+          break
         }
         const ok = await cli.syncResolve(parsed.conflictId, { use: parsed.use })
         if (!ok) exitCode = 1
