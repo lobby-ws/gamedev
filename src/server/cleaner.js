@@ -27,22 +27,21 @@ class Cleaner {
     // ...
   }
 
-  async run({ db, deploymentId = process.env.DEPLOYMENT_ID, dryrun = false, world = null, broadcast = null } = {}) {
+  async run({ db, dryrun = false, world = null, broadcast = null } = {}) {
     if (!db) throw new Error('db_required')
-    if (!deploymentId) throw new Error('deployment_id_required')
     console.log(dryrun ? '[clean] dry run' : '[clean] running')
     // get all assets
     const allAssets = await assets.list() // hash-only assets
     // get all blueprints
     const blueprints = []
-    const blueprintRows = await db('blueprints').where('deployment_id', deploymentId)
+    const blueprintRows = await db('blueprints')
     for (const row of blueprintRows) {
       const blueprint = JSON.parse(row.data)
       blueprints.push(blueprint)
     }
     // get all entities
     const entities = []
-    const entityRows = await db('entities').where('deployment_id', deploymentId)
+    const entityRows = await db('entities')
     for (const row of entityRows) {
       const entity = JSON.parse(row.data)
       entities.push(entity)
@@ -81,7 +80,7 @@ class Cleaner {
                 removedIds.push(id)
                 broadcast?.('blueprintRemoved', { id })
               } else if (result?.error === 'not_found') {
-                await db('blueprints').where({ deployment_id: deploymentId, id }).delete()
+                await db('blueprints').where({ id }).delete()
                 removedIds.push(id)
               } else {
                 failedIds.push({ id, error: result?.error || 'remove_failed' })
@@ -91,7 +90,7 @@ class Cleaner {
             }
           }
         } else {
-          await db('blueprints').where('deployment_id', deploymentId).whereIn('id', orphanIds).delete()
+          await db('blueprints').whereIn('id', orphanIds).delete()
           removedIds.push(...orphanIds)
         }
         console.log(`[clean] ${removedIds.length} orphan blueprints deleted`)
@@ -114,7 +113,7 @@ class Cleaner {
       if (user.avatar) assetsToKeep.add(user.avatar.replace('asset://', ''))
     }
     // keep world image & world avatar assets
-    const settingsRow = await db('config').where({ deployment_id: deploymentId, key: 'settings' }).first()
+    const settingsRow = await db('config').where({ key: 'settings' }).first()
     const settings = JSON.parse(settingsRow.value)
     if (settings.image) assetsToKeep.add(settings.image.url.replace('asset://', ''))
     if (settings.avatar) assetsToKeep.add(settings.avatar.url.replace('asset://', ''))
@@ -180,11 +179,11 @@ class Cleaner {
     }
   }
 
-  async init({ db, deploymentId = process.env.DEPLOYMENT_ID }) {
+  async init({ db }) {
     const clean = process.env.CLEAN === 'true' || process.env.CLEAN === 'dryrun'
     if (!clean) return console.log('[clean] skipped')
     const dryrun = process.env.CLEAN === 'dryrun'
-    await this.run({ db, deploymentId, dryrun })
+    await this.run({ db, dryrun })
   }
 }
 

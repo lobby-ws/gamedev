@@ -171,8 +171,11 @@ function isUniqueConstraintError(err) {
   return /unique|constraint/i.test(message)
 }
 
+const AUTH_MODE = (process.env.AUTH_MODE || 'standalone').trim().toLowerCase()
+const REQUIRE_ADMIN_CODE = AUTH_MODE === 'platform'
+
 function isCodeValid(expected, code) {
-  if (!expected) return true
+  if (!expected) return !REQUIRE_ADMIN_CODE
   if (typeof code !== 'string') return false
   const expectedBuf = Buffer.from(expected)
   const codeBuf = Buffer.from(code)
@@ -545,7 +548,6 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
       worldId: world?.network?.worldId || null,
     }
     await db('deploy_snapshots').insert({
-      deployment_id: world?.network?.deploymentId,
       id: snapshotId,
       data: JSON.stringify(blueprints),
       meta: JSON.stringify(meta),
@@ -558,19 +560,14 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
     if (!db) {
       throw new Error('db_unavailable')
     }
-    return db('deploy_snapshots')
-      .where({ deployment_id: world?.network?.deploymentId, id })
-      .first()
+    return db('deploy_snapshots').where({ id }).first()
   }
 
   async function getLatestDeploySnapshot() {
     if (!db) {
       throw new Error('db_unavailable')
     }
-    return db('deploy_snapshots')
-      .where('deployment_id', world?.network?.deploymentId)
-      .orderBy('createdAt', 'desc')
-      .first()
+    return db('deploy_snapshots').orderBy('createdAt', 'desc').first()
   }
 
   function sendSnapshot(ws, { includePlayers } = {}) {
@@ -1344,7 +1341,6 @@ export async function admin(fastify, { world, assets, adminHtmlPath } = {}) {
       const dryrun = req.body?.dryrun === true || req.body?.dryRun === true
       const result = await cleaner.run({
         db,
-        deploymentId: world?.network?.deploymentId || process.env.DEPLOYMENT_ID,
         dryrun,
         world,
         broadcast,

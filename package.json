@@ -65,7 +65,8 @@
     "format": "prettier --write .",
     "check": "npm run lint && npm run format",
     "test": "node --test --loader ./scripts/node-esm-loader.mjs \"test/integration/**/*.test.js\"",
-    "test:integration": "node --test --loader ./scripts/node-esm-loader.mjs \"test/integration/**/*.test.js\""
+    "test:integration": "node --test --loader ./scripts/node-esm-loader.mjs \"test/integration/**/*.test.js\"",
+    "smoke:matrix": "node scripts/smoke-mode-matrix.mjs"
   },
   "bin": {
     "gamedev": "bin/gamedev.mjs"

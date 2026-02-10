@@ -18,11 +18,15 @@ import { assets } from './assets'
 import { cleaner } from './cleaner'
 import { admin } from './admin'
 import { createRegistryState, getRegistryPublicStatus, registerWithRegistry } from './registry'
+import { resolveAuthRuntimeConfig } from './authModes'
+import { createWorldServiceInternalClient } from './worldServiceClient'
+import { createJWT, verifyIdentityExchangeTokenWithLobby } from '../core/utils-server'
 
 const rootDir = path.join(__dirname, '../')
 // Resolve world directory relative to the consumer project (cwd), not the package root
 const worldDir = path.resolve(process.cwd(), process.env.WORLD)
 const port = process.env.PORT
+const authConfig = resolveAuthRuntimeConfig(process.env)
 
 function formatUserName(name) {
   if (!name || name.startsWith('anon_')) return 'Anonymous'
@@ -78,9 +82,21 @@ function getDocsIndex() {
   return files
 }
 
+function derivePublicWsUrlFromApiUrl(apiUrl) {
+  const value = typeof apiUrl === 'string' ? apiUrl.trim() : ''
+  if (!value) return null
+  return value
+    .replace(/\/api\/?$/, '/ws')
+    .replace(/^http:/, 'ws:')
+    .replace(/^https:/, 'wss:')
+}
+
 // check envs
 if (!process.env.WORLD) {
   throw new Error('[envs] WORLD not set')
+}
+if (!process.env.WORLD_ID) {
+  throw new Error('[envs] WORLD_ID not set')
 }
 if (!process.env.PORT) {
   throw new Error('[envs] PORT not set')
@@ -88,7 +104,10 @@ if (!process.env.PORT) {
 if (!process.env.JWT_SECRET) {
   throw new Error('[envs] JWT_SECRET not set')
 }
-if (!process.env.ADMIN_CODE) {
+if (authConfig.isPlatformMode && !process.env.WORLD_SERVICE_API_KEY) {
+  throw new Error('[envs] WORLD_SERVICE_API_KEY must be set when AUTH_MODE=platform')
+}
+if (!process.env.ADMIN_CODE && !authConfig.isPlatformMode) {
   console.warn('[envs] ADMIN_CODE not set - all users will have admin permissions!')
 }
 if (!process.env.SAVE_INTERVAL) {
@@ -97,14 +116,27 @@ if (!process.env.SAVE_INTERVAL) {
 if (!process.env.PUBLIC_MAX_UPLOAD_SIZE) {
   throw new Error('[envs] PUBLIC_MAX_UPLOAD_SIZE not set')
 }
-if (!process.env.PUBLIC_WS_URL) {
-  throw new Error('[envs] PUBLIC_WS_URL not set')
-}
-if (!process.env.PUBLIC_WS_URL.startsWith('ws')) {
-  throw new Error('[envs] PUBLIC_WS_URL must start with ws:// or wss://')
-}
 if (!process.env.PUBLIC_API_URL) {
   throw new Error('[envs] PUBLIC_API_URL must be set')
+}
+const resolvedPublicWsUrl = process.env.PUBLIC_WS_URL || derivePublicWsUrlFromApiUrl(process.env.PUBLIC_API_URL)
+if (!resolvedPublicWsUrl) {
+  throw new Error('[envs] PUBLIC_WS_URL could not be derived from PUBLIC_API_URL')
+}
+if (!resolvedPublicWsUrl.startsWith('ws')) {
+  throw new Error('[envs] PUBLIC_WS_URL must start with ws:// or wss://')
+}
+if (!process.env.PUBLIC_WS_URL) {
+  process.env.PUBLIC_WS_URL = resolvedPublicWsUrl
+}
+const worldServiceInternalUrl =
+  (typeof process.env.WORLD_SERVICE_INTERNAL_URL === 'string' && process.env.WORLD_SERVICE_INTERNAL_URL.trim()) ||
+  process.env.PUBLIC_API_URL
+if (authConfig.isPlatformMode && !worldServiceInternalUrl) {
+  throw new Error('[envs] WORLD_SERVICE_INTERNAL_URL could not be resolved')
+}
+if (!process.env.WORLD_SERVICE_INTERNAL_URL && worldServiceInternalUrl) {
+  process.env.WORLD_SERVICE_INTERNAL_URL = worldServiceInternalUrl
 }
 if (!process.env.ASSETS) {
   throw new Error(`[envs] ASSETS must be set to 'local' or 's3'`)
@@ -115,9 +147,13 @@ if (!process.env.ASSETS_BASE_URL) {
 if (process.env.ASSETS === 's3' && !process.env.ASSETS_S3_URI) {
   throw new Error(`[envs] ASSETS_S3_URI must be set when using ASSETS=s3`)
 }
-if (!process.env.DEPLOYMENT_ID) {
-  throw new Error('[envs] DEPLOYMENT_ID not set')
-}
+
+const worldServiceClient = authConfig.isPlatformMode
+  ? createWorldServiceInternalClient({
+      baseUrl: worldServiceInternalUrl,
+      apiKey: process.env.WORLD_SERVICE_API_KEY,
+    })
+  : null
 
 const tlsConfig =
   process.env.TLS_CERT_PATH && process.env.TLS_KEY_PATH
@@ -142,11 +178,10 @@ await fs.ensureDir(worldDir)
 await assets.init({ rootDir, worldDir })
 
 // init db
-const deploymentId = process.env.DEPLOYMENT_ID
-const db = await getDB({ worldDir, deploymentId })
+const db = await getDB({ worldDir })
 
 // init cleaner
-await cleaner.init({ db, deploymentId })
+await cleaner.init({ db })
 
 // init storage
 const storage = new Storage(path.join(worldDir, '/storage.json'))
@@ -157,9 +192,10 @@ await world.init({
   assetsDir: assets.dir,
   assetsUrl: assets.url,
   db,
-  deploymentId,
   assets,
   storage,
+  authConfig,
+  worldServiceClient,
 })
 
 const registryState = createRegistryState()
@@ -231,6 +267,9 @@ for (const key in process.env) {
     publicEnvs[key] = value
   }
 }
+if (!publicEnvs.PUBLIC_AUTH_MODE) {
+  publicEnvs.PUBLIC_AUTH_MODE = authConfig.authMode
+}
 const envsCode = `
   if (!globalThis.env) globalThis.env = {}
   globalThis.env = ${JSON.stringify(publicEnvs)}
@@ -245,6 +284,41 @@ fastify.post('/api/upload', async (req, reply) => {
 
 fastify.get('/api/upload-check', async (req, reply) => {
   return reply.code(403).send({ error: 'admin_required', message: 'Use /admin/upload-check' })
+})
+
+fastify.post('/api/auth/exchange', async (req, reply) => {
+  if (!authConfig.isStandaloneMode || !authConfig.usesLobbyIdentity) {
+    return reply.code(404).send({ error: 'not_found' })
+  }
+
+  const identityToken = typeof req?.body?.token === 'string' ? req.body.token.trim() : ''
+  if (!identityToken) {
+    return reply.code(400).send({ error: 'invalid_payload', message: 'token is required' })
+  }
+
+  const claims = await verifyIdentityExchangeTokenWithLobby(identityToken)
+  const userId = typeof claims?.userId === 'string' ? claims.userId.trim() : ''
+  if (!userId) {
+    return reply.code(401).send({ error: 'invalid_exchange_token' })
+  }
+
+  await db('users')
+    .insert({
+      id: userId,
+      name: 'Anonymous',
+      avatar: null,
+      rank: 0,
+      createdAt: new Date().toISOString(),
+    })
+    .onConflict('id')
+    .ignore()
+
+  const runtimeToken = await createJWT({ userId, worldId: process.env.WORLD_ID })
+  return reply.code(200).send({
+    token: runtimeToken,
+    token_type: 'runtime_session',
+    user: { id: userId },
+  })
 })
 
 fastify.get('/health', async (request, reply) => {
