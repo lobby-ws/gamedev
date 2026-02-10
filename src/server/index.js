@@ -12,11 +12,13 @@ import statics from '@fastify/static'
 import multipart from '@fastify/multipart'
 
 import { createServerWorld } from '../core/createServerWorld'
+import { loadServerMods } from '../core/mods/loadServerMods'
 import { getDB } from './db'
 import { Storage } from './Storage'
 import { assets } from './assets'
 import { cleaner } from './cleaner'
 import { admin } from './admin'
+import { readModsState } from './mods-state'
 import { createRegistryState, getRegistryPublicStatus, registerWithRegistry } from './registry'
 
 const rootDir = path.join(__dirname, '../')
@@ -127,6 +129,19 @@ await assets.init({ rootDir, worldDir })
 // init db
 const db = await getDB({ worldDir })
 
+// read persisted mods state (strict at startup)
+const persistedMods = await readModsState({ db, strict: true })
+const serverMods = await loadServerMods({
+  manifest: persistedMods.manifest,
+  loadOrderOverride: persistedMods.loadOrderOverride,
+  assetsDir: assets.dir,
+  assetsUrl: assets.url,
+})
+for (const warning of serverMods.warnings) {
+  console.warn(`[mods] ${warning}`)
+}
+console.log(`[mods] server order (${serverMods.source}): ${serverMods.order.length ? serverMods.order.join(', ') : 'none'}`)
+
 // init cleaner
 await cleaner.init({ db })
 
@@ -134,7 +149,13 @@ await cleaner.init({ db })
 const storage = new Storage(path.join(worldDir, '/storage.json'))
 
 // create world
-const world = createServerWorld()
+const world = createServerWorld({
+  postCoreSystems: serverMods.systems,
+})
+world.modRuntime = {
+  serverOrder: serverMods.order.slice(),
+  orderSource: serverMods.source,
+}
 await world.init({
   assetsDir: assets.dir,
   assetsUrl: assets.url,
@@ -208,6 +229,22 @@ const envsCode = `
 `
 fastify.get('/env.js', async (req, reply) => {
   reply.type('application/javascript').send(envsCode)
+})
+
+fastify.get('/mods/manifest', async (_req, reply) => {
+  try {
+    const modsState = await readModsState({ db })
+    reply.header('Cache-Control', 'no-store')
+    return {
+      manifest: modsState.manifest,
+      loadOrderOverride: modsState.loadOrderOverride,
+      assetsUrl: assets.url,
+      warnings: modsState.warnings,
+    }
+  } catch (err) {
+    console.error('[mods] public manifest route failed', err)
+    return reply.code(500).send({ error: 'mods_manifest_failed' })
+  }
 })
 
 fastify.post('/api/upload', async (req, reply) => {

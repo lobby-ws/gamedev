@@ -123,6 +123,32 @@ For prod targets, the CLI asks for confirmation unless you pass `--yes`.
 
 ---
 
+### Mods deploys (explicit, no watcher)
+
+Mods are deployed explicitly and are not part of continuous `app-server` sync:
+
+```bash
+gamedev mods deploy --target <name>
+gamedev mods deploy --target <name> --dry-run
+```
+
+What deploy does:
+- scans `mods/` (core systems + client UI mods)
+- bundles modules with esbuild
+- uploads JS bundles through `/admin/upload`
+- writes persisted mods manifest through `/admin/mods/manifest`
+
+Order controls:
+- file order: `mods/load-order.json`
+- DB override: `gamedev mods order set ...` / `gamedev mods order clear`
+- precedence: DB override (valid) > manifest order > deterministic fallback
+
+Important:
+- server/shared mods load only at world-server startup
+- after deploying server/shared mods, restart the world server to apply them
+
+---
+
 ### Troubleshooting
 
 - Bootstrap didn’t happen: ensure the target world is empty/default or run `gamedev world export` (add `--include-built-scripts` for legacy single-file apps).
@@ -130,3 +156,7 @@ For prod targets, the CLI asks for confirmation unless you pass `--yes`.
 - Script updates rejected: ensure `ADMIN_CODE` matches and the deploy lock is free.
 - WORLD_ID mismatch: set `WORLD_ID` to match the target world id.
 - Changes not appearing: confirm `apps/<appName>/index.js` (or blueprint JSON) is being edited and app-server is connected.
+- `invalid_mod_manifest`: fix invalid module entries (`kind/scope/url/export` fields) and redeploy.
+- `invalid_mod_load_order`: fix `mods/load-order.json` or clear DB override with `gamedev mods order clear`.
+- Client module import fails for S3 assets: ensure uploaded JS files have `Content-Type: text/javascript` and S3 CORS allows module fetches.
+- Server startup fails on mods: inspect startup logs for invalid manifest/order or missing server/shared module bundles, then redeploy and restart.

@@ -53,6 +53,88 @@ tsconfig.json               TypeScript config (points at `gamedev` types)
 - `.lobby/<worldId>/` is local runtime state.
 - `.claude/settings.local.json` is per-developer.
 
+## Authoring Mods
+
+World-project mods live under `mods/`:
+
+```text
+mods/
+  load-order.json
+  core/
+    server/
+    client/
+    shared/
+  client/
+    components/
+    sidebar/
+```
+
+Authoring contracts:
+
+- `mods/core/server/**`: server systems, loaded on world-server boot.
+- `mods/core/client/**`: client systems, loaded before `world.init(...)`.
+- `mods/core/shared/**`: bundled for both server and client loaders.
+- `mods/client/components/**`: UI components (default export component).
+- `mods/client/sidebar/**`: sidebar modules (named exports for button + pane).
+
+Deploy and order control:
+
+- Use `gamedev mods deploy --target <name>` for explicit deploys.
+- Use `gamedev mods deploy --dry-run` to preview uploads/manifest changes.
+- Use `gamedev mods order set ...` / `gamedev mods order clear` for DB override order.
+- Server/shared mod deploys require a world-server restart to apply server-side changes.
+
+## Mods Manifest Schema
+
+When you run `gamedev mods deploy`, the deployer uploads bundled modules and writes a persisted mods manifest to the target world.
+
+Root shape:
+
+```json
+{
+  "version": 1,
+  "deployedAt": "2026-02-09T00:00:00.000Z",
+  "deployNote": "optional note",
+  "modules": [],
+  "loadOrder": {
+    "order": ["core.shared.example", "core.server.example"],
+    "before": {},
+    "after": {}
+  }
+}
+```
+
+Module entry kinds:
+
+- `system`:
+  - `id` (string, unique)
+  - `scope` (`server` | `client` | `shared`)
+  - `serverUrl` / `clientUrl` (`asset://...`, required by scope)
+  - optional `systemKey`, `sourcePath`
+- `component`:
+  - `id`
+  - `clientUrl` (`asset://...`)
+  - optional `exportName` (defaults to `default`)
+- `sidebar`:
+  - `id`
+  - `clientUrl` (`asset://...`)
+  - optional `buttonExport` (defaults to `Button`)
+  - optional `paneExport` (defaults to `Pane`)
+
+Order rules:
+
+- Effective load-order precedence:
+  1. DB override order (`mods_load_order_override`) when present and valid
+  2. Deployed manifest `loadOrder`
+  3. Deterministic fallback (sorted module ids)
+- `loadOrder` supports either:
+  - array form: `["mod.a", "mod.b"]`
+  - object form:
+    - `order`: sequence constraints
+    - `before`: `{ "mod.a": ["mod.b"] }`
+    - `after`: `{ "mod.b": ["mod.a"] }`
+- Unknown ids, duplicates, and cyclic relations are rejected.
+
 ## Claude Code
 
 The scaffold includes `.claude/skills/hyperfy-app-scripting/SKILL.md` to guide app scripting tasks. Commit the skill folder, and keep local Claude settings in `.claude/settings.local.json` (gitignored).
@@ -64,6 +146,7 @@ The scaffold includes `.claude/skills/hyperfy-app-scripting/SKILL.md` to guide a
 - Use `gamedev dev` for continuous sync (dev only).
 - Use `gamedev app-server` for sync only (no local world server).
 - Use `gamedev apps deploy <app>` for explicit staging/prod deploys.
+- Use `gamedev mods deploy` for explicit mods deploys (separate from apps).
 
 ## Existing Worlds
 

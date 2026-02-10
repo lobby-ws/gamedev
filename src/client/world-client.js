@@ -5,6 +5,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { css } from '@firebolt-dev/css'
 
 import { createClientWorld } from '../core/createClientWorld'
+import { loadClientMods } from '../core/mods/loadClientMods'
+import { loadClientUIMods } from '../core/mods/loadClientUIMods'
 import { CoreUI } from './components/CoreUI'
 
 export { System } from '../core/systems/System'
@@ -44,7 +46,16 @@ export function Client({ wsUrl, onSetup }) {
       }
       const config = { viewport, cssLayer, ui, wsUrl, baseEnvironment }
       onSetup?.(world, config)
-      world.init(config)
+      const mods = await loadClientMods(world)
+      if (mods.assetsUrl) {
+        world.assetsUrl = mods.assetsUrl
+      }
+      await loadClientUIMods(world, {
+        manifest: mods.manifest,
+        loadOrderOverride: mods.loadOrderOverride,
+        assetsUrl: mods.assetsUrl,
+      })
+      await world.init(config)
     }
     init()
   }, [])

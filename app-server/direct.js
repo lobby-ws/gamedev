@@ -706,6 +706,72 @@ class WorldAdminClient extends EventEmitter {
     return res.json()
   }
 
+  async getModsState() {
+    const res = await fetch(joinUrl(this.httpBase, '/admin/mods'), {
+      headers: this.adminHeaders(),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => null)
+      const err = new Error(data?.error || `mods_state_failed:${res.status}`)
+      err.code = data?.error || 'mods_state_failed'
+      throw err
+    }
+    return res.json()
+  }
+
+  async putModsManifest({ manifest, lockToken } = {}) {
+    const payload = { manifest, lockToken }
+    const res = await fetch(joinUrl(this.httpBase, '/admin/mods/manifest'), {
+      method: 'PUT',
+      headers: this.adminHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => null)
+      const err = new Error(data?.error || `mods_manifest_failed:${res.status}`)
+      err.code = data?.error || 'mods_manifest_failed'
+      err.lock = data?.lock
+      err.detail = data?.detail
+      throw err
+    }
+    return res.json()
+  }
+
+  async putModsLoadOrder({ loadOrder, lockToken } = {}) {
+    const payload = { loadOrder, lockToken }
+    const res = await fetch(joinUrl(this.httpBase, '/admin/mods/load-order'), {
+      method: 'PUT',
+      headers: this.adminHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => null)
+      const err = new Error(data?.error || `mods_load_order_failed:${res.status}`)
+      err.code = data?.error || 'mods_load_order_failed'
+      err.lock = data?.lock
+      err.detail = data?.detail
+      throw err
+    }
+    return res.json()
+  }
+
+  async clearModsLoadOrder({ lockToken } = {}) {
+    const payload = { lockToken }
+    const res = await fetch(joinUrl(this.httpBase, '/admin/mods/load-order'), {
+      method: 'DELETE',
+      headers: this.adminHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => null)
+      const err = new Error(data?.error || `mods_load_order_clear_failed:${res.status}`)
+      err.code = data?.error || 'mods_load_order_clear_failed'
+      err.lock = data?.lock
+      throw err
+    }
+    return res.json().catch(() => ({ ok: true }))
+  }
+
   async getBlueprint(id) {
     const res = await fetch(joinUrl(this.httpBase, `/admin/blueprints/${encodeURIComponent(id)}`), {
       headers: this.adminHeaders(),

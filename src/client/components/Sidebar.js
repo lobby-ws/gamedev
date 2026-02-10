@@ -21,11 +21,16 @@ import { Script } from './sidebar/Script'
 import { Nodes } from './sidebar/Nodes'
 import { Meta } from './sidebar/Meta'
 
+function toModPaneId(id) {
+  return `mod:${id}`
+}
+
 export function Sidebar({ world, ui, onOpenMenu }) {
   const player = world.entities.player
   const { isBuilder } = useRank(world, player)
   const activePane = ui.active ? ui.pane : null
   const [open, setOpen] = useState(false)
+  const [modSidebar, setModSidebar] = useState(() => (Array.isArray(world.modUI?.sidebar) ? world.modUI.sidebar : []))
   const downloadApp = async () => {
     const app = ui.app
     if (!app?.blueprint) return
@@ -40,6 +45,16 @@ export function Sidebar({ world, ui, onOpenMenu }) {
   useEffect(() => {
     if (ui.app && !open) setOpen(true)
   }, [ui.app])
+  useEffect(() => {
+    const onModsUI = mods => {
+      const sidebar = Array.isArray(mods?.sidebar) ? mods.sidebar : []
+      setModSidebar(sidebar)
+    }
+    world.on('mods-ui', onModsUI)
+    return () => {
+      world.off('mods-ui', onModsUI)
+    }
+  }, [])
   const selectPane = pane => {
     world.ui.togglePane(pane)
     if (!ui.active) setOpen(true)
@@ -219,6 +234,25 @@ export function Sidebar({ world, ui, onOpenMenu }) {
                       </div>
                     </>
                   )}
+                  {!!modSidebar.length && (
+                    <>
+                      <div className='sidebar-nav-divider' />
+                      {modSidebar.map(item => {
+                        const ModButton = item?.Button
+                        if (typeof ModButton !== 'function') return null
+                        const paneId = toModPaneId(item.id)
+                        return (
+                          <div
+                            key={item.id}
+                            className={cls('sidebar-nav-btn', { active: activePane === paneId })}
+                            onClick={() => selectPane(paneId)}
+                          >
+                            <ModButton world={world} />
+                          </div>
+                        )
+                      })}
+                    </>
+                  )}
                 </>
               )}
             </div>
@@ -232,6 +266,14 @@ export function Sidebar({ world, ui, onOpenMenu }) {
             {open && ui.pane !== 'script' && ui.pane === 'meta' && (
               <Meta key={ui.app.data.id} world={world} hidden={!ui.active} />
             )}
+            {open &&
+              modSidebar.map(item => {
+                const paneId = toModPaneId(item.id)
+                if (ui.pane !== paneId) return null
+                const ModPane = item?.Pane
+                if (typeof ModPane !== 'function') return null
+                return <ModPane key={item.id} world={world} hidden={!ui.active} />
+              })}
             <ActionsPanel world={world} />
           </div>
         )}
@@ -400,5 +442,145 @@ function LogoBtn({ onClick }) {
     >
       <img src='/logo.png' />
     </div>
+  )
+}
+
+export function Section({ active = false, top = false, bottom = false, children }) {
+  return (
+    <div
+      className={cls('mods-sidebar-section', { active, top, bottom })}
+      css={css`
+        border: 1px solid ${theme.border};
+        border-radius: ${theme.radius};
+        background: transparent;
+        padding: 0.25rem;
+      `}
+    >
+      {children}
+    </div>
+  )
+}
+
+export function Btn({ active = false, suspended = false, disabled = false, children, ...props }) {
+  return (
+    <div
+      className={cls('mods-sidebar-btn', { active, suspended, disabled })}
+      css={css`
+        padding: 0.375rem 0.75rem;
+        font-size: 0.8125rem;
+        color: rgba(255, 255, 255, 0.6);
+        white-space: nowrap;
+        border-radius: ${theme.radiusSmall};
+        pointer-events: auto;
+        &:hover {
+          cursor: pointer;
+          color: white;
+          background: ${theme.bgHover};
+        }
+        &.active {
+          color: white;
+          background: ${theme.bgHover};
+        }
+        &.disabled {
+          color: rgba(255, 255, 255, 0.4);
+          pointer-events: none;
+        }
+        &.suspended {
+          &::after {
+            content: ' *';
+          }
+        }
+      `}
+      {...props}
+    >
+      {children}
+    </div>
+  )
+}
+
+export function Content({ width = '20rem', hidden = false, children }) {
+  return (
+    <div
+      className={cls('mods-sidebar-content', { hidden })}
+      css={css`
+        width: ${width};
+        pointer-events: auto;
+        border: 1px solid ${theme.border};
+        border-radius: ${theme.radius};
+        background: transparent;
+        &.hidden {
+          opacity: 0;
+          pointer-events: none;
+        }
+      `}
+    >
+      {children}
+    </div>
+  )
+}
+
+export function Pane({ width = '20rem', hidden = false, children }) {
+  return (
+    <div
+      className={cls('mods-sidebar-pane', { hidden })}
+      css={css`
+        width: ${width};
+        max-width: 100%;
+        pointer-events: auto;
+        border: 1px solid ${theme.border};
+        border-radius: ${theme.radius};
+        background: transparent;
+        &.hidden {
+          opacity: 0;
+          pointer-events: none;
+        }
+      `}
+    >
+      {children}
+    </div>
+  )
+}
+
+export function Hint({ children }) {
+  if (!children) return null
+  return (
+    <div
+      className='mods-sidebar-hint'
+      css={css`
+        margin-top: 0.25rem;
+        border: 1px solid ${theme.border};
+        border-radius: ${theme.radius};
+        background: transparent;
+        padding: 0.75rem;
+        font-size: 0.8125rem;
+      `}
+    >
+      {children}
+    </div>
+  )
+}
+
+export function Group({ label }) {
+  return (
+    <>
+      <div
+        css={css`
+          height: 1px;
+          background: ${theme.borderLight};
+          margin: 0.5rem 0;
+        `}
+      />
+      {label ? (
+        <div
+          css={css`
+            font-weight: 500;
+            line-height: 1;
+            padding: 0.125rem 0 0.5rem;
+          `}
+        >
+          {label}
+        </div>
+      ) : null}
+    </>
   )
 }

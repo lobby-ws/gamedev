@@ -3,6 +3,13 @@ import fs from 'fs'
 
 import { readPacket, writePacket } from '../core/packets.js'
 import { cleaner } from './cleaner'
+import { resolveModOrder } from '../core/mods/order'
+import {
+  readModsState,
+  writeModsManifest,
+  writeModsLoadOrderOverride,
+  clearModsLoadOrderOverride,
+} from './mods-state'
 
 const SCRIPT_BLUEPRINT_FIELDS = new Set([
   'script',
@@ -724,6 +731,100 @@ function hasScriptFields(data) {
       return reply.code(409).send({ error: 'not_owner', lock: getLockStatus(lock, scope) })
     }
     deployLocks.delete(scope)
+    return { ok: true }
+  })
+
+  fastify.get('/admin/mods', async (req, reply) => {
+    if (!requireDeploy(req, reply)) return
+    if (!db) {
+      return reply.code(500).send({ error: 'db_unavailable' })
+    }
+    try {
+      const state = await readModsState({ db })
+      return {
+        manifest: state.manifest,
+        loadOrderOverride: state.loadOrderOverride,
+        warnings: state.warnings,
+      }
+    } catch (err) {
+      console.error('[admin] read mods state failed', err)
+      return reply.code(500).send({ error: 'mods_state_failed' })
+    }
+  })
+
+  fastify.put('/admin/mods/manifest', async (req, reply) => {
+    if (!requireDeploy(req, reply)) return
+    if (!db) {
+      return reply.code(500).send({ error: 'db_unavailable' })
+    }
+    const lockCheck = ensureDeployLock(req.body?.lockToken, 'mods')
+    if (!lockCheck.ok) {
+      return reply.code(409).send({ error: lockCheck.error, lock: lockCheck.lock })
+    }
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      return reply.code(400).send({ error: 'invalid_payload' })
+    }
+    try {
+      const manifest = await writeModsManifest({
+        db,
+        manifest: req.body.manifest,
+      })
+      return { ok: true, manifest }
+    } catch (err) {
+      return reply.code(400).send({
+        error: 'invalid_mod_manifest',
+        detail: err?.message || 'invalid_mod_manifest',
+      })
+    }
+  })
+
+  fastify.put('/admin/mods/load-order', async (req, reply) => {
+    if (!requireDeploy(req, reply)) return
+    if (!db) {
+      return reply.code(500).send({ error: 'db_unavailable' })
+    }
+    const lockCheck = ensureDeployLock(req.body?.lockToken, 'mods')
+    if (!lockCheck.ok) {
+      return reply.code(409).send({ error: lockCheck.error, lock: lockCheck.lock })
+    }
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      return reply.code(400).send({ error: 'invalid_payload' })
+    }
+    if (!Object.prototype.hasOwnProperty.call(req.body, 'loadOrder')) {
+      return reply.code(400).send({ error: 'invalid_payload' })
+    }
+    try {
+      const state = await readModsState({ db })
+      const manifestIds = Array.isArray(state?.manifest?.modules)
+        ? state.manifest.modules.map(module => module.id)
+        : []
+      if (!manifestIds.length) {
+        return reply.code(400).send({ error: 'mods_manifest_missing' })
+      }
+      resolveModOrder(manifestIds, req.body.loadOrder)
+      const loadOrderOverride = await writeModsLoadOrderOverride({
+        db,
+        loadOrderOverride: req.body.loadOrder,
+      })
+      return { ok: true, loadOrderOverride }
+    } catch (err) {
+      return reply.code(400).send({
+        error: 'invalid_mod_load_order',
+        detail: err?.message || 'invalid_mod_load_order',
+      })
+    }
+  })
+
+  fastify.delete('/admin/mods/load-order', async (req, reply) => {
+    if (!requireDeploy(req, reply)) return
+    if (!db) {
+      return reply.code(500).send({ error: 'db_unavailable' })
+    }
+    const lockCheck = ensureDeployLock(req.body?.lockToken, 'mods')
+    if (!lockCheck.ok) {
+      return reply.code(409).send({ error: lockCheck.error, lock: lockCheck.lock })
+    }
+    await clearModsLoadOrderOverride({ db })
     return { ok: true }
   })
 

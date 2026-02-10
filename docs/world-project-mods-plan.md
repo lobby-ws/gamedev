@@ -42,7 +42,7 @@ mods/
 
 ## PR Checklist (Independent Work Units)
 
-### [ ] PR-01: Manifest + Order Contracts
+### [x] PR-01: Manifest + Order Contracts
 
 Scope:
 
@@ -63,7 +63,7 @@ Dependency notes:
 
 ---
 
-### [ ] PR-02: Server Persistence + Admin API for Mods State
+### [x] PR-02: Server Persistence + Admin API for Mods State
 
 Scope:
 
@@ -90,7 +90,7 @@ Dependency notes:
 
 ---
 
-### [ ] PR-03: App-Server Mod Packager/Uploader (No Watchers)
+### [x] PR-03: App-Server Mod Packager/Uploader (No Watchers)
 
 Scope:
 
@@ -117,7 +117,7 @@ Dependency notes:
 
 ---
 
-### [ ] PR-04: CLI Command `gamedev mods deploy`
+### [x] PR-04: CLI Command `gamedev mods deploy`
 
 Scope:
 
@@ -140,7 +140,7 @@ Dependency notes:
 
 ---
 
-### [ ] PR-05: Server Runtime Mod Loader (Boot-Time)
+### [x] PR-05: Server Runtime Mod Loader (Boot-Time)
 
 Scope:
 
@@ -166,7 +166,7 @@ Dependency notes:
 
 ---
 
-### [ ] PR-06: Client Runtime System Mod Loader
+### [x] PR-06: Client Runtime System Mod Loader
 
 Scope:
 
@@ -187,7 +187,7 @@ Dependency notes:
 
 ---
 
-### [ ] PR-07: Old UI Mod Parity (Components + Sidebar)
+### [x] PR-07: Old UI Mod Parity (Components + Sidebar)
 
 Scope:
 
@@ -211,7 +211,7 @@ Dependency notes:
 
 ---
 
-### [ ] PR-08: Load Order Override End-to-End
+### [x] PR-08: Load Order Override End-to-End
 
 Scope:
 
@@ -232,7 +232,7 @@ Dependency notes:
 
 ---
 
-### [ ] PR-09: Asset Delivery Hardening for JS Module Imports
+### [x] PR-09: Asset Delivery Hardening for JS Module Imports
 
 Scope:
 
@@ -251,7 +251,7 @@ Dependency notes:
 
 ---
 
-### [ ] PR-10: Integration Tests + Operational Docs
+### [x] PR-10: Integration Tests + Operational Docs
 
 Scope:
 

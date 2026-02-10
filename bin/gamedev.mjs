@@ -8,6 +8,7 @@ import { spawn } from 'child_process'
 import { customAlphabet } from 'nanoid'
 
 import { runAppCommand, runScriptCommand } from '../app-server/commands.js'
+import { runModsCommand } from '../app-server/mods-commands.js'
 import { DirectAppServer } from '../app-server/direct.js'
 import { scaffoldBaseProject, scaffoldBuiltins, updateBuiltins, writeManifest } from '../app-server/scaffold.js'
 import { applyTargetEnv, parseTargetArgs, resolveTarget } from '../app-server/targets.js'
@@ -799,6 +800,32 @@ async function scriptsCommand(args) {
   return runScriptCommand({ command, args: commandArgs, rootDir: projectDir, helpPrefix: 'gamedev scripts' })
 }
 
+async function modsCommand(args) {
+  if (!args.length || ['help', '--help', '-h'].includes(args[0])) {
+    await runModsCommand({ command: 'help', args: [], rootDir: projectDir, helpPrefix: 'gamedev mods' })
+    return 0
+  }
+
+  let command = args[0]
+  let commandArgs = args.slice(1)
+  try {
+    const parsed = parseTargetArgs(args)
+    command = parsed.args[0]
+    commandArgs = parsed.args.slice(1)
+    if (parsed.target) {
+      commandArgs.push('--target', parsed.target)
+    }
+  } catch (err) {
+    console.error(`Error: ${err?.message || err}`)
+    return 1
+  }
+
+  const env = readDotEnv(envPath)
+  if (env) applyEnvToProcess(env)
+
+  return runModsCommand({ command, args: commandArgs, rootDir: projectDir, helpPrefix: 'gamedev mods' })
+}
+
 async function connectAdminServer({ worldUrl, adminCode, rootDir }) {
   let code = adminCode || process.env.ADMIN_CODE || null
   let server = new DirectAppServer({ worldUrl, adminCode: code, rootDir })
@@ -880,6 +907,7 @@ Commands:
   dev                       Start the world (local or remote) + app-server sync
   app-server                Start app-server sync only (no world server)
   apps <command>            Manage apps (create, list, deploy, update, rollback, status)
+  mods <command>            Manage mods (deploy)
   scripts <command>         Script migration helpers (migrate)
   world export              Export world.json + apps/assets from the world (module sources included; use --include-built-scripts for legacy apps)
   world import              Import local apps + world.json into the world
@@ -913,6 +941,9 @@ async function main() {
       break
     case 'scripts':
       result = await scriptsCommand(args)
+      break
+    case 'mods':
+      result = await modsCommand(args)
       break
     case 'world':
       result = await worldCommand(args)

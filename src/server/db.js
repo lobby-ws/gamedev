@@ -661,4 +661,13 @@ const migrations = [
       }
     }
   },
+  // persist mods state keys in config
+  async db => {
+    const keys = ['mods_manifest', 'mods_load_order_override']
+    for (const key of keys) {
+      const row = await db('config').where('key', key).first()
+      if (row) continue
+      await db('config').insert({ key, value: 'null' })
+    }
+  },
 ]

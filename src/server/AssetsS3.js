@@ -29,6 +29,9 @@ const contentTypes = {
   glb: 'model/gltf-binary',
   obj: 'model/obj',
   // Other
+  js: 'text/javascript',
+  mjs: 'text/javascript',
+  cjs: 'text/javascript',
   json: 'application/json',
   pdf: 'application/pdf',
   zip: 'application/zip',

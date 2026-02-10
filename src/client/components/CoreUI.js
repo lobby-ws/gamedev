@@ -28,7 +28,14 @@ export function CoreUI({ world }) {
   const [apps, setApps] = useState(false)
   const [kicked, setKicked] = useState(null)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [modComponents, setModComponents] = useState(() =>
+    Array.isArray(world.modUI?.components) ? world.modUI.components : []
+  )
   useEffect(() => {
+    const onModsUI = mods => {
+      const components = Array.isArray(mods?.components) ? mods.components : []
+      setModComponents(components)
+    }
     world.on('ready', setReady)
     world.on('player', setPlayer)
     world.on('ui', setUI)
@@ -39,6 +46,7 @@ export function CoreUI({ world }) {
     world.on('avatar', setAvatar)
     world.on('kick', setKicked)
     world.on('disconnect', setDisconnected)
+    world.on('mods-ui', onModsUI)
     return () => {
       world.off('ready', setReady)
       world.off('player', setPlayer)
@@ -50,6 +58,7 @@ export function CoreUI({ world }) {
       world.off('avatar', setAvatar)
       world.off('kick', setKicked)
       world.off('disconnect', setDisconnected)
+      world.off('mods-ui', onModsUI)
     }
   }, [])
 
@@ -102,6 +111,12 @@ export function CoreUI({ world }) {
       {kicked && <KickedOverlay code={kicked} />}
       {ready && isTouch && <TouchBtns world={world} />}
       {ready && isTouch && <TouchStick world={world} />}
+      {ready &&
+        modComponents.map(item => {
+          const ModComponent = item?.Component
+          if (typeof ModComponent !== 'function') return null
+          return <ModComponent key={item.id} world={world} />
+        })}
       {confirm && <Confirm options={confirm} />}
       <div id='core-ui-portal' />
     </div>
