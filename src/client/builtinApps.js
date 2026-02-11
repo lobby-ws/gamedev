@@ -23,6 +23,54 @@ export const BUILTIN_APP_TEMPLATES = [
     disabled: false,
   },
   {
+    name: 'Teleporter',
+    image: {
+      url: 'asset://Model.png',
+    },
+    model: 'asset://empty.glb',
+    script: 'asset://Teleporter.js',
+    scriptEntry: 'index.js',
+    scriptFiles: {
+      'index.js': 'asset://Teleporter.js',
+    },
+    scriptFormat: 'module',
+    props: {
+      teleporterId: 0,
+      visible: true,
+    },
+    preload: false,
+    public: false,
+    locked: false,
+    frozen: false,
+    unique: true,
+    scene: false,
+    disabled: false,
+  },
+  {
+    name: 'Spawn',
+    image: {
+      url: 'asset://Model.png',
+    },
+    model: 'asset://empty.glb',
+    script: 'asset://Spawn.js',
+    scriptEntry: 'index.js',
+    scriptFiles: {
+      'index.js': 'asset://Spawn.js',
+    },
+    scriptFormat: 'module',
+    props: {
+      teleporterId: 0,
+      visible: true,
+    },
+    preload: false,
+    public: false,
+    locked: false,
+    frozen: false,
+    unique: true,
+    scene: false,
+    disabled: false,
+  },
+  {
     name: 'Image',
     image: {
       url: 'asset://Image.png',
@@ -134,7 +182,7 @@ export const BUILTIN_APP_TEMPLATES = [
     },
     scriptFormat: 'module',
     props: {
-      url: "https://www.youtube.com/embed/jfKfPfyJRdk?autoplay=1"
+      url: 'https://www.youtube.com/embed/jfKfPfyJRdk?autoplay=1',
     },
     preload: false,
     public: false,
