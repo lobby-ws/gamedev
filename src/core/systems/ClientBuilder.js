@@ -146,7 +146,7 @@ export class ClientBuilder extends System {
     this.control.mouseLeft.onPress = () => {
       // pointer lock requires user-gesture in safari
       // so this can't be done during update cycle
-      if (!this.control.pointer.locked && !this.isGizmoMode) {
+      if (!this.control.pointer.locked && (!this.isGizmoMode || !this.selected)) {
         this.control.pointer.lock()
         this.justPointerLocked = true
         return true // capture
