@@ -127,6 +127,10 @@ export class ClientBuilder extends System {
     this.file = null
   }
 
+  get isGizmoMode() {
+    return this.mode === 'translate' || this.mode === 'rotate' || this.mode === 'scale'
+  }
+
   async init({ viewport }) {
     this.viewport = viewport
     this.viewport.addEventListener('dragover', this.onDragOver)
@@ -142,7 +146,7 @@ export class ClientBuilder extends System {
     this.control.mouseLeft.onPress = () => {
       // pointer lock requires user-gesture in safari
       // so this can't be done during update cycle
-      if (!this.control.pointer.locked) {
+      if (!this.control.pointer.locked && !this.isGizmoMode) {
         this.control.pointer.lock()
         this.justPointerLocked = true
         return true // capture
@@ -490,7 +494,7 @@ export class ClientBuilder extends System {
       }
     }
     // inspect out of pointer-lock
-    else if (!this.selected && !this.beam.active && this.control.mouseRight.pressed) {
+    else if (!this.beam.active && this.control.mouseRight.pressed) {
       const entity = this.getEntityAtCursor()
       if (entity?.isApp) {
         this.select(null)
@@ -504,8 +508,8 @@ export class ClientBuilder extends System {
       }
     }
     // fork template from instance
-    if (this.control.keyU.pressed && this.beam.active) {
-      const entity = this.selected || this.getEntityAtBeam()
+    if (this.control.keyU.pressed && (this.beam.active || this.isGizmoMode)) {
+      const entity = this.selected || (this.beam.active ? this.getEntityAtBeam() : this.getEntityAtCursor())
       if (entity?.isApp && !entity.blueprint.scene) {
         void (async () => {
           const blueprint = await this.forkTemplateFromEntity(entity, 'Template fork')
@@ -523,8 +527,8 @@ export class ClientBuilder extends System {
       }
     }
     // pin/unpin
-    if (this.control.keyP.pressed && this.beam.active) {
-      const entity = this.selected || this.getEntityAtBeam()
+    if (this.control.keyP.pressed && (this.beam.active || this.isGizmoMode)) {
+      const entity = this.selected || (this.beam.active ? this.getEntityAtBeam() : this.getEntityAtCursor())
       if (entity?.isApp) {
         entity.data.pinned = !entity.data.pinned
         this.world.admin.entityModify(
@@ -589,8 +593,22 @@ export class ClientBuilder extends System {
         else this.select(null)
       }
     }
-    // deselect on pointer unlock
-    if (this.selected && !this.beam.active) {
+    // cursor-based selection in gizmo mode (pointer unlocked)
+    if (
+      this.isGizmoMode &&
+      !this.beam.active &&
+      this.control.mouseLeft.pressed &&
+      !this.gizmoActive
+    ) {
+      const entity = this.getEntityAtCursor()
+      if (entity?.isApp && !entity.data.pinned && !entity.blueprint.scene) {
+        this.select(entity)
+      } else if (this.selected) {
+        this.select(null)
+      }
+    }
+    // deselect on pointer unlock (but not in gizmo mode where pointer is intentionally unlocked)
+    if (this.selected && !this.beam.active && !this.isGizmoMode) {
       this.select(null)
     }
     // duplicate
@@ -600,7 +618,7 @@ export class ClientBuilder extends System {
       duplicate = true
     } else if (
       !this.justPointerLocked &&
-      this.beam.active &&
+      (this.beam.active || this.isGizmoMode) &&
       this.control.keyR.pressed &&
       !this.control.metaLeft.down &&
       !this.control.controlLeft.down
@@ -608,7 +626,7 @@ export class ClientBuilder extends System {
       duplicate = true
     }
     if (duplicate) {
-      const entity = this.selected || this.getEntityAtBeam()
+      const entity = this.selected || (this.beam.active ? this.getEntityAtBeam() : this.getEntityAtCursor())
       if (entity?.isApp && !entity.blueprint.scene) {
         if (entity.blueprint.unique) {
           void (async () => {
@@ -904,11 +922,13 @@ export class ClientBuilder extends System {
         this.target.quaternion.copy(app.root.quaternion)
         this.target.scale.copy(app.root.scale)
         this.target.limit = PROJECT_MAX
+        this.control.pointer.lock()
       }
     }
-    if (this.mode === 'translate' || this.mode === 'rotate' || this.mode === 'scale') {
+    if (this.isGizmoMode) {
       if (this.selected) {
         this.attachGizmo(this.selected, this.mode)
+        this.control.pointer.unlock()
       }
     }
     this.updateActions()
@@ -945,8 +965,9 @@ export class ClientBuilder extends System {
         this.control.keyC.capture = false
         this.control.scrollDelta.capture = false
       }
-      if (this.mode === 'translate' || this.mode === 'rotate' || this.mode === 'scale') {
+      if (this.isGizmoMode) {
         this.detachGizmo()
+        this.control.pointer.lock()
       }
     }
     // select new (if any)
@@ -975,8 +996,9 @@ export class ClientBuilder extends System {
         this.target.scale.copy(app.root.scale)
         this.target.limit = PROJECT_MAX
       }
-      if (this.mode === 'translate' || this.mode === 'rotate' || this.mode === 'scale') {
+      if (this.isGizmoMode) {
         this.attachGizmo(app, this.mode)
+        this.control.pointer.unlock()
       }
     }
     // update actions
