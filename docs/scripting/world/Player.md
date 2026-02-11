@@ -118,6 +118,12 @@ Can only be called on a local player.
 
 Prompts the player to share their screen, and then casts it to all video nodes that have a matching `.screenId` property.
 
+### `.setAvatar(url)`
+
+Sets the player's persistent avatar, saved to the database. Pass `null` to clear and revert to the world default.
+
+Can be called from server scripts on any player, or from client scripts on the local player only.
+
 ### `.setSessionAvatar(url)`
 
 Temporarily overrides the player's avatar for the current session. The session avatar takes priority over the player's default avatar.
