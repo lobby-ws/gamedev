@@ -1,5 +1,5 @@
 import { css } from '@firebolt-dev/css'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { editorTheme as theme } from './editorTheme'
 import { PanelTabs } from './PanelTabs'
 import { App } from '../sidebar/App'
@@ -7,6 +7,7 @@ import { Nodes } from '../sidebar/Nodes'
 import { Meta } from '../sidebar/Meta'
 import { exportApp } from '../../../core/extras/appTools'
 import { downloadFile } from '../../../core/extras/downloadFile'
+import { storage } from '../../../core/storage'
 
 const tabs = [
   { id: 'app', label: 'Object' },
@@ -17,6 +18,34 @@ const tabs = [
 export function BottomPanel({ world }) {
   const app = world.ui.state.app
   const [activeTab, setActiveTab] = useState('app')
+  const panelRef = useRef()
+  const resizerRef = useRef()
+  useEffect(() => {
+    const resizer = resizerRef.current
+    const panel = panelRef.current
+    panel.style.height = `${storage.get('bottom-panel-height', 288)}px`
+    function onPointerDown(e) {
+      resizer.addEventListener('pointermove', onPointerMove)
+      resizer.addEventListener('pointerup', onPointerUp)
+      e.currentTarget.setPointerCapture(e.pointerId)
+    }
+    function onPointerMove(e) {
+      let newHeight = panel.offsetHeight - e.movementY
+      if (newHeight < 120) newHeight = 120
+      if (newHeight > 600) newHeight = 600
+      panel.style.height = `${newHeight}px`
+      storage.set('bottom-panel-height', newHeight)
+    }
+    function onPointerUp(e) {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+      resizer.removeEventListener('pointermove', onPointerMove)
+      resizer.removeEventListener('pointerup', onPointerUp)
+    }
+    resizer.addEventListener('pointerdown', onPointerDown)
+    return () => {
+      resizer.removeEventListener('pointerdown', onPointerDown)
+    }
+  }, [])
   const downloadApp = async () => {
     if (!app?.blueprint) return
     try {
@@ -29,15 +58,25 @@ export function BottomPanel({ world }) {
   }
   return (
     <div
+      ref={panelRef}
       className='bottom-panel'
       css={css`
-        height: ${theme.bottomPanelHeight};
         background: ${theme.panelBg};
         border-top: 1px solid ${theme.panelBorder};
         display: flex;
         flex-direction: column;
         overflow: hidden;
         pointer-events: auto;
+        position: relative;
+        .bottom-panel-resizer {
+          position: absolute;
+          left: 0;
+          right: 0;
+          top: -5px;
+          height: 10px;
+          cursor: ns-resize;
+          z-index: 10;
+        }
         .bottom-panel-header {
           display: flex;
           align-items: stretch;
@@ -74,6 +113,7 @@ export function BottomPanel({ world }) {
         }
       `}
     >
+      <div className='bottom-panel-resizer' ref={resizerRef} />
       <div className='bottom-panel-header'>
         <div className='bottom-panel-tabs'>
           <PanelTabs tabs={tabs} activeTab={activeTab} onSelect={setActiveTab} />
