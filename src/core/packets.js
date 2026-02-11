@@ -17,6 +17,7 @@ const names = [
   'playerTeleport',
   'playerPush',
   'playerSessionAvatar',
+  'playerAvatar',
   'liveKitLevel',
   'mute',
   'settingsModified',

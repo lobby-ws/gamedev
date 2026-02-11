@@ -1104,6 +1104,15 @@ export class ServerNetwork extends System {
     this.sendTo(data.networkId, 'playerSessionAvatar', data.avatar)
   }
 
+  onPlayerAvatar = async (socket, data) => {
+    const player = socket.player
+    if (!player) return
+    await this.applyEntityModified(
+      { id: player.data.id, avatar: data.avatar, sessionAvatar: null },
+      { ignoreNetworkId: socket.id }
+    )
+  }
+
   onPing = (socket, time) => {
     socket.send('pong', time)
   }
