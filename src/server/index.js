@@ -119,15 +119,16 @@ if (!process.env.PUBLIC_MAX_UPLOAD_SIZE) {
 if (!process.env.PUBLIC_API_URL) {
   throw new Error('[envs] PUBLIC_API_URL must be set')
 }
-const resolvedPublicWsUrl = process.env.PUBLIC_WS_URL || derivePublicWsUrlFromApiUrl(process.env.PUBLIC_API_URL)
-if (!resolvedPublicWsUrl) {
-  throw new Error('[envs] PUBLIC_WS_URL could not be derived from PUBLIC_API_URL')
-}
-if (!resolvedPublicWsUrl.startsWith('ws')) {
-  throw new Error('[envs] PUBLIC_WS_URL must start with ws:// or wss://')
-}
-if (!process.env.PUBLIC_WS_URL) {
-  process.env.PUBLIC_WS_URL = resolvedPublicWsUrl
+if (process.env.PUBLIC_WS_URL) {
+  if (!process.env.PUBLIC_WS_URL.startsWith('ws')) {
+    throw new Error('[envs] PUBLIC_WS_URL must start with ws:// or wss://')
+  }
+} else if (authConfig.isStandaloneMode) {
+  const derivedPublicWsUrl = derivePublicWsUrlFromApiUrl(process.env.PUBLIC_API_URL)
+  if (!derivedPublicWsUrl) {
+    throw new Error('[envs] PUBLIC_WS_URL could not be derived from PUBLIC_API_URL')
+  }
+  process.env.PUBLIC_WS_URL = derivedPublicWsUrl
 }
 const worldServiceInternalUrl =
   (typeof process.env.WORLD_SERVICE_INTERNAL_URL === 'string' && process.env.WORLD_SERVICE_INTERNAL_URL.trim()) ||

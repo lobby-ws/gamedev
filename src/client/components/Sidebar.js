@@ -5,7 +5,7 @@ import { cls } from './cls'
 import { theme } from './theme'
 import { HintProvider } from './Hint'
 import { exportApp } from '../../core/extras/appTools'
-import { isTouch } from '../utils'
+import { assetPath, isTouch } from '../utils'
 import { downloadFile } from '../../core/extras/downloadFile'
 import { useRank } from './useRank'
 import { MouseLeftIcon } from './MouseLeftIcon'
@@ -397,7 +397,7 @@ function LogoBtn({ onClick }) {
       `}
       onClick={onClick}
     >
-      <img src='/logo.png' />
+      <img src={assetPath('/logo.png')} />
     </div>
   )
 }

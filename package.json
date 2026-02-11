@@ -58,6 +58,7 @@
     "viewer:build": "node scripts/build-viewer.mjs",
     "client:dev": "node scripts/build-client.mjs --dev",
     "client:build": "node scripts/build-client.mjs",
+    "client:build:platform": "node scripts/build.mjs --client-only --platform-client",
     "node-client:dev": "node scripts/build-node-client.mjs --dev",
     "node-client:build": "node scripts/build-node-client.mjs",
     "lint": "eslint . --ext .js,.jsx",

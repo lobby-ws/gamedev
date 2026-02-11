@@ -4,7 +4,7 @@ import { XIcon, CircleArrowRightIcon, HammerIcon, UserXIcon, Volume2Icon, Settin
 import { FieldBtn, FieldRange, FieldSwitch, FieldText, FieldToggle } from './Fields'
 import { useFullscreen } from './useFullscreen'
 import { useRank } from './useRank'
-import { isTouch } from '../utils'
+import { assetPath, isTouch } from '../utils'
 import { Group } from './sidebar/Group'
 import { cls } from './cls'
 import { theme } from './theme'
@@ -219,7 +219,7 @@ export function MainMenu({ world, open, onClose }) {
         <div className='mainmenu-panel'>
           <div className='mainmenu-head'>
             <div className='mainmenu-head-top'>
-              <img className='mainmenu-logo' src='/logo.png' />
+              <img className='mainmenu-logo' src={assetPath('/logo.png')} />
               <div className='mainmenu-head-spacer' />
               <div className='mainmenu-actions'>
                 {livekit.enabled && (
