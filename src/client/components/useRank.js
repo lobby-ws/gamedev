@@ -12,6 +12,7 @@ export function useRank(world, player) {
       const isBuilder = player.isBuilder()
       setPerms({ isAdmin, isBuilder })
     }
+    update()
     function onSettings(changes) {
       if (changes.rank) {
         update()

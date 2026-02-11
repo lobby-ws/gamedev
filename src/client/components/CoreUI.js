@@ -12,7 +12,6 @@ import { ControlPriorities } from '../../core/extras/ControlPriorities'
 // import { MenuMain } from './MenuMain'
 // import { MenuApp } from './MenuApp'
 import { ChevronDoubleUpIcon, HandIcon } from './Icons'
-import { Sidebar } from './Sidebar'
 import { MainMenu } from './MainMenu'
 
 export function CoreUI({ world, connectionStatus }) {
@@ -39,6 +38,8 @@ export function CoreUI({ world, connectionStatus }) {
     world.on('avatar', setAvatar)
     world.on('kick', setKicked)
     world.on('disconnect', setDisconnected)
+    const onOpenMenu = () => setMenuOpen(true)
+    world.on('open-menu', onOpenMenu)
     return () => {
       world.off('ready', setReady)
       world.off('player', setPlayer)
@@ -50,6 +51,7 @@ export function CoreUI({ world, connectionStatus }) {
       world.off('avatar', setAvatar)
       world.off('kick', setKicked)
       world.off('disconnect', setDisconnected)
+      world.off('open-menu', onOpenMenu)
     }
   }, [])
 
@@ -92,7 +94,6 @@ export function CoreUI({ world, connectionStatus }) {
       {disconnected && <Disconnected />}
       {!ui.reticleSuppressors && <Reticle world={world} />}
       {<Toast world={world} />}
-      {ready && <Sidebar world={world} ui={ui} onOpenMenu={() => setMenuOpen(true)} />}
       {ready && <MainMenu world={world} open={menuOpen} onClose={() => setMenuOpen(false)} />}
       {ready && <Chat world={world} />}
       {/* {ready && <Side world={world} player={player} menu={menu} />} */}
