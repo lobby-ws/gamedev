@@ -74,6 +74,15 @@ export function EditorLayout({ world, ui, children }) {
             `}
           >
             {children}
+            {/* Toolbar - logo always visible when ready, hammer only for builders */}
+            {ready && (
+              <EditorToolbar
+                world={world}
+                open={open}
+                onToggle={() => setOpen(!open)}
+                isBuilder={isBuilder}
+              />
+            )}
           </div>
 
           {/* Bottom panel */}
@@ -82,16 +91,6 @@ export function EditorLayout({ world, ui, children }) {
 
         {/* Right panel */}
         {showRight && <RightPanel world={world} />}
-
-        {/* Toolbar - logo always visible when ready, hammer only for builders */}
-        {ready && (
-          <EditorToolbar
-            world={world}
-            open={open}
-            onToggle={() => setOpen(!open)}
-            isBuilder={isBuilder}
-          />
-        )}
       </div>
     </HintProvider>
   )

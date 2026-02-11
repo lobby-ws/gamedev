@@ -871,22 +871,39 @@ function KickedOverlay({ code }) {
 function Reticle({ world }) {
   const [pointerLocked, setPointerLocked] = useState(world.controls.pointer.locked)
   const [buildMode, setBuildMode] = useState(world.builder.enabled)
+  const [rect, setRect] = useState(() => {
+    const vp = world.graphics?.viewport
+    if (vp) {
+      const r = vp.getBoundingClientRect()
+      return { top: r.top, left: r.left, width: r.width, height: r.height }
+    }
+    return null
+  })
   useEffect(() => {
     world.on('pointer-lock', setPointerLocked)
     world.on('build-mode', setBuildMode)
+    const updateRect = () => {
+      const vp = world.graphics?.viewport
+      if (!vp) return
+      const r = vp.getBoundingClientRect()
+      setRect({ top: r.top, left: r.left, width: r.width, height: r.height })
+    }
+    world.graphics?.on('resize', updateRect)
     return () => {
       world.off('pointer-lock', setPointerLocked)
       world.off('build-mode', setBuildMode)
+      world.graphics?.off('resize', updateRect)
     }
   }, [])
   const visible = isTouch ? true : pointerLocked
   if (!visible) return null
+  const style = rect
+    ? { position: 'absolute', top: rect.top, left: rect.left, width: rect.width, height: rect.height }
+    : { position: 'absolute', inset: 0 }
   return (
     <div
       className='reticle'
       css={css`
-        position: absolute;
-        inset: 0;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -899,6 +916,7 @@ function Reticle({ world }) {
           filter: drop-shadow(0 0 3px rgba(255, 255, 255, 0.15));
         }
       `}
+      style={style}
     >
       <div className='reticle-item' />
     </div>

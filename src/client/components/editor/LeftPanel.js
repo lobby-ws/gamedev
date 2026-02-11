@@ -106,8 +106,7 @@ function ActionsPanel({ world }) {
       css={css`
         padding: 0.5rem 0.75rem;
         .editor-actions-inner {
-          transform: scale(0.5);
-          transform-origin: bottom left;
+          transform: scale(0.8);
           pointer-events: none;
         }
       `}

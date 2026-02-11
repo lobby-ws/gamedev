@@ -300,17 +300,12 @@ export function Add({ world, hidden }) {
             border-bottom: 1px solid ${theme.borderLight};
             display: flex;
             align-items: center;
-          }
-          .add-title {
-            flex: 1;
-            font-weight: 500;
-            font-size: 1rem;
-            line-height: 1;
+            gap: 0.5rem;
           }
           .add-tabs {
             display: inline-flex;
             gap: 0.35rem;
-            margin-right: 0.5rem;
+            flex: 1;
           }
           .add-tab {
             border: 1px solid rgba(255, 255, 255, 0.12);
@@ -332,8 +327,8 @@ export function Add({ world, hidden }) {
           }
           .add-action,
           .add-toggle {
-            width: 2rem;
-            height: 2rem;
+            width: 1.5rem;
+            height: 1.5rem;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -341,6 +336,10 @@ export function Add({ world, hidden }) {
             &:hover {
               cursor: pointer;
               color: white;
+            }
+            &.hidden {
+              visibility: hidden;
+              pointer-events: none;
             }
           }
           .add-action.active {
@@ -643,7 +642,6 @@ export function Add({ world, hidden }) {
         `}
       >
         <div className='add-head'>
-          <div className='add-title'>Add</div>
           <div className='add-tabs'>
             <button
               type='button'
@@ -660,16 +658,19 @@ export function Add({ world, hidden }) {
               Recycle Bin
             </button>
           </div>
-          {tab === 'templates' && (
-            <>
-              <div className={cls('add-action', { active: createOpen })} onClick={openCreate} title='Create'>
-                <CirclePlusIcon size='1.125rem' />
-              </div>
-              <div className={cls('add-toggle', { active: trashMode })} onClick={() => setTrashMode(!trashMode)}>
-                <Trash2Icon size='1.125rem' />
-              </div>
-            </>
-          )}
+          <div
+            className={cls('add-action', { active: createOpen, hidden: tab !== 'templates' })}
+            onClick={openCreate}
+            title='Create'
+          >
+            <CirclePlusIcon size='1.125rem' />
+          </div>
+          <div
+            className={cls('add-toggle', { active: trashMode, hidden: tab !== 'templates' })}
+            onClick={() => tab === 'templates' && setTrashMode(!trashMode)}
+          >
+            <Trash2Icon size='1.125rem' />
+          </div>
         </div>
         <div className='add-content noscrollbar'>
           {tab === 'templates' ? (
