@@ -2,7 +2,7 @@ import { css } from '@firebolt-dev/css'
 import { HammerIcon } from 'lucide-react'
 import { editorTheme as theme } from './editorTheme'
 
-export function EditorToolbar({ world, open, onToggle, isBuilder }) {
+export function EditorToolbar({ world, open, onToggle, isBuilder, buildMode }) {
   return (
     <div
       className='editor-toolbar'
@@ -17,7 +17,7 @@ export function EditorToolbar({ world, open, onToggle, isBuilder }) {
       `}
     >
       <LogoBtn onClick={() => world.emit('open-menu')} />
-      {isBuilder && (
+      {buildMode && (
         <div
           className='editor-toolbar-toggle'
           css={css`

@@ -13,6 +13,7 @@ export function EditorLayout({ world, ui, children }) {
   const [player, setPlayer] = useState(() => world.entities.player)
   const { isBuilder } = useRank(world, player)
   const [open, setOpen] = useState(true)
+  const [buildMode, setBuildMode] = useState(false)
   const hasApp = !!ui.app
 
   useEffect(() => {
@@ -21,11 +22,22 @@ export function EditorLayout({ world, ui, children }) {
       setPlayer(world.entities.player)
     }
     const onPlayer = p => setPlayer(p)
+    const onBuildMode = enabled => {
+      setBuildMode(enabled)
+      if (enabled) {
+        setOpen(true)
+      } else {
+        setOpen(false)
+        world.ui.setApp(null)
+      }
+    }
     world.on('ready', onReady)
     world.on('player', onPlayer)
+    world.on('build-mode', onBuildMode)
     return () => {
       world.off('ready', onReady)
       world.off('player', onPlayer)
+      world.off('build-mode', onBuildMode)
     }
   }, [])
 
@@ -33,7 +45,7 @@ export function EditorLayout({ world, ui, children }) {
     if (ui.app && !open) setOpen(true)
   }, [ui.app])
 
-  const showEditor = ready && isBuilder && open
+  const showEditor = ready && isBuilder && open && buildMode
   const showRight = showEditor && hasApp
   const showBottom = showEditor && hasApp
 
@@ -81,6 +93,7 @@ export function EditorLayout({ world, ui, children }) {
                 open={open}
                 onToggle={() => setOpen(!open)}
                 isBuilder={isBuilder}
+                buildMode={buildMode}
               />
             )}
           </div>
