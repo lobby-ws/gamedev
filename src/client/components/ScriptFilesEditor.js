@@ -60,7 +60,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
   const [renameFileOpen, setRenameFileOpen] = useState(false)
   const [renameFilePath, setRenameFilePath] = useState('')
   const [renameFileError, setRenameFileError] = useState(null)
-  const [treeCollapsed, setTreeCollapsed] = useState(false)
+  const [treeCollapsed, setTreeCollapsed] = useState(true)
 
   const scriptFiles = scriptRoot?.scriptFiles
   const entryPath = scriptRoot?.scriptEntry || ''

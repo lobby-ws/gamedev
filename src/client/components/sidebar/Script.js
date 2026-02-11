@@ -990,14 +990,6 @@ export function Script({ world, hidden }) {
       `}
     >
       <div className='script-head'>
-        <div className='script-title'>Script: {app.blueprint?.name}</div>
-        <div className='script-note'>
-          {moduleRoot
-            ? handle?.dirtyCount
-              ? `${handle.dirtyCount} unsaved file${handle.dirtyCount === 1 ? '' : 's'}`
-              : 'Module sources'
-            : 'Code is managed by dev server'}
-        </div>
         <div className='script-actions'>
           {moduleRoot && (
             <>
