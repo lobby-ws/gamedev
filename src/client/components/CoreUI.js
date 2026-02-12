@@ -327,13 +327,16 @@ function Chat({ world }) {
   const inputRef = useRef()
   const [msg, setMsg] = useState('')
   const [active, setActive] = useState(false)
+  const [buildMode, setBuildMode] = useState(false)
   useEffect(() => {
     const onToggle = () => {
       setActive(value => !value)
     }
     world.on('sidebar-chat-toggle', onToggle)
+    world.on('build-mode', setBuildMode)
     return () => {
       world.off('sidebar-chat-toggle', onToggle)
+      world.off('build-mode', setBuildMode)
     }
   }, [])
   useEffect(() => {
@@ -353,11 +356,12 @@ function Chat({ world }) {
   }, [active])
   useEffect(() => {
     if (active) {
-      inputRef.current.focus()
+      inputRef.current?.focus()
     } else {
-      inputRef.current.blur()
+      inputRef.current?.blur()
     }
   }, [active])
+  if (buildMode) return null
   const send = async e => {
     if (world.controls.pointer.locked) {
       setTimeout(() => setActive(false), 10)
