@@ -965,6 +965,7 @@ function ReticleSVG({ reticle, buildMode }) {
 function Reticle({ world }) {
   const [pointerLocked, setPointerLocked] = useState(world.controls.pointer.locked)
   const [buildMode, setBuildMode] = useState(world.builder.enabled)
+  const [reticle, setReticle] = useState(() => world.ui.state.reticle)
   const [rect, setRect] = useState(() => {
     const vp = world.graphics?.viewport
     if (vp) {
@@ -976,6 +977,7 @@ function Reticle({ world }) {
   useEffect(() => {
     world.on('pointer-lock', setPointerLocked)
     world.on('build-mode', setBuildMode)
+    world.on('reticle', setReticle)
     const updateRect = () => {
       const vp = world.graphics?.viewport
       if (!vp) return
@@ -986,6 +988,7 @@ function Reticle({ world }) {
     return () => {
       world.off('pointer-lock', setPointerLocked)
       world.off('build-mode', setBuildMode)
+      world.off('reticle', setReticle)
       world.graphics?.off('resize', updateRect)
     }
   }, [])
