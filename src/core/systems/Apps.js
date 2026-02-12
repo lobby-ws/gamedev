@@ -223,6 +223,10 @@ export class Apps extends System {
         const urlParams = new URLSearchParams(window.location.search)
         return urlParams.get(key)
       },
+      setReticle(entity, options) {
+        if (!world.ui) return
+        world.ui.setReticle(options)
+      },
       setQueryParam(entity, key, value) {
         if (!isBrowser) {
           console.error('getQueryParam() must be called in the browser')

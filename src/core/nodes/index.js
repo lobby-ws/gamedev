@@ -15,6 +15,7 @@ export { Nametag as nametag } from './Nametag.js'
 export { Particles as particles } from './Particles.js'
 
 export { Sky as sky } from './Sky.js'
+export { Water as water } from './Water.js'
 
 export { UI as ui } from './UI.js'
 export { UIView as uiview } from './UIView.js'
