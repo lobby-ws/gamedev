@@ -146,7 +146,7 @@ export function Script({ world, hidden }) {
         ? !!world.aiScripts?.isRootPending?.(moduleRoot.id)
         : false
   )
-  const aiLocked = aiPending || !!handle?.aiLocked
+  const aiLocked = aiPending
   const canBuild = !!world.builder?.canBuild?.()
   const aiAccessIssue = world.isAdminClient
     ? 'AI requests are not available on admin connections.'
