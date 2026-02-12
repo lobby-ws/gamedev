@@ -12,7 +12,6 @@ import { theme } from '../theme'
 import { isArray } from 'lodash-es'
 import { ScriptFilesEditor } from '../ScriptFilesEditor'
 import { buildScriptGroups, getScriptGroupMain } from '../../../core/extras/blueprintGroups'
-import { storage } from '../../../core/storage'
 
 function hasScriptFiles(blueprint) {
   return blueprint?.scriptFiles && typeof blueprint.scriptFiles === 'object' && !isArray(blueprint.scriptFiles)
@@ -120,7 +119,6 @@ export function Script({ world, hidden }) {
   const app = world.ui.state.app
   const targetBlueprintId = app?.data?.blueprint || app?.blueprint?.id || null
   const containerRef = useRef()
-  const resizeRef = useRef()
   const [handle, setHandle] = useState(null)
   const [scriptRoot, setScriptRoot] = useState(() =>
     resolveScriptRootBlueprint(world.blueprints.get(app.data.blueprint) || app.blueprint, world)
@@ -560,31 +558,6 @@ export function Script({ world, hidden }) {
       active.blur()
     }
   }, [hidden])
-  useEffect(() => {
-    const elem = resizeRef.current
-    const container = containerRef.current
-    container.style.width = `${storage.get('code-editor-width', 500)}px`
-    function onPointerDown(e) {
-      elem.addEventListener('pointermove', onPointerMove)
-      elem.addEventListener('pointerup', onPointerUp)
-      e.currentTarget.setPointerCapture(e.pointerId)
-    }
-    function onPointerMove(e) {
-      let newWidth = container.offsetWidth + e.movementX
-      if (newWidth < 250) newWidth = 250
-      container.style.width = `${newWidth}px`
-      storage.set('code-editor-width', newWidth)
-    }
-    function onPointerUp(e) {
-      e.currentTarget.releasePointerCapture(e.pointerId)
-      elem.removeEventListener('pointermove', onPointerMove)
-      elem.removeEventListener('pointerup', onPointerUp)
-    }
-    elem.addEventListener('pointerdown', onPointerDown)
-    return () => {
-      elem.removeEventListener('pointerdown', onPointerDown)
-    }
-  }, [])
   return (
     <div
       ref={containerRef}
@@ -1010,14 +983,6 @@ export function Script({ world, hidden }) {
             transform: rotate(360deg);
           }
         }
-        .script-resizer {
-          position: absolute;
-          top: 0;
-          bottom: 0;
-          right: -5px;
-          width: 10px;
-          cursor: ew-resize;
-        }
         &.hidden {
           opacity: 0;
           pointer-events: none;
@@ -1025,14 +990,6 @@ export function Script({ world, hidden }) {
       `}
     >
       <div className='script-head'>
-        <div className='script-title'>Script: {app.blueprint?.name}</div>
-        <div className='script-note'>
-          {moduleRoot
-            ? handle?.dirtyCount
-              ? `${handle.dirtyCount} unsaved file${handle.dirtyCount === 1 ? '' : 's'}`
-              : 'Module sources'
-            : 'Code is managed by dev server'}
-        </div>
         <div className='script-actions'>
           {moduleRoot && (
             <>
@@ -1259,7 +1216,6 @@ export function Script({ world, hidden }) {
       <div className={cls('script-editor-shell', { collapsed: editorCollapsed })}>
         <ScriptFilesEditor scriptRoot={moduleRoot} world={world} onHandle={setHandle} aiLocked={aiLocked} />
       </div>
-      <div className='script-resizer' ref={resizeRef} />
     </div>
   )
 }

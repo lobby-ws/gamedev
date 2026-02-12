@@ -12,7 +12,6 @@ import { ControlPriorities } from '../../core/extras/ControlPriorities'
 // import { MenuMain } from './MenuMain'
 // import { MenuApp } from './MenuApp'
 import { ChevronDoubleUpIcon, HandIcon } from './Icons'
-import { Sidebar } from './Sidebar'
 import { MainMenu } from './MainMenu'
 
 export function CoreUI({ world, connectionStatus }) {
@@ -39,6 +38,8 @@ export function CoreUI({ world, connectionStatus }) {
     world.on('avatar', setAvatar)
     world.on('kick', setKicked)
     world.on('disconnect', setDisconnected)
+    const onOpenMenu = () => setMenuOpen(true)
+    world.on('open-menu', onOpenMenu)
     return () => {
       world.off('ready', setReady)
       world.off('player', setPlayer)
@@ -50,6 +51,7 @@ export function CoreUI({ world, connectionStatus }) {
       world.off('avatar', setAvatar)
       world.off('kick', setKicked)
       world.off('disconnect', setDisconnected)
+      world.off('open-menu', onOpenMenu)
     }
   }, [])
 
@@ -92,7 +94,6 @@ export function CoreUI({ world, connectionStatus }) {
       {disconnected && <Disconnected />}
       {!ui.reticleSuppressors && <Reticle world={world} />}
       {<Toast world={world} />}
-      {ready && <Sidebar world={world} ui={ui} onOpenMenu={() => setMenuOpen(true)} />}
       {ready && <MainMenu world={world} open={menuOpen} onClose={() => setMenuOpen(false)} />}
       {ready && <Chat world={world} />}
       {/* {ready && <Side world={world} player={player} menu={menu} />} */}
@@ -964,30 +965,45 @@ function ReticleSVG({ reticle, buildMode }) {
 function Reticle({ world }) {
   const [pointerLocked, setPointerLocked] = useState(world.controls.pointer.locked)
   const [buildMode, setBuildMode] = useState(world.builder.enabled)
-  const [reticle, setReticle] = useState(() => world.ui.state.reticle)
+  const [rect, setRect] = useState(() => {
+    const vp = world.graphics?.viewport
+    if (vp) {
+      const r = vp.getBoundingClientRect()
+      return { top: r.top, left: r.left, width: r.width, height: r.height }
+    }
+    return null
+  })
   useEffect(() => {
     world.on('pointer-lock', setPointerLocked)
     world.on('build-mode', setBuildMode)
-    world.on('reticle', setReticle)
+    const updateRect = () => {
+      const vp = world.graphics?.viewport
+      if (!vp) return
+      const r = vp.getBoundingClientRect()
+      setRect({ top: r.top, left: r.left, width: r.width, height: r.height })
+    }
+    world.graphics?.on('resize', updateRect)
     return () => {
       world.off('pointer-lock', setPointerLocked)
       world.off('build-mode', setBuildMode)
-      world.off('reticle', setReticle)
+      world.graphics?.off('resize', updateRect)
     }
   }, [])
   const visible = isTouch ? true : pointerLocked
   if (!visible) return null
+  const style = rect
+    ? { position: 'absolute', top: rect.top, left: rect.left, width: rect.width, height: rect.height }
+    : { position: 'absolute', inset: 0 }
   return (
     <div
       className='reticle'
       css={css`
-        position: absolute;
-        inset: 0;
         display: flex;
         align-items: center;
         justify-content: center;
         pointer-events: none;
       `}
+      style={style}
     >
       <ReticleSVG reticle={reticle} buildMode={buildMode} />
     </div>

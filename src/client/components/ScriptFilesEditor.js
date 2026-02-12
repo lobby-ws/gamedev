@@ -60,6 +60,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
   const [renameFileOpen, setRenameFileOpen] = useState(false)
   const [renameFilePath, setRenameFilePath] = useState('')
   const [renameFileError, setRenameFileError] = useState(null)
+  const [treeCollapsed, setTreeCollapsed] = useState(true)
 
   const scriptFiles = scriptRoot?.scriptFiles
   const entryPath = scriptRoot?.scriptEntry || ''
@@ -2143,6 +2144,16 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
           padding: 0.75rem;
           overflow-y: auto;
         }
+        .script-files-tree.collapsed {
+          width: 1.2rem;
+          padding: 0.4rem 0.2rem;
+        }
+        .script-files-tree.collapsed .script-files-heading-row {
+          justify-content: center;
+        }
+        .script-files-tree.collapsed .script-files-heading {
+          display: none;
+        }
         .script-files-heading {
           font-size: 0.75rem;
           text-transform: uppercase;
@@ -2161,18 +2172,29 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
           display: flex;
           align-items: center;
           gap: 0.35rem;
+          margin-bottom: 0.5rem;
+        }
+        .script-files-toggle {
+          width: auto;
+          min-width: 1.2rem;
+          height: 0.9rem;
+          padding: 0 0.2rem;
+          border-radius: 0.2rem;
+          border-color: rgba(255, 255, 255, 0.25);
+          font-size: 0.5rem;
+          letter-spacing: 0;
         }
         .script-files-add {
-          height: 1.4rem;
-          padding: 0 0.6rem;
+          height: 1.2rem;
+          padding: 0 0.45rem;
           display: flex;
           align-items: center;
           justify-content: center;
-          border-radius: 999px;
+          border-radius: 0.2rem;
           border: 1px solid rgba(255, 255, 255, 0.15);
           background: transparent;
           color: rgba(255, 255, 255, 0.75);
-          font-size: 0.6rem;
+          font-size: 0.5rem;
           text-transform: uppercase;
           letter-spacing: 0.08em;
           &:hover {
@@ -2467,6 +2489,8 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
         onDeleteSelectedFile={deleteSelectedFile}
         onMoveSelectedToShared={moveSelectedToShared}
         onSelectPath={path => setSelectedPath(path)}
+        treeCollapsed={treeCollapsed}
+        onToggleTree={() => setTreeCollapsed(current => !current)}
         editorReady={editorReady}
         saving={saving}
         aiLocked={aiLocked}
