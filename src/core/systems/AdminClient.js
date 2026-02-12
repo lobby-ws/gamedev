@@ -447,4 +447,38 @@ export class AdminClient extends System {
     if (request) return this.request(payload, { timeoutMs })
     this.send(payload)
   }
+
+  async runClean({ dryrun } = {}) {
+    if (!this.adminUrl) throw new Error('admin_url_missing')
+    if (this.requireCode && !this.code) throw new Error('admin_code_missing')
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(this.code ? { 'X-Admin-Code': this.code } : {}),
+    }
+    const res = await fetch(joinUrl(this.adminUrl, '/admin/clean'), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ dryrun: !!dryrun }),
+    })
+    if (res.status === 403) {
+      const error = new Error('admin_required')
+      error.code = 'admin_required'
+      throw error
+    }
+    if (!res.ok) {
+      let data = null
+      try {
+        data = await res.json()
+      } catch {}
+      const code = data?.error || `clean_failed:${res.status}`
+      const error = new Error(code)
+      error.code = code
+      throw error
+    }
+    try {
+      return await res.json()
+    } catch {
+      return { ok: true }
+    }
+  }
 }

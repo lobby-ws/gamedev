@@ -67,6 +67,42 @@ function sanitizeName(value) {
   return value.replace(/[\\/]/g, "-");
 }
 
+function isHashedScriptEntryPath(relPath) {
+  if (!relPath || typeof relPath !== "string") return false;
+  const normalized = relPath.replace(/\\/g, "/").trim();
+  if (!normalized) return false;
+  const filename = path.basename(normalized);
+  const ext = path.extname(filename).toLowerCase();
+  if (ext !== ".js") return false;
+  const stem = filename.slice(0, -ext.length);
+  return /^[a-f0-9]{64}$/i.test(stem);
+}
+
+function normalizeSingleHashedScriptEntry(scriptFiles, scriptEntry) {
+  if (!scriptFiles || typeof scriptFiles !== "object" || Array.isArray(scriptFiles)) {
+    return { scriptFiles: null, scriptEntry };
+  }
+  const entries = Object.entries(scriptFiles);
+  if (entries.length !== 1) {
+    return { scriptFiles, scriptEntry };
+  }
+  const [onlyPath, onlyUrl] = entries[0];
+  if (typeof onlyUrl !== "string" || !onlyUrl) {
+    return { scriptFiles, scriptEntry };
+  }
+  const configuredEntry =
+    typeof scriptEntry === "string" && Object.prototype.hasOwnProperty.call(scriptFiles, scriptEntry)
+      ? scriptEntry
+      : onlyPath;
+  if (!isHashedScriptEntryPath(configuredEntry)) {
+    return { scriptFiles, scriptEntry };
+  }
+  return {
+    scriptFiles: { "index.js": onlyUrl },
+    scriptEntry: "index.js",
+  };
+}
+
 function clonePropValue(value) {
   if (value === null || typeof value !== "object") return value;
   return Array.isArray(value) ? value.slice() : { ...value };
@@ -121,8 +157,12 @@ async function extractHyp({ hypPath, projectAbs }) {
   }
 
   // Write module scripts if present
-  const scriptFiles = blueprint.scriptFiles && typeof blueprint.scriptFiles === "object" ? blueprint.scriptFiles : null;
-  const scriptEntry = typeof blueprint.scriptEntry === "string" && blueprint.scriptEntry.trim() ? blueprint.scriptEntry.trim() : "index.js";
+  const rawScriptFiles = blueprint.scriptFiles && typeof blueprint.scriptFiles === "object" ? blueprint.scriptFiles : null;
+  const rawScriptEntry =
+    typeof blueprint.scriptEntry === "string" && blueprint.scriptEntry.trim() ? blueprint.scriptEntry.trim() : "index.js";
+  const normalizedScripts = normalizeSingleHashedScriptEntry(rawScriptFiles, rawScriptEntry);
+  const scriptFiles = normalizedScripts.scriptFiles;
+  const scriptEntry = normalizedScripts.scriptEntry;
   let wroteAnyScript = false;
   if (scriptFiles && Object.keys(scriptFiles).length) {
     for (const [relPath, url] of Object.entries(scriptFiles)) {

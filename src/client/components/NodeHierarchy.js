@@ -220,7 +220,7 @@ function renderHierarchy(nodes, depth = 0, selectedNode, setSelectedNode) {
           onClick={() => setSelectedNode(node)}
         >
           <Icon size={14} />
-          <span>{node.id === '$root' ? 'app' : node.id}</span>
+          <span>{node.id === '$root' ? 'object' : node.id}</span>
         </div>
         {hasChildren && renderHierarchy(children, depth + 1, selectedNode, setSelectedNode)}
       </div>

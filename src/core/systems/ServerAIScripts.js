@@ -1,10 +1,12 @@
 import fs from 'fs'
-import path from 'path'
-import { streamText } from 'ai'
-import { createAnthropic } from '@ai-sdk/anthropic'
-import { createOpenAI } from '@ai-sdk/openai'
 import { System } from './System'
+import { createServerAIRunner, readServerAIConfig } from './ServerAIRunner'
 import { isValidScriptPath } from '../blueprintValidation'
+import { MAX_CONTEXT_LOG_ENTRIES, normalizeAiContextLogs, normalizeAiRequest } from '../ai/AIRequestContract'
+import { DocsSearchService, resolveDocsPath, resolveDocsRoot } from '../ai/DocsSearchService'
+import { buildUnifiedScriptPrompts } from '../ai/AIScriptPrompt'
+import { parseAiScriptResponse } from '../ai/AIScriptResponse'
+import { createSearchDocsTool } from '../ai/SearchDocsTool'
 
 function hasScriptFiles(blueprint) {
   return blueprint?.scriptFiles && typeof blueprint.scriptFiles === 'object' && !Array.isArray(blueprint.scriptFiles)
@@ -34,193 +36,73 @@ function resolveScriptRootBlueprint(blueprint, world) {
   return null
 }
 
-const aiDocs = loadAiDocs()
 const docsRoot = resolveDocsRoot()
+const ANTHROPIC_MAX_OUTPUT_TOKENS = 8192
+const AI_TOOL_LOOP_BUDGETS = Object.freeze({
+  maxSteps: 10,
+  maxToolCalls: 4,
+  timeoutMs: 45_000,
+})
+const DOCS_TOOL_LIMITS = Object.freeze({
+  maxQueryChars: 240,
+  maxResults: 6,
+  maxExcerptChars: 420,
+  maxResponseChars: 9_000,
+})
 
-function loadAiDocs() {
-  const candidates = [
-    path.join(process.cwd(), 'src/client/public/ai-docs.md'),
-    path.join(process.cwd(), 'build/public/ai-docs.md'),
-    path.join(process.cwd(), 'public/ai-docs.md'),
-  ]
-  for (const candidate of candidates) {
-    try {
-      if (!fs.existsSync(candidate)) continue
-      return fs.readFileSync(candidate, 'utf8')
-    } catch (err) {
-      // continue searching other paths
-    }
+function buildFixPromptContext(context, serverLogs) {
+  const baseContext = context && typeof context === 'object' ? { ...context } : {}
+  delete baseContext.clientLogs
+  delete baseContext.serverLogs
+
+  const clientLogs = normalizeAiContextLogs(context?.clientLogs)
+  const normalizedServerLogs = normalizeAiContextLogs(serverLogs)
+  if (clientLogs.length) {
+    baseContext.clientLogs = clientLogs
   }
-  return ''
-}
-
-function resolveDocsRoot() {
-  const candidates = [
-    path.join(process.cwd(), 'docs'),
-    path.join(process.cwd(), 'build', 'docs'),
-    path.join(process.cwd(), 'public', 'docs'),
-  ]
-  for (const candidate of candidates) {
-    try {
-      if (!fs.existsSync(candidate)) continue
-      const stats = fs.statSync(candidate)
-      if (stats.isDirectory()) return candidate
-    } catch (err) {
-      // continue searching other paths
-    }
+  if (normalizedServerLogs.length) {
+    baseContext.serverLogs = normalizedServerLogs
   }
-  return null
-}
-
-const fencePattern = /^```(?:\w+)?\s*([\s\S]*?)\s*```$/
-
-function stripCodeFences(text) {
-  if (!text) return ''
-  const cleaned = text.trim()
-  const match = cleaned.match(fencePattern)
-  if (match) return match[1]
-  return cleaned
-}
-
-function extractJson(text) {
-  const cleaned = stripCodeFences(text).trim()
-  if (!cleaned) return null
-  try {
-    return JSON.parse(cleaned)
-  } catch (err) {
-    const first = cleaned.indexOf('{')
-    const last = cleaned.lastIndexOf('}')
-    if (first === -1 || last === -1 || last <= first) return null
-    const slice = cleaned.slice(first, last + 1)
-    try {
-      return JSON.parse(slice)
-    } catch (err2) {
-      return null
-    }
-  }
-}
-
-function normalizeAiPatchSet(output) {
-  if (!output) return null
-  const files = Array.isArray(output)
-    ? output
-    : output.files || output.changes || output.patches
-  if (!Array.isArray(files)) return null
-  const normalized = []
-  for (const entry of files) {
-    if (!entry) continue
-    const path = entry.path || entry.relPath || entry.file
-    const content = entry.content ?? entry.text ?? entry.code ?? entry.nextText
-    if (!path || typeof content !== 'string') continue
-    normalized.push({ path, content })
-  }
-  if (!normalized.length) return null
-  return {
-    summary: typeof output.summary === 'string' ? output.summary : '',
-    files: normalized,
-  }
-}
-
-function normalizeAiAttachments(input) {
-  if (!Array.isArray(input)) return []
-  const output = []
-  const seen = new Set()
-  for (const item of input) {
-    if (!item) continue
-    const type = item.type === 'doc' || item.type === 'script' ? item.type : null
-    const filePath = typeof item.path === 'string' ? item.path.trim() : ''
-    if (!type || !filePath) continue
-    const key = `${type}:${filePath}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    output.push({ type, path: filePath })
-    if (output.length >= 12) break
-  }
-  return output
-}
-
-function resolveDocPath(docPath) {
-  if (!docsRoot || !docPath) return null
-  if (docPath.includes('..')) return null
-  const normalized = docPath.replace(/\\/g, '/')
-  if (!normalized.startsWith('docs/')) return null
-  const rel = normalized.slice('docs/'.length)
-  if (!rel) return null
-  const ext = path.extname(rel).toLowerCase()
-  if (ext !== '.md' && ext !== '.mdx') return null
-  const fullPath = path.resolve(docsRoot, rel)
-  const rootWithSep = docsRoot.endsWith(path.sep) ? docsRoot : docsRoot + path.sep
-  if (!fullPath.startsWith(rootWithSep)) return null
-  return fullPath
-}
-
-function buildSystemPrompt({ entryPath, scriptFormat }) {
-  const formatNote =
-    scriptFormat === 'legacy-body'
-      ? `The entry file "${entryPath}" uses legacy-body format. It is not a standard module. Keep top-level imports, do not add export statements, and keep the file as a script body.`
-      : `The entry file "${entryPath}" is a standard ES module that must export a default function (world, app, fetch, props, setTimeout) => void.`
-  return [
-    aiDocs ? `${aiDocs}\n\n==============` : null,
-    'You are editing a multi-file module script for a 3D app runtime.',
-    'Return JSON only. Do not use markdown or code fences.',
-    'Output format:',
-    '{ "summary": "short description", "files": [{ "path": "path", "content": "full file text" }] }',
-    'Rules:',
-    '- You may update existing files or create new files.',
-    '- Provide full file contents for each changed or new file.',
-    '- Do not include unchanged files.',
-    '- Do not delete files.',
-    formatNote,
-  ]
-    .filter(Boolean)
-    .join('\n')
-}
-
-function buildUserPrompt({ mode, prompt, error, entryPath, scriptFormat, fileMap, attachmentMap }) {
-  const header = [
-    `Entry path: ${entryPath}`,
-    `Script format: ${scriptFormat}`,
-    `Mode: ${mode}`,
-  ]
-  if (mode === 'fix') {
-    header.push(`Error:\n${JSON.stringify(error, null, 2)}`)
-  } else {
-    header.push(`Request: ${prompt}`)
-  }
-  if (attachmentMap && Object.keys(attachmentMap).length) {
-    header.push('Attached files (full text):')
-    header.push(JSON.stringify(attachmentMap, null, 2))
-  }
-  header.push('Files (JSON map of path to content):')
-  header.push(JSON.stringify(fileMap, null, 2))
-  return header.join('\n\n')
+  return baseContext
 }
 
 export class ServerAIScripts extends System {
   constructor(world) {
     super(world)
-    this.provider = process.env.AI_PROVIDER || null
-    this.model = process.env.AI_MODEL || null
-    this.effort = process.env.AI_EFFORT || 'low'
-    this.apiKey = process.env.AI_API_KEY || null
-    this.client = null
-    if (this.provider && this.model && this.apiKey) {
-      if (this.provider === 'openai') {
-        this.client = new OpenAIClient(this.apiKey, this.model, this.effort)
-      } else if (this.provider === 'anthropic') {
-        this.client = new AnthropicClient(this.apiKey, this.model)
-      } else if (this.provider === 'xai') {
-        this.client = new XAIClient(this.apiKey, this.model)
-      } else if (this.provider === 'google') {
-        this.client = new GoogleClient(this.apiKey, this.model)
-      }
-    }
+    const aiConfig = readServerAIConfig()
+    this.provider = aiConfig.provider
+    this.model = aiConfig.model
+    this.effort = aiConfig.effort
+    this.apiKey = aiConfig.apiKey
+    this.toolLoopEnabled = !!aiConfig.toolLoopEnabled
+    this.client = createServerAIRunner(aiConfig, {
+      anthropicMaxOutputTokens: ANTHROPIC_MAX_OUTPUT_TOKENS,
+    })
+    this.docsSearch = new DocsSearchService({
+      docsRoot,
+      ...DOCS_TOOL_LIMITS,
+    })
+    const searchDocsTool = createSearchDocsTool({
+      docsSearch: this.docsSearch,
+      limits: DOCS_TOOL_LIMITS,
+    })
+    this.tools = this.toolLoopEnabled && searchDocsTool
+      ? {
+          searchDocs: searchDocsTool,
+        }
+      : null
     this.enabled = !!this.client
   }
 
+  getRecentServerLogs(appId, limit = 20) {
+    if (typeof this.world.scripts?.getRecentServerLogs !== 'function') return []
+    return this.world.scripts.getRecentServerLogs(appId, limit)
+  }
+
   handleRequest = async (socket, data = {}) => {
-    const requestId = data?.requestId || null
-    let scriptRootId = typeof data?.scriptRootId === 'string' ? data.scriptRootId : null
+    const request = normalizeAiRequest(data, { fallbackMode: 'edit' })
+    const requestId = request.requestId
+    let scriptRootId = request.target.scriptRootId || null
     if (!this.enabled) {
       this.sendError(socket, {
         requestId,
@@ -243,11 +125,11 @@ export class ServerAIScripts extends System {
     if (scriptRootId) {
       blueprint = this.world.blueprints.get(scriptRootId)
     }
-    if (!blueprint && typeof data?.blueprintId === 'string') {
-      blueprint = this.world.blueprints.get(data.blueprintId)
+    if (!blueprint && request.target.blueprintId) {
+      blueprint = this.world.blueprints.get(request.target.blueprintId)
     }
-    if (!blueprint && typeof data?.appId === 'string') {
-      const app = this.world.entities.get(data.appId)
+    if (!blueprint && request.target.appId) {
+      const app = this.world.entities.get(request.target.appId)
       blueprint = app?.blueprint || this.world.blueprints.get(app?.data?.blueprint)
     }
     const scriptRoot = resolveScriptRootBlueprint(blueprint, this.world)
@@ -280,9 +162,9 @@ export class ServerAIScripts extends System {
       })
       return
     }
-    const mode = data?.mode === 'fix' ? 'fix' : 'edit'
-    const prompt = typeof data?.prompt === 'string' ? data.prompt.trim() : ''
-    const error = data?.error || null
+    const mode = request.mode === 'fix' ? 'fix' : 'edit'
+    const prompt = request.prompt
+    const error = request.error || null
     if (mode === 'edit' && !prompt) {
       this.sendError(socket, {
         requestId,
@@ -301,13 +183,16 @@ export class ServerAIScripts extends System {
       })
       return
     }
+    const appId = request.target.appId || null
+    const serverLogs =
+      mode === 'fix' && appId ? this.getRecentServerLogs(appId, MAX_CONTEXT_LOG_ENTRIES) : []
+    const promptContext = mode === 'fix' ? buildFixPromptContext(request.context, serverLogs) : null
     try {
       const fileMap = await this.loadFileMap(scriptRoot.scriptFiles)
       const scriptFormat = scriptRoot.scriptFormat === 'legacy-body' ? 'legacy-body' : 'module'
-      const attachments = normalizeAiAttachments(data?.attachments)
+      const attachments = request.attachments
       const attachmentMap = await this.loadAttachmentMap(attachments, fileMap)
-      const systemPrompt = buildSystemPrompt({ entryPath, scriptFormat })
-      const userPrompt = buildUserPrompt({
+      const { systemPrompt, userPrompt } = buildUnifiedScriptPrompts({
         mode,
         prompt,
         error,
@@ -315,21 +200,19 @@ export class ServerAIScripts extends System {
         scriptFormat,
         fileMap,
         attachmentMap,
+        context: promptContext,
       })
-      const raw = await this.client.generate(systemPrompt, userPrompt)
-      const parsed = extractJson(raw)
-      const normalized = normalizeAiPatchSet(parsed)
+      const generation = await this.client.generate(systemPrompt, userPrompt, {
+        ...AI_TOOL_LOOP_BUDGETS,
+        tools: this.tools,
+      })
+      this.logGenerationTelemetry(generation, { requestId, mode, scriptRootId })
+      const raw = generation.text
+      const normalized = parseAiScriptResponse(raw, { validatePath: isValidScriptPath })
       if (!normalized) {
         throw new Error('invalid_ai_response')
       }
-      const files = new Map()
-      for (const file of normalized.files) {
-        if (!isValidScriptPath(file.path)) continue
-        if (!files.has(file.path)) {
-          files.set(file.path, file.content)
-        }
-      }
-      const outputFiles = Array.from(files, ([path, content]) => ({ path, content }))
+      const outputFiles = normalized.files
       if (!outputFiles.length) {
         throw new Error('empty_ai_patch')
       }
@@ -344,7 +227,6 @@ export class ServerAIScripts extends System {
         files: outputFiles,
       })
     } catch (err) {
-      console.log(err)
       console.error('[ai-scripts] request failed', err)
       this.sendError(socket, {
         requestId,
@@ -387,7 +269,7 @@ export class ServerAIScripts extends System {
         continue
       }
       if (attachment.type === 'doc') {
-        const fullPath = resolveDocPath(attachment.path)
+        const fullPath = resolveDocsPath(attachment.path, docsRoot)
         if (!fullPath) continue
         try {
           const content = await fs.promises.readFile(fullPath, 'utf8')
@@ -408,118 +290,18 @@ export class ServerAIScripts extends System {
       message,
     })
   }
-}
 
-class OpenAIClient {
-  constructor(apiKey, model, effort) {
-    this.model = model
-    this.effort = effort
-    this.provider = createOpenAI({ apiKey })
-  }
-
-  async generate(systemPrompt, userPrompt) {
-    const result = streamText({
-      model: this.provider(this.model),
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      providerOptions: {
-        openai: {
-          reasoningEffort: this.effort || undefined,
-        },
-      },
-    })
-    let output = ''
-    for await (const delta of result.textStream) {
-      output += delta
+  logGenerationTelemetry(generation, extra = {}) {
+    if (!generation || typeof generation !== 'object') return
+    const telemetry = {
+      finishReason: generation.finishReason || 'unknown',
+      steps: Number.isFinite(generation.stepCount) ? generation.stepCount : 1,
+      toolCalls: Number.isFinite(generation.toolCallCount) ? generation.toolCallCount : 0,
     }
-    return output
-  }
-}
-
-class AnthropicClient {
-  constructor(apiKey, model) {
-    this.model = model
-    this.maxOutputTokens = 8192
-    this.provider = createAnthropic({ apiKey })
-  }
-
-  async generate(systemPrompt, userPrompt) {
-    const result = streamText({
-      model: this.provider(this.model),
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      maxOutputTokens: this.maxOutputTokens,
-    })
-    let output = ''
-    for await (const delta of result.textStream) {
-      output += delta
+    for (const [key, value] of Object.entries(extra)) {
+      if (value == null || value === '') continue
+      telemetry[key] = value
     }
-    return output
-  }
-}
-
-class XAIClient {
-  constructor(apiKey, model) {
-    this.apiKey = apiKey
-    this.model = model
-    this.url = 'https://api.x.ai/v1/chat/completions'
-  }
-
-  async generate(systemPrompt, userPrompt) {
-    const resp = await fetch(this.url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: this.model,
-        stream: false,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-      }),
-    })
-    if (!resp.ok) {
-      throw new Error(`xai_request_failed:${resp.status}`)
-    }
-    const data = await resp.json()
-    return data.choices?.[0]?.message?.content || ''
-  }
-}
-
-class GoogleClient {
-  constructor(apiKey, model) {
-    this.apiKey = apiKey
-    this.url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
-  }
-
-  async generate(systemPrompt, userPrompt) {
-    const resp = await fetch(this.url, {
-      method: 'POST',
-      headers: {
-        'x-goog-api-key': this.apiKey,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        system_instruction: { parts: { text: systemPrompt } },
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: userPrompt }],
-          },
-        ],
-      }),
-    })
-    if (!resp.ok) {
-      throw new Error(`google_request_failed:${resp.status}`)
-    }
-    const data = await resp.json()
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+    console.info('[ai-scripts] generation', telemetry)
   }
 }

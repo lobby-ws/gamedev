@@ -1,16 +1,30 @@
 import fs from 'fs'
-import path from 'path'
-import { streamText } from 'ai'
-import { createAnthropic } from '@ai-sdk/anthropic'
-import { createOpenAI } from '@ai-sdk/openai'
 import { System } from './System'
+import { createServerAIRunner, readServerAIConfig } from './ServerAIRunner'
 import { hashFile } from '../utils-server'
 import { isValidScriptPath } from '../blueprintValidation'
+import { DocsSearchService, resolveDocsPath, resolveDocsRoot } from '../ai/DocsSearchService'
+import { normalizeAiRequest } from '../ai/AIRequestContract'
+import { buildUnifiedScriptPrompts } from '../ai/AIScriptPrompt'
+import { parseAiScriptResponse } from '../ai/AIScriptResponse'
+import { createSearchDocsTool } from '../ai/SearchDocsTool'
 
-const aiDocs = loadAiDocs()
 const docsRoot = resolveDocsRoot()
-const fencePattern = /^```(?:\w+)?\s*([\s\S]*?)\s*```$/
 const DEFAULT_ENTRY = 'index.js'
+const BLUEPRINT_NAME_MAX_LENGTH = 80
+const ANTHROPIC_MAX_OUTPUT_TOKENS = 4096
+const AI_TOOL_LOOP_BUDGETS = Object.freeze({
+  maxSteps: 10,
+  maxToolCalls: 4,
+  timeoutMs: 45_000,
+})
+const DOCS_TOOL_LIMITS = Object.freeze({
+  maxQueryChars: 240,
+  maxResults: 6,
+  maxExcerptChars: 420,
+  maxResponseChars: 9_000,
+})
+const codeFencePattern = /^```(?:\w+)?\s*([\s\S]*?)\s*```$/
 
 function hasScriptFiles(blueprint) {
   return blueprint?.scriptFiles && typeof blueprint.scriptFiles === 'object' && !Array.isArray(blueprint.scriptFiles)
@@ -40,110 +54,6 @@ function resolveScriptRootBlueprint(blueprint, world) {
   return null
 }
 
-function loadAiDocs() {
-  const candidates = [
-    path.join(process.cwd(), 'src/client/public/ai-docs.md'),
-    path.join(process.cwd(), 'build/public/ai-docs.md'),
-    path.join(process.cwd(), 'public/ai-docs.md'),
-  ]
-  for (const candidate of candidates) {
-    try {
-      if (!fs.existsSync(candidate)) continue
-      return fs.readFileSync(candidate, 'utf8')
-    } catch {
-      // continue searching other paths
-    }
-  }
-  return ''
-}
-
-function resolveDocsRoot() {
-  const candidates = [
-    path.join(process.cwd(), 'docs'),
-    path.join(process.cwd(), 'build', 'docs'),
-    path.join(process.cwd(), 'public', 'docs'),
-  ]
-  for (const candidate of candidates) {
-    try {
-      if (!fs.existsSync(candidate)) continue
-      const stats = fs.statSync(candidate)
-      if (stats.isDirectory()) return candidate
-    } catch {
-      // continue searching other paths
-    }
-  }
-  return null
-}
-
-function stripCodeFences(text) {
-  if (!text) return ''
-  const cleaned = text.trim()
-  const match = cleaned.match(fencePattern)
-  if (match) return match[1]
-  return cleaned
-}
-
-function normalizeAiAttachments(input) {
-  if (!Array.isArray(input)) return []
-  const output = []
-  const seen = new Set()
-  for (const item of input) {
-    if (!item) continue
-    const type = item.type === 'doc' || item.type === 'script' ? item.type : null
-    const filePath = typeof item.path === 'string' ? item.path.trim() : ''
-    if (!type || !filePath) continue
-    const key = `${type}:${filePath}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    output.push({ type, path: filePath })
-    if (output.length >= 12) break
-  }
-  return output
-}
-
-function resolveDocPath(docPath) {
-  if (!docsRoot || !docPath) return null
-  if (docPath.includes('..')) return null
-  const normalized = docPath.replace(/\\/g, '/')
-  if (!normalized.startsWith('docs/')) return null
-  const rel = normalized.slice('docs/'.length)
-  if (!rel) return null
-  const ext = path.extname(rel).toLowerCase()
-  if (ext !== '.md' && ext !== '.mdx') return null
-  const fullPath = path.resolve(docsRoot, rel)
-  const rootWithSep = docsRoot.endsWith(path.sep) ? docsRoot : docsRoot + path.sep
-  if (!fullPath.startsWith(rootWithSep)) return null
-  return fullPath
-}
-
-function buildCreateSystemPrompt({ entryPath, scriptFormat }) {
-  const formatNote =
-    scriptFormat === 'module'
-      ? `The entry file "${entryPath}" is a standard ES module that must export a default function (world, app, fetch, props, setTimeout) => void.`
-      : `The entry file "${entryPath}" uses legacy-body format. Keep top-level imports, do not add export statements, and output a script body.`
-  return [
-    aiDocs ? `${aiDocs}\n\n==============` : null,
-    'You are an artist and code generator for Hyperfy app scripts.',
-    'Return raw JavaScript only. Do not use markdown or code fences.',
-    formatNote,
-  ]
-    .filter(Boolean)
-    .join('\n')
-}
-
-function buildCreateUserPrompt({ prompt, attachmentMap, entryPath, scriptFormat }) {
-  const parts = [
-    `Entry path: ${entryPath}`,
-    `Script format: ${scriptFormat}`,
-    `Request: ${prompt}`,
-  ]
-  if (attachmentMap && Object.keys(attachmentMap).length) {
-    parts.push('Attached files (full text):')
-    parts.push(JSON.stringify(attachmentMap, null, 2))
-  }
-  return parts.join('\n\n')
-}
-
 function buildClassifySystemPrompt() {
   return [
     'You are a classifier.',
@@ -156,30 +66,106 @@ function buildClassifyUserPrompt(prompt) {
   return `Please classify the following prompt:\n\n"${prompt}"`
 }
 
+function stripCodeFences(text) {
+  if (!text) return ''
+  const cleaned = String(text).trim()
+  const match = cleaned.match(codeFencePattern)
+  if (match) return match[1]
+  return cleaned
+}
+
+function stripControlChars(value) {
+  let output = ''
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i)
+    if (code >= 32) output += value[i]
+  }
+  return output
+}
+
+function sanitizeBlueprintIdFromName(name) {
+  if (typeof name !== 'string') return ''
+  let safe = name.trim()
+  if (!safe) return ''
+  safe = stripControlChars(safe)
+  safe = safe.replace(/[<>:"/\\|?*]/g, '')
+  safe = safe.replace(/[^a-zA-Z0-9._ -]+/g, '-')
+  safe = safe.replace(/\s+/g, ' ').trim()
+  safe = safe.replace(/[. ]+$/g, '').replace(/^[. ]+/g, '')
+  safe = safe.replace(/__+/g, '_')
+  if (safe.length > BLUEPRINT_NAME_MAX_LENGTH) {
+    safe = safe.slice(0, BLUEPRINT_NAME_MAX_LENGTH).trim()
+  }
+  return safe || ''
+}
+
+function resolveUniqueBlueprintId(world, preferredId, currentId = null) {
+  const base = sanitizeBlueprintIdFromName(preferredId)
+  if (!base) return null
+  if (base !== '$scene') {
+    const existing = world?.blueprints?.get(base)
+    if (!existing || base === currentId) {
+      return base
+    }
+  }
+  for (let i = 2; i < 10000; i += 1) {
+    const candidate = `${base}_${i}`
+    if (candidate === '$scene') continue
+    const existing = world?.blueprints?.get(candidate)
+    if (!existing || candidate === currentId) {
+      return candidate
+    }
+  }
+  return null
+}
+
+function getRenamedCreatedAt(currentValue) {
+  const ts = Date.parse(currentValue || '')
+  if (Number.isFinite(ts)) {
+    return new Date(Math.max(0, ts - 1)).toISOString()
+  }
+  return new Date(Date.now() - 1).toISOString()
+}
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function getUploadFilename(relPath, hash) {
+  const value = typeof relPath === 'string' ? relPath : ''
+  const slash = value.lastIndexOf('/')
+  const base = slash === -1 ? value : value.slice(slash + 1)
+  const dot = base.lastIndexOf('.')
+  const ext = dot > 0 && dot < base.length - 1 ? base.slice(dot) : '.js'
+  return `${hash}${ext}`
 }
 
 export class ServerAI extends System {
   constructor(world) {
     super(world)
     this.assets = null
-    this.provider = process.env.AI_PROVIDER || null
-    this.model = process.env.AI_MODEL || null
-    this.effort = process.env.AI_EFFORT || 'low'
-    this.apiKey = process.env.AI_API_KEY || null
-    this.client = null
-    if (this.provider && this.model && this.apiKey) {
-      if (this.provider === 'openai') {
-        this.client = new OpenAIClient(this.apiKey, this.model, this.effort)
-      } else if (this.provider === 'anthropic') {
-        this.client = new AnthropicClient(this.apiKey, this.model)
-      } else if (this.provider === 'xai') {
-        this.client = new XAIClient(this.apiKey, this.model)
-      } else if (this.provider === 'google') {
-        this.client = new GoogleClient(this.apiKey, this.model)
-      }
-    }
+    const aiConfig = readServerAIConfig()
+    this.provider = aiConfig.provider
+    this.model = aiConfig.model
+    this.effort = aiConfig.effort
+    this.apiKey = aiConfig.apiKey
+    this.toolLoopEnabled = !!aiConfig.toolLoopEnabled
+    this.client = createServerAIRunner(aiConfig, {
+      anthropicMaxOutputTokens: ANTHROPIC_MAX_OUTPUT_TOKENS,
+    })
+    this.docsSearch = new DocsSearchService({
+      docsRoot,
+      ...DOCS_TOOL_LIMITS,
+    })
+    const searchDocsTool = createSearchDocsTool({
+      docsSearch: this.docsSearch,
+      limits: DOCS_TOOL_LIMITS,
+    })
+    this.tools = this.toolLoopEnabled && searchDocsTool
+      ? {
+          searchDocs: searchDocsTool,
+        }
+      : null
     this.enabled = !!this.client
   }
 
@@ -189,6 +175,7 @@ export class ServerAI extends System {
       provider: this.provider,
       model: this.model,
       effort: this.effort,
+      toolLoopEnabled: this.toolLoopEnabled,
     }
   }
 
@@ -215,7 +202,7 @@ export class ServerAI extends System {
         continue
       }
       if (attachment.type === 'doc') {
-        const fullPath = resolveDocPath(attachment.path)
+        const fullPath = resolveDocsPath(attachment.path, docsRoot)
         if (!fullPath) continue
         try {
           const content = await fs.promises.readFile(fullPath, 'utf8')
@@ -228,12 +215,27 @@ export class ServerAI extends System {
     return map
   }
 
+  async uploadGeneratedFiles(files) {
+    const uploaded = {}
+    for (const file of files) {
+      if (!file?.path || typeof file.content !== 'string') continue
+      const hash = await hashFile(Buffer.from(file.content, 'utf8'))
+      const filename = getUploadFilename(file.path, hash)
+      const scriptUrl = `asset://${filename}`
+      const upload = new File([file.content], filename, { type: 'text/javascript' })
+      await this.assets.upload(upload)
+      uploaded[file.path] = scriptUrl
+    }
+    return uploaded
+  }
+
   handleCreate = async (socket, data = {}) => {
     if (!this.enabled || !this.client) return
     if (!socket?.player?.isBuilder?.()) return
-    const prompt = typeof data?.prompt === 'string' ? data.prompt.trim() : ''
+    const request = normalizeAiRequest(data, { fallbackMode: 'create' })
+    const prompt = request.prompt
     if (!prompt) return
-    const blueprintId = typeof data?.blueprintId === 'string' ? data.blueprintId : ''
+    const blueprintId = request.target.blueprintId || ''
     if (!blueprintId) return
 
     const blueprint = await this.waitForBlueprint(blueprintId)
@@ -246,49 +248,74 @@ export class ServerAI extends System {
       return
     }
 
-    const entryPath = isValidScriptPath(blueprint?.scriptEntry) ? blueprint.scriptEntry : DEFAULT_ENTRY
-    const scriptFormat = blueprint?.scriptFormat === 'legacy-body' ? 'legacy-body' : 'module'
-    const attachments = normalizeAiAttachments(data?.attachments)
-    let contextFiles = null
-    const scriptRootId = typeof data?.scriptRootId === 'string' ? data.scriptRootId.trim() : ''
-    if (scriptRootId) {
-      const contextRoot = resolveScriptRootBlueprint(this.world.blueprints.get(scriptRootId), this.world)
-      if (contextRoot && hasScriptFiles(contextRoot)) {
-        contextFiles = contextRoot.scriptFiles
+    try {
+      const entryPath = isValidScriptPath(blueprint?.scriptEntry) ? blueprint.scriptEntry : DEFAULT_ENTRY
+      const scriptFormat = blueprint?.scriptFormat === 'legacy-body' ? 'legacy-body' : 'module'
+      const attachments = request.attachments
+      let contextFiles = null
+      const scriptRootId = request.target.scriptRootId || ''
+      if (scriptRootId) {
+        const contextRoot = resolveScriptRootBlueprint(this.world.blueprints.get(scriptRootId), this.world)
+        if (contextRoot && hasScriptFiles(contextRoot)) {
+          contextFiles = contextRoot.scriptFiles
+        }
       }
-    }
-    const attachmentMap = await this.loadAttachmentMap(attachments, contextFiles)
-    const systemPrompt = buildCreateSystemPrompt({ entryPath, scriptFormat })
-    const userPrompt = buildCreateUserPrompt({
-      prompt,
-      attachmentMap,
-      entryPath,
-      scriptFormat,
-    })
-    const raw = await this.client.generate(systemPrompt, userPrompt)
-    const output = stripCodeFences(raw)
-    if (!output.trim()) {
-      console.warn('[ai-create] empty response')
-      return
-    }
+      const attachmentMap = await this.loadAttachmentMap(attachments, contextFiles)
+      const { systemPrompt, userPrompt } = buildUnifiedScriptPrompts({
+        mode: 'create',
+        prompt,
+        entryPath,
+        scriptFormat,
+        attachmentMap,
+      })
+      const generation = await this.client.generate(systemPrompt, userPrompt, {
+        ...AI_TOOL_LOOP_BUDGETS,
+        tools: this.tools,
+      })
+      this.logGenerationTelemetry('ai-create', generation, { mode: 'create', blueprintId })
+      const raw = generation.text
+      let parsed = parseAiScriptResponse(raw, { validatePath: isValidScriptPath })
+      if (!parsed?.files?.length) {
+        const fallback = stripCodeFences(raw).trim()
+        if (fallback) {
+          parsed = {
+            summary: '',
+            files: [{ path: entryPath, content: fallback }],
+          }
+        }
+      }
+      if (!parsed?.files?.length) {
+        console.warn('[ai-create] invalid ai response')
+        return
+      }
+      const generatedScriptFiles = await this.uploadGeneratedFiles(parsed.files)
+      const generatedPaths = Object.keys(generatedScriptFiles)
+      if (!generatedPaths.length) {
+        console.warn('[ai-create] no generated files')
+        return
+      }
+      const entryScriptUrl =
+        generatedScriptFiles[entryPath] || generatedScriptFiles[generatedPaths[0]]
+      const nextScriptFiles = hasScriptFiles(blueprint) ? { ...blueprint.scriptFiles } : {}
+      for (const [relPath, url] of Object.entries(generatedScriptFiles)) {
+        nextScriptFiles[relPath] = url
+      }
+      if (!nextScriptFiles[entryPath] && entryScriptUrl) {
+        nextScriptFiles[entryPath] = entryScriptUrl
+      }
+      await this.applyBlueprintChange(blueprintId, {
+        script: nextScriptFiles[entryPath] || entryScriptUrl || blueprint.script,
+        scriptEntry: entryPath,
+        scriptFiles: nextScriptFiles,
+        scriptFormat,
+      })
 
-    const hash = await hashFile(Buffer.from(output, 'utf8'))
-    const filename = `${hash}.js`
-    const scriptUrl = `asset://${filename}`
-    const file = new File([output], 'script.js', { type: 'text/javascript' })
-    await this.assets.upload(file)
-    const nextScriptFiles = hasScriptFiles(blueprint) ? { ...blueprint.scriptFiles } : {}
-    nextScriptFiles[entryPath] = scriptUrl
-    await this.applyBlueprintChange(blueprintId, {
-      script: scriptUrl,
-      scriptEntry: entryPath,
-      scriptFiles: nextScriptFiles,
-      scriptFormat,
-    })
-
-    this.classifyName(blueprintId, prompt).catch(err => {
-      console.warn('[ai-create] classify failed', err?.message || err)
-    })
+      this.classifyName(blueprintId, prompt).catch(err => {
+        console.warn('[ai-create] classify failed', err?.message || err)
+      })
+    } catch (err) {
+      console.error('[ai-create] request failed', err)
+    }
   }
 
   async waitForBlueprint(id, attempts = 5) {
@@ -312,128 +339,92 @@ export class ServerAI extends System {
     return change
   }
 
+  async renameBlueprintFromClassifiedName(currentId, nextName) {
+    const current = this.world.blueprints.get(currentId)
+    if (!current) return false
+
+    const nextId = resolveUniqueBlueprintId(this.world, nextName, currentId)
+    if (!nextId || nextId === currentId) {
+      await this.applyBlueprintChange(currentId, { name: nextName })
+      return true
+    }
+
+    const renamedBlueprint = {
+      ...current,
+      id: nextId,
+      name: nextName,
+      createdAt: getRenamedCreatedAt(current.createdAt),
+    }
+    const addResult = this.world.network.applyBlueprintAdded(renamedBlueprint)
+    if (!addResult?.ok) {
+      return false
+    }
+
+    const entityIds = []
+    for (const entity of this.world.entities.items.values()) {
+      if (!entity?.isApp) continue
+      if (entity.data.blueprint !== currentId) continue
+      entityIds.push(entity.data.id)
+    }
+    for (const entityId of entityIds) {
+      const result = await this.world.network.applyEntityModified({ id: entityId, blueprint: nextId })
+      if (!result?.ok) {
+        console.warn('[ai-create] failed to repoint entity', entityId, result?.error || 'unknown_error')
+      }
+    }
+
+    const scriptRefIds = []
+    for (const blueprint of this.world.blueprints.items.values()) {
+      if (!blueprint?.id || blueprint.id === currentId || blueprint.id === nextId) continue
+      const ref = typeof blueprint.scriptRef === 'string' ? blueprint.scriptRef.trim() : ''
+      if (ref !== currentId) continue
+      scriptRefIds.push(blueprint.id)
+    }
+    for (const blueprintId of scriptRefIds) {
+      await this.applyBlueprintChange(blueprintId, { scriptRef: nextId })
+    }
+
+    const removeResult = await this.world.network.applyBlueprintRemoved({ id: currentId })
+    if (!removeResult?.ok) {
+      console.warn(
+        '[ai-create] failed to remove previous blueprint id',
+        currentId,
+        removeResult?.error || 'unknown_error'
+      )
+    }
+    return true
+  }
+
   async classifyName(blueprintId, prompt) {
     if (!this.client) return
     const systemPrompt = buildClassifySystemPrompt()
     const userPrompt = buildClassifyUserPrompt(prompt)
-    const raw = await this.client.generate(systemPrompt, userPrompt)
+    const generation = await this.client.generate(systemPrompt, userPrompt, {
+      timeoutMs: 10_000,
+      maxSteps: 1,
+      maxToolCalls: 1,
+    })
+    const raw = generation.text
     let name = stripCodeFences(raw).trim()
     name = name.replace(/^["']|["']$/g, '')
     if (!name) return
-    await this.applyBlueprintChange(blueprintId, { name })
-  }
-}
-
-class OpenAIClient {
-  constructor(apiKey, model, effort) {
-    this.model = model
-    this.effort = effort
-    this.provider = createOpenAI({ apiKey })
-  }
-
-  async generate(systemPrompt, userPrompt) {
-    const result = streamText({
-      model: this.provider(this.model),
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      providerOptions: {
-        openai: {
-          reasoningEffort: this.effort || undefined,
-        },
-      },
-    })
-    let output = ''
-    for await (const delta of result.textStream) {
-      output += delta
+    const renamed = await this.renameBlueprintFromClassifiedName(blueprintId, name)
+    if (!renamed) {
+      await this.applyBlueprintChange(blueprintId, { name })
     }
-    return output
-  }
-}
-
-class AnthropicClient {
-  constructor(apiKey, model) {
-    this.model = model
-    this.maxOutputTokens = 4096
-    this.provider = createAnthropic({ apiKey })
   }
 
-  async generate(systemPrompt, userPrompt) {
-    const result = streamText({
-      model: this.provider(this.model),
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      maxOutputTokens: this.maxOutputTokens,
-    })
-    let output = ''
-    for await (const delta of result.textStream) {
-      output += delta
+  logGenerationTelemetry(prefix, generation, extra = {}) {
+    if (!generation || typeof generation !== 'object') return
+    const telemetry = {
+      finishReason: generation.finishReason || 'unknown',
+      steps: Number.isFinite(generation.stepCount) ? generation.stepCount : 1,
+      toolCalls: Number.isFinite(generation.toolCallCount) ? generation.toolCallCount : 0,
     }
-    return output
-  }
-}
-
-class XAIClient {
-  constructor(apiKey, model) {
-    this.apiKey = apiKey
-    this.model = model
-    this.url = 'https://api.x.ai/v1/chat/completions'
-  }
-
-  async generate(systemPrompt, userPrompt) {
-    const resp = await fetch(this.url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: this.model,
-        stream: false,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-      }),
-    })
-    if (!resp.ok) {
-      throw new Error(`xai_request_failed:${resp.status}`)
+    for (const [key, value] of Object.entries(extra)) {
+      if (value == null || value === '') continue
+      telemetry[key] = value
     }
-    const data = await resp.json()
-    return data.choices?.[0]?.message?.content || ''
-  }
-}
-
-class GoogleClient {
-  constructor(apiKey, model) {
-    this.apiKey = apiKey
-    this.url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
-  }
-
-  async generate(systemPrompt, userPrompt) {
-    const resp = await fetch(this.url, {
-      method: 'POST',
-      headers: {
-        'x-goog-api-key': this.apiKey,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        system_instruction: { parts: { text: systemPrompt } },
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: userPrompt }],
-          },
-        ],
-      }),
-    })
-    if (!resp.ok) {
-      throw new Error(`google_request_failed:${resp.status}`)
-    }
-    const data = await resp.json()
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+    console.info(`[${prefix}] generation`, telemetry)
   }
 }

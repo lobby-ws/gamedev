@@ -2,7 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
-import { BUILTIN_APP_TEMPLATES, SCENE_TEMPLATE } from './templates/builtins.js'
+import { SCENE_TEMPLATE } from './templates/builtins.js'
 import { WorldManifest } from './WorldManifest.js'
 import { uuid } from './utils.js'
 
@@ -15,6 +15,7 @@ const CLAUDE_MD_TEMPLATE = path.join(TEMPLATES_DIR, 'claude', 'CLAUDE.md')
 const CLAUDE_SKILL_TEMPLATE = path.join(TEMPLATES_DIR, 'claude', 'skills', 'hyperfy-app-scripting', 'SKILL.md')
 const AGENTS_MD_TEMPLATE = path.join(TEMPLATES_DIR, 'openai', 'AGENTS.md')
 const CURSOR_RULES_TEMPLATE = path.join(TEMPLATES_DIR, 'cursor', 'rules.md')
+const PROJECT_BUILTIN_TEMPLATES = [SCENE_TEMPLATE]
 
 const DEFAULT_GITIGNORE = `# Dependencies
 node_modules/
@@ -145,6 +146,17 @@ CLEAN=true
 LIVEKIT_WS_URL=
 LIVEKIT_API_KEY=
 LIVEKIT_API_SECRET=
+
+# AI script generation (optional)
+# Supported providers: openai, anthropic
+AI_PROVIDER=
+AI_MODEL=
+AI_API_KEY=
+AI_EFFORT=low
+
+# Safe rollout switch for multi-step tool loop + docs search tool.
+# false keeps single-step generation behavior.
+AI_TOOL_LOOP_ENABLED=false
 
 # Hooks to connect to a local app dev server
 PUBLIC_DEV_SERVER=false
@@ -446,7 +458,7 @@ export function scaffoldBuiltins({ rootDir, force = false, writeFile } = {}) {
   const assetsDir = path.join(rootDir, 'assets')
   ensureDir(appsDir)
 
-  const templates = [...BUILTIN_APP_TEMPLATES, SCENE_TEMPLATE]
+  const templates = PROJECT_BUILTIN_TEMPLATES
   const assetFiles = new Set()
 
   for (const template of templates) {
@@ -518,7 +530,7 @@ export function updateBuiltins({ rootDir, writeFile } = {}) {
   const assetsDir = path.join(rootDir, 'assets')
   ensureDir(appsDir)
 
-  const templates = [...BUILTIN_APP_TEMPLATES, SCENE_TEMPLATE]
+  const templates = PROJECT_BUILTIN_TEMPLATES
   const assetFiles = new Set()
 
   for (const template of templates) {

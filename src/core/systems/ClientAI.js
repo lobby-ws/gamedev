@@ -1,51 +1,35 @@
 import { System } from './System'
 import { uuid } from '../utils'
 import { hashFile } from '../utils-client'
+import { buildUnifiedAiRequestPayload } from '../ai/AIRequestContract'
 
 const PLACEHOLDER_SCRIPT = `export default (world, app, fetch, props, setTimeout) => {
   // AI placeholder while generation runs
-  const box = app.create('prim', {
-    type: 'box',
-    size: [1, 1, 1],
-    color: '#4b5563',
+  const aura = app.create('particles', {
+    shape: ['sphere', 0.6, 1],
+    rate: 30,
+    life: '1.2~2.4',
+    speed: '0.05~0.2',
+    size: '0.2~0.5',
+    color: '#ffffff',
+    alpha: '0.4~0.8',
+    emissive: '0.6~1',
+    blending: 'additive',
+    billboard: 'full',
+    space: 'local',
   })
-  app.add(box)
+  aura.colorOverLife = '0,#5eead4|0.5,#a78bfa|1,#f0abfc'
+  aura.alphaOverLife = '0,0|0.2,0.7|1,0'
+  aura.sizeOverLife = '0,0.6|0.5,1|1,0.8'
+  aura.position.set(0, 0.5, 0)
+  app.add(aura)
 }
 `
 const DEFAULT_ENTRY = 'index.js'
 
-function deriveLockScopeFromBlueprintId(id) {
-  if (typeof id !== 'string' || !id.trim()) return 'global'
-  if (id === '$scene') return '$scene'
-  const idx = id.indexOf('__')
-  if (idx !== -1) {
-    const appName = id.slice(0, idx)
-    return appName ? appName : 'global'
-  }
-  return id
-}
-
 function normalizePrompt(value) {
   if (typeof value !== 'string') return ''
   return value.trim()
-}
-
-function normalizeAttachments(input) {
-  if (!Array.isArray(input)) return null
-  const output = []
-  const seen = new Set()
-  for (const item of input) {
-    if (!item) continue
-    const type = item.type === 'doc' || item.type === 'script' ? item.type : null
-    const path = typeof item.path === 'string' ? item.path.trim() : ''
-    if (!type || !path) continue
-    const key = `${type}:${path}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    output.push({ type, path })
-    if (output.length >= 12) break
-  }
-  return output.length ? output : null
 }
 
 export class ClientAI extends System {
@@ -95,14 +79,14 @@ export class ClientAI extends System {
       throw err
     }
 
-    const normalizedAttachments = normalizeAttachments(payload.attachments)
+    const normalizedAttachments = Array.isArray(payload.attachments) ? payload.attachments : null
     const scriptRootId = typeof payload.scriptRootId === 'string' ? payload.scriptRootId.trim() : ''
     let lockToken = null
     let blueprint = null
     let app = null
     try {
       const blueprintId = uuid()
-      const scope = deriveLockScopeFromBlueprintId(blueprintId)
+      const scope = blueprintId
       const lockResult = await this.world.admin.acquireDeployLock({
         owner: this.world.network.id,
         scope,
@@ -122,9 +106,12 @@ export class ClientAI extends System {
       const scriptFiles = { [entryPath]: scriptUrl }
       blueprint = {
         id: blueprintId,
+        scope,
         version: 0,
         name: 'AI Draft',
-        image: null,
+        image: {
+          url: 'asset://Model.png',
+        },
         author: null,
         url: null,
         desc: null,
@@ -169,17 +156,17 @@ export class ClientAI extends System {
       this.world.admin.entityAdd(appData, { ignoreNetworkId: this.world.network.id })
       this.world.builder.select(app)
 
-      const request = {
-        blueprintId: blueprint.id,
-        appId: appData.id,
+      const request = buildUnifiedAiRequestPayload({
+        mode: 'create',
         prompt: trimmed,
-      }
-      if (normalizedAttachments) {
-        request.attachments = normalizedAttachments
-      }
-      if (scriptRootId) {
-        request.scriptRootId = scriptRootId
-      }
+        target: {
+          blueprintId: blueprint.id,
+          appId: appData.id,
+          scriptRootId: scriptRootId || null,
+        },
+        attachments: normalizedAttachments,
+        includeLegacyFields: true,
+      })
       this.world.network.send('aiCreateRequest', request)
 
       return { blueprintId: blueprint.id, appId: appData.id }

@@ -33,13 +33,14 @@ export class Scripts extends System {
   constructor(world) {
     super(world)
     this.moduleSourceCache = new Map()
+    this.appContextStack = []
     this.endowments = {
       console: {
-        log: (...args) => console.log(...args),
-        warn: (...args) => console.warn(...args),
-        error: (...args) => console.error(...args),
-        time: (...args) => console.time(...args),
-        timeEnd: (...args) => console.timeEnd(...args),
+        log: (...args) => this._handleConsoleCall('log', args),
+        warn: (...args) => this._handleConsoleCall('warn', args),
+        error: (...args) => this._handleConsoleCall('error', args),
+        time: (...args) => this._handleConsoleTime(args),
+        timeEnd: (...args) => this._handleConsoleTimeEnd(args),
       },
       Date: {
         now: () => Date.now(),
@@ -71,6 +72,113 @@ export class Scripts extends System {
       // pause: () => this.world.pause(),
     }
     this.compartment = new Compartment(this.endowments)
+  }
+
+  resolveAppId(appOrId) {
+    if (typeof appOrId === 'string') {
+      const value = appOrId.trim()
+      return value || null
+    }
+    const value = appOrId?.data?.id
+    if (typeof value !== 'string') return null
+    const trimmed = value.trim()
+    return trimmed || null
+  }
+
+  withAppContext(appOrId, fn) {
+    if (typeof fn !== 'function') return undefined
+    const appId = this.resolveAppId(appOrId)
+    if (!appId) return fn()
+    this.appContextStack.push(appId)
+    try {
+      return fn()
+    } finally {
+      this.appContextStack.pop()
+    }
+  }
+
+  getRecentServerLogs(appId, limit = 20) {
+    return this.world.serverAppLogs?.getRecent?.(appId, limit) || []
+  }
+
+  _getCurrentAppId() {
+    if (!this.appContextStack.length) return null
+    return this.appContextStack[this.appContextStack.length - 1]
+  }
+
+  _recordScriptLog(level, args, extras = {}) {
+    const appId = this._getCurrentAppId()
+    if (!appId) return
+    try {
+      this.world.appLogs?.capture?.(appId, level, args)
+    } catch {}
+    const record = {
+      timestamp: new Date().toISOString(),
+      level,
+      args,
+      ...extras,
+    }
+    try {
+      this.world.serverAppLogs?.record?.(appId, record)
+    } catch {
+      // ignore logging errors to avoid affecting script execution
+    }
+  }
+
+  _normalizeTimerLabel(args) {
+    const label = Array.isArray(args) && args.length ? args[0] : undefined
+    if (typeof label === 'string') {
+      const trimmed = label.trim()
+      return trimmed || 'default'
+    }
+    if (typeof label === 'undefined' || label === null) {
+      return 'default'
+    }
+    const text = String(label).trim()
+    return text || 'default'
+  }
+
+  _handleConsoleCall(level, args) {
+    this._recordScriptLog(level, args)
+    if (level === 'warn') return this._writeConsole('warn', args)
+    if (level === 'error') return this._writeConsole('error', args)
+    return this._writeConsole('log', args)
+  }
+
+  _writeConsole(level, args) {
+    const logger = console[level]
+    if (typeof logger !== 'function') return undefined
+    const list = Array.isArray(args) ? args : []
+    try {
+      return logger.apply(console, list)
+    } catch {
+      return undefined
+    }
+  }
+
+  _handleConsoleTime(args) {
+    const appId = this._getCurrentAppId()
+    const label = this._normalizeTimerLabel(args)
+    if (appId) {
+      this.world.serverAppLogs?.startTimer?.(appId, label)
+    }
+    this._recordScriptLog('time', args, {
+      label,
+      message: label,
+    })
+    return this._writeConsole('time', args)
+  }
+
+  _handleConsoleTimeEnd(args) {
+    const appId = this._getCurrentAppId()
+    const label = this._normalizeTimerLabel(args)
+    const durationMs = appId ? this.world.serverAppLogs?.endTimer?.(appId, label) ?? null : null
+    this._recordScriptLog('timeEnd', args, {
+      label,
+      durationMs,
+      message: Number.isFinite(durationMs) ? `${label}: ${Math.round(durationMs)}ms` : label,
+    })
+    return this._writeConsole('timeEnd', args)
   }
 
   evaluate(code) {

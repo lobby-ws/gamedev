@@ -7,7 +7,7 @@ import { parse as acornParse } from 'acorn'
 
 import { DirectAppServer } from './direct.js'
 import { uuid } from './utils.js'
-import { deriveBlueprintId, isBlueprintDenylist } from './blueprintUtils.js'
+import { resolveBlueprintId, isBlueprintDenylist } from './blueprintUtils.js'
 import { applyTargetEnv, parseTargetArgs, resolveTarget } from './targets.js'
 import { buildLegacyBodyModuleSource } from '../src/core/legacyBody.js'
 
@@ -31,6 +31,15 @@ function resolveBuiltinAssetPath(filename) {
   const srcPath = path.join(__dirname, '..', 'src', 'world', 'assets', filename)
   if (fs.existsSync(srcPath)) return srcPath
   return null
+}
+
+function readJson(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return null
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'))
+  } catch {
+    return null
+  }
 }
 
 function parseDeployArgs(args = []) {
@@ -88,8 +97,10 @@ function listLocalBlueprints(appsDir) {
       if (!file.name.endsWith('.json')) continue
       if (isBlueprintDenylist(file.name)) continue
       const fileBase = path.basename(file.name, '.json')
-      const id = deriveBlueprintId(appName, fileBase)
-      results.push({ appName, fileBase, id, configPath: path.join(appPath, file.name) })
+      const configPath = path.join(appPath, file.name)
+      const cfg = readJson(configPath)
+      const id = resolveBlueprintId(appName, fileBase, cfg)
+      results.push({ appName, fileBase, id, configPath })
     }
   }
 
@@ -113,7 +124,7 @@ function entryHasDefaultExport(sourceText) {
       allowHashBang: true,
     })
   } catch {
-    return false
+    return /\bexport\s+default\b/.test(sourceText) || /\bexport\s*\{[^}]*\bdefault\b[^}]*\}/.test(sourceText)
   }
   for (const node of ast.body) {
     if (node.type === 'ExportDefaultDeclaration') return true
@@ -157,12 +168,58 @@ function parseScriptMigrateArgs(args = []) {
   return { mode, appName }
 }
 
+function parseSyncConflictsArgs(args = []) {
+  let includeResolved = false
+  for (const arg of args) {
+    if (arg === '--all') {
+      includeResolved = true
+      continue
+    }
+    if (arg.startsWith('-')) {
+      throw new Error(`Unknown option: ${arg}`)
+    }
+  }
+  return { includeResolved }
+}
+
+function parseSyncResolveArgs(args = []) {
+  let use = null
+  const rest = []
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]
+    if (arg === '--use') {
+      const next = args[i + 1]
+      if (!next || next.startsWith('-')) {
+        throw new Error('Missing value for --use')
+      }
+      use = next
+      i += 1
+      continue
+    }
+    if (arg.startsWith('--use=')) {
+      use = arg.slice('--use='.length)
+      continue
+    }
+    if (arg.startsWith('-')) {
+      throw new Error(`Unknown option: ${arg}`)
+    }
+    rest.push(arg)
+  }
+  return {
+    conflictId: rest[0] || null,
+    use: use || 'local',
+  }
+}
+
 export class HyperfyCLI {
   constructor({ rootDir = process.cwd(), overrides = {} } = {}) {
     this.rootDir = rootDir
     this.appsDir = path.join(this.rootDir, 'apps')
     this.assetsDir = path.join(this.rootDir, 'assets')
     this.worldFile = path.join(this.rootDir, 'world.json')
+    this.syncStateFile = path.join(this.rootDir, '.lobby', 'sync-state.json')
+    this.blueprintIndexFile = path.join(this.rootDir, '.lobby', 'blueprint-index.json')
+    this.conflictsDir = path.join(this.rootDir, '.lobby', 'conflicts')
 
     this.worldUrl = overrides.worldUrl || process.env.WORLD_URL || null
     this.adminCode =
@@ -293,22 +350,34 @@ export class HyperfyCLI {
     }
 
     console.log(`🧩 Creating local app: ${appName}`)
-    const assetDest = path.join(this.assetsDir, 'Model.glb')
-    if (!fs.existsSync(assetDest)) {
-      const assetSrc = resolveBuiltinAssetPath('Model.glb')
+    const copiedAssets = []
+    const ensureBuiltinAsset = filename => {
+      const assetDest = path.join(this.assetsDir, filename)
+      if (fs.existsSync(assetDest)) return assetDest
+      const assetSrc = resolveBuiltinAssetPath(filename)
       if (!assetSrc) {
-        console.error('❌ Missing builtin asset Model.glb')
-        console.log(`💡 Expected Model.glb in build/world/assets or src/world/assets`)
-        return
+        throw new Error(`missing_builtin_asset:${filename}`)
       }
       fs.mkdirSync(this.assetsDir, { recursive: true })
       fs.copyFileSync(assetSrc, assetDest)
+      copiedAssets.push(assetDest)
+      return assetDest
+    }
+    try {
+      ensureBuiltinAsset('Model.glb')
+      ensureBuiltinAsset('Model.png')
+    } catch (error) {
+      const filename = String(error?.message || '').replace('missing_builtin_asset:', '')
+      console.error(`❌ Missing builtin asset ${filename}`)
+      console.log(`💡 Expected ${filename} in build/world/assets or src/world/assets`)
+      return
     }
 
     fs.mkdirSync(appDir, { recursive: true })
 
     const blueprintPath = path.join(appDir, `${appName}.json`)
     const blueprint = {
+      id: appName,
       model: 'assets/Model.glb',
       scriptFormat: 'module',
       image: {
@@ -337,7 +406,9 @@ export class HyperfyCLI {
     console.log(`✅ Created ${appName}`)
     console.log(`   • ${blueprintPath}`)
     console.log(`   • ${scriptPath}`)
-    console.log(`   • ${assetDest}`)
+    for (const assetPath of copiedAssets) {
+      console.log(`   • ${assetPath}`)
+    }
   }
 
   async deploy(appName, options = {}) {
@@ -447,6 +518,94 @@ export class HyperfyCLI {
     }
   }
 
+  _listConflictArtifacts({ includeResolved = false } = {}) {
+    if (!fs.existsSync(this.conflictsDir)) return []
+    const entries = fs
+      .readdirSync(this.conflictsDir, { withFileTypes: true })
+      .filter(entry => entry.isFile() && entry.name.endsWith('.json'))
+      .map(entry => path.join(this.conflictsDir, entry.name))
+
+    const artifacts = []
+    for (const filePath of entries) {
+      const data = readJson(filePath)
+      if (!data || typeof data !== 'object') continue
+      if (!includeResolved && data.status === 'resolved') continue
+      artifacts.push({
+        ...data,
+        filePath,
+      })
+    }
+    artifacts.sort((a, b) => (Date.parse(b.createdAt || 0) || 0) - (Date.parse(a.createdAt || 0) || 0))
+    return artifacts
+  }
+
+  syncStatus() {
+    const state = readJson(this.syncStateFile)
+    const openConflicts = this._listConflictArtifacts()
+    console.log('🔄 Sync Status')
+    if (!state) {
+      console.log(`  Sync state:  missing (${this.syncStateFile})`)
+      console.log(`  Conflicts:   ${openConflicts.length} open`)
+      return true
+    }
+    const blueprintCount = Object.keys(state?.objects?.blueprints || {}).length
+    const entityCount = Object.keys(state?.objects?.entities || {}).length
+    console.log(`  World ID:    ${state.worldId || 'unknown'}`)
+    console.log(`  Cursor:      ${state.cursor ?? 'null'}`)
+    console.log(`  Blueprints:  ${blueprintCount}`)
+    console.log(`  Entities:    ${entityCount}`)
+    console.log(`  Conflicts:   ${openConflicts.length} open`)
+    console.log(`  Updated:     ${state.updatedAt || 'unknown'}`)
+    return true
+  }
+
+  syncConflicts({ includeResolved = false } = {}) {
+    const artifacts = this._listConflictArtifacts({ includeResolved })
+    if (!artifacts.length) {
+      console.log('✅ No sync conflicts recorded.')
+      return true
+    }
+    console.log(`⚠️  Sync conflicts (${artifacts.length}):`)
+    for (const item of artifacts) {
+      const id = item.id || path.basename(item.filePath, '.json')
+      const objectId = item.objectId || 'unknown'
+      const unresolved = Array.isArray(item.unresolvedFields) ? item.unresolvedFields.length : 0
+      const status = item.status || 'open'
+      console.log(`  • ${id} [${status}] ${item.kind || 'unknown'} ${objectId} (${unresolved} field conflict(s))`)
+    }
+    return true
+  }
+
+  async syncResolve(conflictId, { use = 'local' } = {}) {
+    const id = typeof conflictId === 'string' ? conflictId.trim() : ''
+    if (!id) {
+      console.error('❌ Conflict id is required')
+      return false
+    }
+    if (!['local', 'remote', 'merged'].includes(use)) {
+      console.error('❌ Invalid --use value. Expected local, remote, or merged.')
+      return false
+    }
+
+    const server = await this._connectAdminClient()
+    try {
+      const result = await server.resolveSyncConflict(id, { use })
+      if (result?.alreadyResolved) {
+        console.log(`✅ Conflict ${id} is already resolved.`)
+        return true
+      }
+      console.log(
+        `✅ Resolved conflict ${result?.conflictId || id} using ${use} (${result?.kind || 'unknown'} ${result?.objectId || ''})`
+      )
+      return true
+    } catch (error) {
+      console.error(`❌ Failed to resolve sync conflict:`, error?.message || error)
+      return false
+    } finally {
+      this._closeAdminClient(server)
+    }
+  }
+
   async reset(options = {}) {
     const force = options.force || false
 
@@ -455,6 +614,8 @@ export class HyperfyCLI {
       console.log(`   • Local apps in ${this.appsDir}`)
       console.log(`   • Local assets in ${this.assetsDir}`)
       console.log(`   • ${this.worldFile}`)
+      console.log(`   • ${this.syncStateFile}`)
+      console.log(`   • ${this.blueprintIndexFile}`)
       console.log(``)
 
       const rl = readline.createInterface({
@@ -482,6 +643,15 @@ export class HyperfyCLI {
       }
       if (fs.existsSync(this.worldFile)) {
         fs.rmSync(this.worldFile, { force: true })
+      }
+      if (fs.existsSync(this.syncStateFile)) {
+        fs.rmSync(this.syncStateFile, { force: true })
+      }
+      if (fs.existsSync(this.blueprintIndexFile)) {
+        fs.rmSync(this.blueprintIndexFile, { force: true })
+      }
+      if (fs.existsSync(this.conflictsDir)) {
+        fs.rmSync(this.conflictsDir, { recursive: true, force: true })
       }
       console.log(`✅ Reset complete!`)
     } catch (error) {
@@ -758,6 +928,103 @@ export async function runScriptCommand({ command, args = [], rootDir = process.c
         exitCode = 1
       }
       showScriptsHelp({ commandPrefix })
+  }
+
+  return exitCode
+}
+
+function showSyncHelp({ commandPrefix = 'gamedev sync' } = {}) {
+  console.log(`
+🔄 Sync reconciliation tools
+
+Usage:
+  ${commandPrefix} <command> [options]
+
+Commands:
+  status                    Show cursor/baseline/conflict summary from .lobby/sync-state.json
+  conflicts [--all]         List unresolved conflict artifacts in .lobby/conflicts/
+  resolve <id> --use <mode> Resolve one conflict artifact using local|remote|merged
+  help                      Show this help
+
+Options (resolve):
+  --use <mode>              local | remote | merged
+
+Examples:
+  ${commandPrefix} status
+  ${commandPrefix} conflicts
+  ${commandPrefix} resolve 4a9f... --use remote
+`)
+}
+
+export async function runSyncCommand({ command, args = [], rootDir = process.cwd(), helpPrefix } = {}) {
+  let targetName = null
+  try {
+    const parsed = parseTargetArgs(args)
+    targetName = parsed.target
+    args = parsed.args
+  } catch (err) {
+    console.error(`❌ ${err?.message || err}`)
+    return 1
+  }
+
+  if (targetName) {
+    try {
+      const target = resolveTarget(rootDir, targetName)
+      applyTargetEnv(target)
+    } catch (err) {
+      console.error(`❌ ${err?.message || err}`)
+      return 1
+    }
+  }
+
+  const cli = new HyperfyCLI({ rootDir })
+  const commandPrefix = helpPrefix || 'gamedev sync'
+  let exitCode = 0
+
+  switch (command) {
+    case 'status':
+      cli.syncStatus()
+      break
+
+    case 'conflicts':
+      try {
+        const parsed = parseSyncConflictsArgs(args)
+        cli.syncConflicts(parsed)
+      } catch (err) {
+        console.error(`❌ ${err?.message || err}`)
+        return 1
+      }
+      break
+
+    case 'resolve':
+      try {
+        const parsed = parseSyncResolveArgs(args)
+        if (!parsed.conflictId) {
+          console.error('❌ Conflict id is required')
+          console.log(`Usage: ${commandPrefix} resolve <id> --use local|remote|merged`)
+          return 1
+        }
+        const ok = await cli.syncResolve(parsed.conflictId, { use: parsed.use })
+        if (!ok) exitCode = 1
+      } catch (err) {
+        console.error(`❌ ${err?.message || err}`)
+        return 1
+      }
+      break
+
+    case 'help':
+    case '--help':
+    case '-h':
+      showSyncHelp({ commandPrefix })
+      break
+
+    default:
+      if (command) {
+        console.error(`❌ Unknown command: ${command}`)
+        exitCode = 1
+      }
+      showSyncHelp({ commandPrefix })
+      break
   }
 
   return exitCode

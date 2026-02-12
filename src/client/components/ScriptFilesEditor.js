@@ -1,9 +1,11 @@
 import { css } from '@firebolt-dev/css'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { parse as acornParse } from 'acorn'
 import { cls } from './cls'
 import { loadMonaco } from './monaco'
 import { hashFile } from '../../core/utils-client'
 import { isValidScriptPath } from '../../core/blueprintValidation'
+import { buildScriptGroups } from '../../core/extras/blueprintGroups'
 
 const languageByExt = {
   js: 'javascript',
@@ -85,15 +87,60 @@ function getLanguageForPath(path) {
   return languageByExt[ext] || 'javascript'
 }
 
-function deriveLockScopeFromBlueprintId(id) {
-  if (typeof id !== 'string' || !id.trim()) return 'global'
-  if (id === '$scene') return '$scene'
-  const idx = id.indexOf('__')
-  if (idx !== -1) {
-    const appName = id.slice(0, idx)
-    return appName ? appName : 'global'
+function normalizeScope(value) {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed || null
+}
+
+function getExportedName(node) {
+  if (!node) return null
+  if (node.type === 'Identifier') return node.name
+  if (node.type === 'Literal') return String(node.value)
+  return null
+}
+
+function entryHasDefaultExport(sourceText) {
+  if (typeof sourceText !== 'string' || !sourceText.trim()) return false
+  let ast = null
+  try {
+    ast = acornParse(sourceText, {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      allowHashBang: true,
+    })
+  } catch {
+    // Fallback for parse failures (e.g. transient edits or TS syntax):
+    // detect common default-export forms to keep scriptFormat in sync.
+    return /\bexport\s+default\b/.test(sourceText) || /\bexport\s*\{[^}]*\bdefault\b[^}]*\}/.test(sourceText)
   }
-  return id
+  for (const node of ast.body) {
+    if (node.type === 'ExportDefaultDeclaration') return true
+    if (node.type === 'ExportNamedDeclaration' && Array.isArray(node.specifiers)) {
+      for (const spec of node.specifiers) {
+        if (spec.type !== 'ExportSpecifier') continue
+        const exported = getExportedName(spec.exported)
+        if (exported === 'default') return true
+      }
+    }
+  }
+  return false
+}
+
+function resolveScriptFormatForSave(scriptRoot, entryPath, fileStates, nextEntryText = null) {
+  const currentFormat = scriptRoot?.scriptFormat === 'legacy-body' ? 'legacy-body' : 'module'
+  if (!entryPath || !isValidScriptPath(entryPath)) return currentFormat
+  const entryState = fileStates?.get?.(entryPath)
+  const entryText =
+    typeof nextEntryText === 'string'
+      ? nextEntryText
+      : typeof entryState?.model?.getValue === 'function'
+      ? entryState.model.getValue()
+      : typeof entryState?.originalText === 'string'
+        ? entryState.originalText
+        : null
+  if (typeof entryText !== 'string') return currentFormat
+  return entryHasDefaultExport(entryText) ? 'module' : 'legacy-body'
 }
 
 function buildFileTree(paths) {
@@ -132,7 +179,10 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
   const diffOriginalsRef = useRef(new Map())
   const placeholderModelRef = useRef(null)
   const saveAllRef = useRef(null)
+  const saveCurrentRef = useRef(null)
+  const applyScriptUpdateRef = useRef(null)
   const newFileInputRef = useRef(null)
+  const renameFileInputRef = useRef(null)
 
   const [selectedPath, setSelectedPath] = useState(null)
   const [fontSize, setFontSize] = useState(() => 12 * world.prefs.ui)
@@ -149,6 +199,9 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
   const [newFileOpen, setNewFileOpen] = useState(false)
   const [newFilePath, setNewFilePath] = useState('')
   const [newFileError, setNewFileError] = useState(null)
+  const [renameFileOpen, setRenameFileOpen] = useState(false)
+  const [renameFilePath, setRenameFilePath] = useState('')
+  const [renameFileError, setRenameFileError] = useState(null)
 
   const scriptFiles = scriptRoot?.scriptFiles
   const entryPath = scriptRoot?.scriptEntry || ''
@@ -159,6 +212,9 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     selectedPath !== entryPath &&
     isValidScriptPath(selectedPath) &&
     !isSharedPath(selectedPath)
+  const canRenameSelected = !!selectedPath && isValidScriptPath(selectedPath)
+  const canDeleteSelected =
+    !!selectedPath && selectedPath !== entryPath && isValidScriptPath(selectedPath)
 
   const { validPaths, invalidPaths } = useMemo(() => {
     const basePaths =
@@ -198,6 +254,29 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     return !!state?.dirty
   }, [selectedPath, dirtyTick])
 
+  const getStateStaleReason = useCallback(
+    (path, state) => {
+      if (!path || !state || state.isNew || !scriptFiles) return null
+      if (!Object.prototype.hasOwnProperty.call(scriptFiles, path)) {
+        return 'missing'
+      }
+      const currentAssetUrl = scriptFiles[path]
+      if (!currentAssetUrl) {
+        return 'missing'
+      }
+      if (state.assetUrl && state.assetUrl !== currentAssetUrl) {
+        return 'changed'
+      }
+      return null
+    },
+    [scriptFiles]
+  )
+
+  const setServerConflict = useCallback(() => {
+    setError(null)
+    setConflict('Script changed on the server. Refresh or retry.')
+  }, [])
+
   const clearAiProposal = useCallback(() => {
     setAiProposal(null)
     setAiPreviewOpen(false)
@@ -226,6 +305,9 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     setNewFileOpen(false)
     setNewFilePath('')
     setNewFileError(null)
+    setRenameFileOpen(false)
+    setRenameFilePath('')
+    setRenameFileError(null)
   }, [rootId, validPaths, clearAiProposal])
 
   useEffect(() => {
@@ -378,8 +460,80 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     [scriptRoot, scriptFiles, rootId, rootVersion, world]
   )
 
+  const rekeyFileState = useCallback(
+    (fromPath, toPath, { focus = true } = {}) => {
+      if (!fromPath || !toPath || fromPath === toPath) return fileStatesRef.current.get(fromPath) || null
+      const state = fileStatesRef.current.get(fromPath)
+      const monaco = monacoRef.current
+      if (!state?.model || !monaco) return null
+      const sourceModel = state.model
+      const nextUri = monaco.Uri.parse(`inmemory://module/${rootId}/${toPath}`)
+      let nextModel = monaco.editor.getModel(nextUri)
+      if (nextModel && nextModel !== sourceModel) {
+        nextModel.dispose()
+        nextModel = null
+      }
+      if (!nextModel) {
+        nextModel = monaco.editor.createModel(sourceModel.getValue(), getLanguageForPath(toPath), nextUri)
+      }
+      const nextState = {
+        ...state,
+        model: nextModel,
+        disposable: null,
+      }
+      nextState.disposable = nextModel.onDidChangeContent(() => {
+        const nextDirty = nextModel.getValue() !== nextState.originalText
+        if (nextDirty !== nextState.dirty) {
+          nextState.dirty = nextDirty
+          setDirtyTick(tick => tick + 1)
+        }
+      })
+
+      const editor = editorRef.current
+      if (currentPathRef.current === fromPath && editor && editor.getModel() === sourceModel) {
+        nextState.viewState = editor.saveViewState()
+        currentPathRef.current = toPath
+        editor.setModel(nextModel)
+        if (nextState.viewState) {
+          editor.restoreViewState(nextState.viewState)
+        }
+        if (focus) {
+          editor.focus()
+        }
+      }
+
+      state.disposable?.dispose()
+      fileStatesRef.current.delete(fromPath)
+      fileStatesRef.current.set(toPath, nextState)
+      sourceModel.dispose()
+      setDirtyTick(tick => tick + 1)
+      return nextState
+    },
+    [rootId]
+  )
+
+  const removeFileState = useCallback(path => {
+    if (!path) return
+    const state = fileStatesRef.current.get(path)
+    if (!state) return
+    const editor = editorRef.current
+    if (currentPathRef.current === path && editor && editor.getModel() === state.model) {
+      currentPathRef.current = null
+      if (placeholderModelRef.current) {
+        editor.setModel(placeholderModelRef.current)
+      }
+    }
+    state.disposable?.dispose()
+    state.model?.dispose()
+    fileStatesRef.current.delete(path)
+    setDirtyTick(tick => tick + 1)
+  }, [])
+
   const openNewFile = useCallback(() => {
     if (!scriptRoot || !scriptFiles) return
+    setRenameFileOpen(false)
+    setRenameFilePath('')
+    setRenameFileError(null)
     setNewFileOpen(true)
     setNewFilePath('')
     setNewFileError(null)
@@ -390,6 +544,9 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
 
   const openNewSharedFile = useCallback(() => {
     if (!scriptRoot || !scriptFiles) return
+    setRenameFileOpen(false)
+    setRenameFilePath('')
+    setRenameFileError(null)
     setNewFileOpen(true)
     setNewFilePath(SHARED_PREFIX)
     setNewFileError(null)
@@ -442,6 +599,32 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     }
   }, [scriptRoot, scriptFiles, newFilePath, extraPaths, ensureFileState])
 
+  const openRenameFile = useCallback(() => {
+    if (!scriptRoot || !scriptFiles) return
+    if (!selectedPath || !isValidScriptPath(selectedPath)) return
+    setNewFileOpen(false)
+    setNewFilePath('')
+    setNewFileError(null)
+    setRenameFileOpen(true)
+    setRenameFilePath(selectedPath)
+    setRenameFileError(null)
+    requestAnimationFrame(() => {
+      const input = renameFileInputRef.current
+      if (!input) return
+      input.focus()
+      if (typeof input.setSelectionRange === 'function') {
+        const end = input.value.length
+        input.setSelectionRange(end, end)
+      }
+    })
+  }, [scriptRoot, scriptFiles, selectedPath])
+
+  const cancelRenameFile = useCallback(() => {
+    setRenameFileOpen(false)
+    setRenameFilePath('')
+    setRenameFileError(null)
+  }, [])
+
   const moveSelectedToShared = useCallback(async () => {
     if (!scriptRoot || !scriptFiles) return
     if (saving) return
@@ -472,102 +655,108 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       setError('Shared file already exists.')
       return
     }
-    setLoading(true)
-    setError(null)
-    let lockToken
+    const persisted = Object.prototype.hasOwnProperty.call(scriptFiles, path)
     try {
-      const state = await ensureFileState(path)
-      if (!state?.model) throw new Error('missing_state')
-      const text = state.model.getValue()
-      const nextState = await ensureFileState(sharedPath, { allowMissing: true })
-      if (!nextState?.model) throw new Error('missing_shared_state')
-      nextState.model.setValue(text)
-      nextState.originalText = state.originalText
-      nextState.dirty = text !== state.originalText
-      nextState.viewState = state.viewState || null
-      nextState.version = state.version
-      nextState.assetUrl = state.assetUrl
-      nextState.isNew = state.isNew
-      state.disposable?.dispose()
-      state.model?.dispose()
-      fileStatesRef.current.delete(path)
-      setExtraPaths(current => {
-        let next = current.filter(item => item !== path)
-        if (nextState.isNew) {
-          if (!next.includes(sharedPath)) next = [...next, sharedPath]
-        } else if (next.includes(sharedPath)) {
-          next = next.filter(item => item !== sharedPath)
-        }
-        return next
-      })
-      setSelectedPath(sharedPath)
-      setDirtyTick(tick => tick + 1)
-
-      if (Object.prototype.hasOwnProperty.call(scriptFiles, path)) {
-        if (!entryPath || !Object.prototype.hasOwnProperty.call(scriptFiles, entryPath)) {
-          setError('Script entry missing.')
-          return
-        }
-        if (!world.admin?.acquireDeployLock || !world.admin?.blueprintModify) {
-          setError('Admin connection required.')
-          return
-        }
-        const scope = deriveLockScopeFromBlueprintId(scriptRoot.id)
-        const result = await world.admin.acquireDeployLock({
-          owner: world.network.id,
-          scope,
-        })
-        lockToken = result?.token || world.admin.deployLockToken
-        const nextScriptFiles = { ...scriptFiles }
-        const assetUrl = nextScriptFiles[path]
-        if (!assetUrl) {
-          setError('Missing script file.')
-          return
-        }
-        delete nextScriptFiles[path]
-        nextScriptFiles[sharedPath] = assetUrl
-        nextState.assetUrl = assetUrl
-        nextState.isNew = false
-        const nextVersion = rootVersion + 1
-        const change = {
-          id: scriptRoot.id,
-          version: nextVersion,
-          script: nextScriptFiles[entryPath],
-          scriptEntry: entryPath,
-          scriptFiles: nextScriptFiles,
-          scriptFormat: scriptRoot.scriptFormat || 'module',
-        }
-        world.blueprints.modify(change)
-        await world.admin.blueprintModify(change, {
-          ignoreNetworkId: world.network.id,
-          lockToken,
-        })
-        nextState.version = nextVersion
+      const state = await ensureFileState(path, { allowMissing: !persisted })
+      if (!state?.model) {
+        setError('Missing script file.')
+        return
       }
+
+      if (!persisted) {
+        const nextState = rekeyFileState(path, sharedPath)
+        if (!nextState) {
+          setError('Failed to move to shared.')
+          return
+        }
+        nextState.isNew = true
+        setExtraPaths(current => current.map(item => (item === path ? sharedPath : item)))
+        setSelectedPath(sharedPath)
+        setError(null)
+        setConflict(null)
+        world.emit('toast', 'Moved to shared')
+        return
+      }
+
+      if (getStateStaleReason(path, state)) {
+        setServerConflict()
+        return
+      }
+      if (!entryPath || !Object.prototype.hasOwnProperty.call(scriptFiles, entryPath)) {
+        setError('Script entry missing.')
+        return
+      }
+
+      const nextScriptFiles = { ...scriptFiles }
+      const assetUrl = nextScriptFiles[path]
+      if (!assetUrl) {
+        setError('Missing script file.')
+        return
+      }
+      delete nextScriptFiles[path]
+      nextScriptFiles[sharedPath] = assetUrl
+      const scriptUpdate = {
+        script: nextScriptFiles[entryPath],
+        scriptEntry: entryPath,
+        scriptFiles: nextScriptFiles,
+        scriptFormat: resolveScriptFormatForSave(scriptRoot, entryPath, fileStatesRef.current),
+      }
+
+      setSaving(true)
+      setError(null)
+      setConflict(null)
+      const applyScriptUpdateFn = applyScriptUpdateRef.current
+      if (!applyScriptUpdateFn) {
+        throw new Error('update_unavailable')
+      }
+      const result = await applyScriptUpdateFn(scriptUpdate)
+      if (result.mode === 'fork') {
+        world.emit('toast', 'Script forked')
+        return
+      }
+
+      const nextState = rekeyFileState(path, sharedPath)
+      if (!nextState) {
+        throw new Error('move_state_failed')
+      }
+      nextState.assetUrl = assetUrl
+      nextState.isNew = false
+      nextState.version = result.nextVersion
+      setExtraPaths(current => current.filter(item => item !== path && item !== sharedPath))
+      setSelectedPath(sharedPath)
       world.emit('toast', 'Moved to shared')
     } catch (err) {
-      console.error(err)
-      setError('Failed to move to shared.')
-    } finally {
-      setLoading(false)
-      if (lockToken && world.admin?.releaseDeployLock) {
-        try {
-          await world.admin.releaseDeployLock(lockToken)
-        } catch (releaseErr) {
-          console.error('failed to release deploy lock', releaseErr)
-        }
+      const code = err?.code || err?.message
+      if (code === 'version_mismatch') {
+        setServerConflict()
+      } else if (code === 'admin_required' || code === 'admin_code_missing' || code === 'deploy_required') {
+        setError('Admin code required.')
+      } else if (code === 'locked' || code === 'deploy_locked' || code === 'deploy_lock_required') {
+        const owner = err?.lock?.owner
+        setError(owner ? `Deploy locked by ${owner}.` : 'Deploy locked by another session.')
+      } else if (code === 'builder_required') {
+        setError('Builder access required.')
+      } else if (code === 'scope_required') {
+        setError('Script scope metadata is missing.')
+      } else if (code !== 'fork_failed') {
+        console.error(err)
+        setError('Failed to move to shared.')
       }
+    } finally {
+      setSaving(false)
     }
   }, [
     scriptRoot,
     scriptFiles,
     entryPath,
-    rootVersion,
     world,
     saving,
     selectedPath,
     extraPaths,
     ensureFileState,
+    rekeyFileState,
+    getStateStaleReason,
+    setServerConflict,
   ])
 
   const setEditorModel = useCallback(path => {
@@ -603,12 +792,24 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         return
       }
       if (existing && !force) {
-        setEditorModel(path)
-        return
+        const staleReason = getStateStaleReason(path, existing)
+        if (!staleReason) {
+          setEditorModel(path)
+          return
+        }
+        if (existing.dirty) {
+          setEditorModel(path)
+          setServerConflict()
+          return
+        }
       }
       const assetUrl = scriptFiles[path]
       if (!assetUrl) {
-        setError('Missing script file.')
+        if (existing && existing.dirty) {
+          setServerConflict()
+        } else {
+          setError('Missing script file.')
+        }
         return
       }
       setLoading(true)
@@ -670,7 +871,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         }
       }
     },
-    [scriptRoot, scriptFiles, rootId, rootVersion, setEditorModel, world]
+    [scriptRoot, scriptFiles, rootId, rootVersion, setEditorModel, world, getStateStaleReason, setServerConflict]
   )
 
   const openAiPreview = useCallback(() => {
@@ -728,9 +929,8 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
           setError(`Save or discard changes in ${path} before applying AI proposal.`)
           return
         }
-        if (state && state.version !== rootVersion) {
-          setError(null)
-          setConflict('Script changed on the server. Refresh or retry.')
+        if (state && getStateStaleReason(path, state)) {
+          setServerConflict()
           return
         }
       }
@@ -837,7 +1037,9 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       clearAiProposal,
       ensureFileState,
       emitAiTelemetry,
+      getStateStaleReason,
       selectedPath,
+      setServerConflict,
       validPaths,
       world,
     ]
@@ -873,6 +1075,18 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         insertSpaces: true,
         fontSize: fontSize,
       })
+      editor.addAction({
+        id: 'script-editor-save',
+        label: 'Save Script',
+        keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS],
+        run: async () => {
+          if (saveAllRef.current) {
+            const savedAny = await saveAllRef.current()
+            if (savedAny) return
+          }
+          await saveCurrentRef.current?.()
+        },
+      })
       editorRef.current = editor
       setEditorReady(true)
       if (selectedPath) {
@@ -905,6 +1119,28 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     if (!selectedPath || !editorReady) return
     loadPath(selectedPath)
   }, [selectedPath, editorReady, loadPath])
+
+  useEffect(() => {
+    const onKeyDown = event => {
+      if (!(event.metaKey || event.ctrlKey)) return
+      if (String(event.key || '').toLowerCase() !== 's') return
+      event.preventDefault()
+      event.stopPropagation()
+      ;(async () => {
+        if (saveAllRef.current) {
+          const savedAny = await saveAllRef.current()
+          if (savedAny) return
+        }
+        await saveCurrentRef.current?.()
+      })().catch(err => {
+        console.error(err)
+      })
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [])
 
   useEffect(() => {
     if (!aiPreviewOpen) return
@@ -996,6 +1232,379 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     world.emit('toast', 'Script refreshed')
   }, [selectedPath, loadPath, world])
 
+  const resolveScriptUpdateMode = useCallback(async () => {
+    const app = world.ui?.state?.app || null
+    const targetBlueprint =
+      (app?.data?.blueprint && world.blueprints.get(app.data.blueprint)) || app?.blueprint || scriptRoot
+    if (!scriptRoot) {
+      return { mode: 'group', group: null, targetBlueprint }
+    }
+    const groups = buildScriptGroups(world.blueprints.items)
+    const group =
+      (targetBlueprint?.id && groups.byId.get(targetBlueprint.id)) || groups.byId.get(scriptRoot.id) || null
+    const groupSize = group?.items?.length || 0
+    if (groupSize <= 1 || !world.ui?.confirm) {
+      return { mode: 'group', group, targetBlueprint }
+    }
+    const applyAll = await world.ui.confirm({
+      title: 'Apply code changes?',
+      message: `This script is shared by ${groupSize} blueprints. Apply to all or fork this app?`,
+      confirmText: 'Apply to all',
+      cancelText: 'Fork',
+    })
+    return { mode: applyAll ? 'group' : 'fork', group, targetBlueprint }
+  }, [world, scriptRoot])
+
+  const applyScriptUpdate = useCallback(
+    async scriptUpdate => {
+      const updateMode = await resolveScriptUpdateMode()
+
+      if (updateMode.mode === 'fork') {
+        if (!world.builder?.forkTemplateFromBlueprint) {
+          const err = new Error('builder_required')
+          err.code = 'builder_required'
+          throw err
+        }
+        const sourceBlueprint = updateMode.targetBlueprint || scriptRoot
+        const forked = await world.builder.forkTemplateFromBlueprint(sourceBlueprint, 'Code fork', null, {
+          ...scriptUpdate,
+          scriptRef: null,
+        })
+        if (!forked) {
+          const err = new Error('fork_failed')
+          err.code = 'fork_failed'
+          throw err
+        }
+        const app = world.ui?.state?.app
+        if (app) {
+          app.modify({ blueprint: forked.id })
+          world.admin.entityModify(
+            { id: app.data.id, blueprint: forked.id },
+            { ignoreNetworkId: world.network.id }
+          )
+        }
+        return { mode: 'fork', nextVersion: null }
+      }
+
+      if (!world.admin?.acquireDeployLock || !world.admin?.blueprintModify) {
+        const err = new Error('admin_required')
+        err.code = 'admin_required'
+        throw err
+      }
+      const scope = normalizeScope(scriptRoot?.scope)
+      if (!scope) {
+        const err = new Error('scope_required')
+        err.code = 'scope_required'
+        throw err
+      }
+
+      let lockToken
+      try {
+        const result = await world.admin.acquireDeployLock({
+          owner: world.network.id,
+          scope,
+        })
+        lockToken = result?.token || world.admin.deployLockToken
+        const nextVersion = rootVersion + 1
+        const change = {
+          id: scriptRoot.id,
+          version: nextVersion,
+          ...scriptUpdate,
+        }
+        await world.admin.blueprintModify(change, {
+          ignoreNetworkId: world.network.id,
+          lockToken,
+          request: true,
+        })
+
+        const siblingChanges = []
+        if (updateMode.group?.items?.length) {
+          for (const sibling of updateMode.group.items) {
+            if (!sibling?.id || sibling.id === scriptRoot.id) continue
+            const siblingChange = {
+              id: sibling.id,
+              version: (sibling.version || 0) + 1,
+              script: scriptUpdate.script,
+              scriptEntry: null,
+              scriptFiles: null,
+              scriptFormat: scriptUpdate.scriptFormat,
+              scriptRef: scriptRoot.id,
+            }
+            await world.admin.blueprintModify(siblingChange, {
+              ignoreNetworkId: world.network.id,
+              lockToken,
+              request: true,
+            })
+            siblingChanges.push(siblingChange)
+          }
+        }
+
+        world.blueprints.modify(change)
+        for (const siblingChange of siblingChanges) {
+          world.blueprints.modify(siblingChange)
+        }
+        return { mode: 'group', nextVersion }
+      } finally {
+        if (lockToken && world.admin?.releaseDeployLock) {
+          try {
+            await world.admin.releaseDeployLock(lockToken)
+          } catch (releaseErr) {
+            console.error('failed to release deploy lock', releaseErr)
+          }
+        }
+      }
+    },
+    [resolveScriptUpdateMode, world, scriptRoot, rootVersion]
+  )
+  applyScriptUpdateRef.current = applyScriptUpdate
+
+  const renameSelectedFile = useCallback(async () => {
+    if (!scriptRoot || !scriptFiles) return
+    if (saving) return
+    const fromPath = selectedPath
+    if (!fromPath || !isValidScriptPath(fromPath)) {
+      setRenameFileError('Invalid script path.')
+      return
+    }
+    const toPath = renameFilePath.trim()
+    if (!toPath) {
+      setRenameFileError('Enter a file path.')
+      return
+    }
+    if (!isValidScriptPath(toPath)) {
+      setRenameFileError('Invalid path. Use helpers/util.js or @shared/helpers/util.js.')
+      return
+    }
+    if (toPath === fromPath) {
+      cancelRenameFile()
+      return
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(scriptFiles, toPath) ||
+      extraPaths.includes(toPath) ||
+      fileStatesRef.current.has(toPath)
+    ) {
+      setRenameFileError('That file already exists.')
+      return
+    }
+    const persisted = Object.prototype.hasOwnProperty.call(scriptFiles, fromPath)
+    const state = await ensureFileState(fromPath, { allowMissing: !persisted })
+    if (!state?.model) {
+      setRenameFileError('Missing script file.')
+      return
+    }
+
+    if (!persisted) {
+      const nextState = rekeyFileState(fromPath, toPath)
+      if (!nextState) {
+        setRenameFileError('Failed to rename file.')
+        return
+      }
+      nextState.isNew = true
+      setExtraPaths(current => current.map(item => (item === fromPath ? toPath : item)))
+      setSelectedPath(toPath)
+      cancelRenameFile()
+      setError(null)
+      setConflict(null)
+      world.emit('toast', 'File renamed')
+      return
+    }
+
+    const nextScriptFiles = { ...scriptFiles }
+    const assetUrl = nextScriptFiles[fromPath]
+    if (!assetUrl) {
+      setRenameFileError('Missing script file.')
+      return
+    }
+    delete nextScriptFiles[fromPath]
+    nextScriptFiles[toPath] = assetUrl
+    const nextEntryPath = entryPath === fromPath ? toPath : entryPath
+    if (!nextEntryPath || !Object.prototype.hasOwnProperty.call(nextScriptFiles, nextEntryPath)) {
+      setRenameFileError('Script entry missing.')
+      return
+    }
+    const scriptUpdate = {
+      script: nextScriptFiles[nextEntryPath],
+      scriptEntry: nextEntryPath,
+      scriptFiles: nextScriptFiles,
+      scriptFormat: resolveScriptFormatForSave(
+        scriptRoot,
+        nextEntryPath,
+        fileStatesRef.current,
+        fromPath === entryPath ? state.model.getValue() : null
+      ),
+    }
+
+    setSaving(true)
+    setError(null)
+    setConflict(null)
+    setRenameFileError(null)
+    try {
+      const result = await applyScriptUpdate(scriptUpdate)
+      if (result.mode === 'fork') {
+        cancelRenameFile()
+        world.emit('toast', 'Script forked')
+        return
+      }
+      const nextState = rekeyFileState(fromPath, toPath)
+      if (nextState) {
+        nextState.version = result.nextVersion
+        nextState.assetUrl = assetUrl
+        nextState.isNew = false
+      } else {
+        // The blueprint update can re-render and prune `fromPath` before local rekey runs.
+        // The rename already succeeded remotely; selecting `toPath` reloads local state.
+        console.warn('rename_state_rekey_skipped', { fromPath, toPath })
+      }
+      setExtraPaths(current => current.filter(item => item !== fromPath && item !== toPath))
+      setSelectedPath(toPath)
+      cancelRenameFile()
+      world.emit('toast', 'File renamed')
+    } catch (err) {
+      const code = err?.code || err?.message
+      if (code === 'version_mismatch') {
+        setServerConflict()
+      } else if (code === 'admin_required' || code === 'admin_code_missing' || code === 'deploy_required') {
+        setError('Admin code required.')
+      } else if (code === 'locked' || code === 'deploy_locked' || code === 'deploy_lock_required') {
+        const owner = err?.lock?.owner
+        setError(owner ? `Deploy locked by ${owner}.` : 'Deploy locked by another session.')
+      } else if (code === 'builder_required') {
+        setError('Builder access required.')
+      } else if (code === 'scope_required') {
+        setError('Script scope metadata is missing.')
+      } else if (code !== 'fork_failed') {
+        console.error(err)
+        setError('Rename failed.')
+      }
+      if (code !== 'fork_failed') {
+        setRenameFileError('Rename failed.')
+      }
+    } finally {
+      setSaving(false)
+    }
+  }, [
+    scriptRoot,
+    scriptFiles,
+    saving,
+    selectedPath,
+    renameFilePath,
+    extraPaths,
+    entryPath,
+    ensureFileState,
+    rekeyFileState,
+    cancelRenameFile,
+    world,
+    applyScriptUpdate,
+    setServerConflict,
+  ])
+
+  const deleteSelectedFile = useCallback(async () => {
+    if (!scriptRoot || !scriptFiles) return
+    if (saving) return
+    const path = selectedPath
+    if (!path || !isValidScriptPath(path)) return
+    if (path === entryPath) {
+      setError('Entry script cannot be deleted.')
+      return
+    }
+
+    const state = fileStatesRef.current.get(path)
+    const ok = await world.ui.confirm({
+      title: 'Delete file?',
+      message: state?.dirty
+        ? `Delete ${path}? Unsaved edits will be discarded.`
+        : `Delete ${path}?`,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+    })
+    if (!ok) return
+
+    const persisted = Object.prototype.hasOwnProperty.call(scriptFiles, path)
+    if (!persisted) {
+      removeFileState(path)
+      setExtraPaths(current => current.filter(item => item !== path))
+      if (selectedPath === path) {
+        const remaining = validPaths.filter(item => item !== path)
+        setSelectedPath(remaining[0] || null)
+      }
+      setError(null)
+      setConflict(null)
+      world.emit('toast', 'File deleted')
+      return
+    }
+
+    const nextScriptFiles = { ...scriptFiles }
+    if (!nextScriptFiles[path]) {
+      setError('Missing script file.')
+      return
+    }
+    delete nextScriptFiles[path]
+    const remainingPaths = Object.keys(nextScriptFiles).sort((a, b) => a.localeCompare(b))
+    if (!remainingPaths.length) {
+      setError('At least one script file is required.')
+      return
+    }
+    const nextEntryPath = entryPath
+    if (!nextEntryPath || !Object.prototype.hasOwnProperty.call(nextScriptFiles, nextEntryPath)) {
+      setError('Script entry missing.')
+      return
+    }
+    const scriptUpdate = {
+      script: nextScriptFiles[nextEntryPath],
+      scriptEntry: nextEntryPath,
+      scriptFiles: nextScriptFiles,
+      scriptFormat: resolveScriptFormatForSave(scriptRoot, nextEntryPath, fileStatesRef.current),
+    }
+
+    setSaving(true)
+    setError(null)
+    setConflict(null)
+    try {
+      const result = await applyScriptUpdate(scriptUpdate)
+      if (result.mode === 'fork') {
+        world.emit('toast', 'Script forked')
+        return
+      }
+      removeFileState(path)
+      setExtraPaths(current => current.filter(item => item !== path))
+      if (selectedPath === path) {
+        setSelectedPath(remainingPaths[0] || null)
+      }
+      world.emit('toast', 'File deleted')
+    } catch (err) {
+      const code = err?.code || err?.message
+      if (code === 'version_mismatch') {
+        setServerConflict()
+      } else if (code === 'admin_required' || code === 'admin_code_missing' || code === 'deploy_required') {
+        setError('Admin code required.')
+      } else if (code === 'locked' || code === 'deploy_locked' || code === 'deploy_lock_required') {
+        const owner = err?.lock?.owner
+        setError(owner ? `Deploy locked by ${owner}.` : 'Deploy locked by another session.')
+      } else if (code === 'builder_required') {
+        setError('Builder access required.')
+      } else if (code === 'scope_required') {
+        setError('Script scope metadata is missing.')
+      } else if (code !== 'fork_failed') {
+        console.error(err)
+        setError('Delete failed.')
+      }
+    } finally {
+      setSaving(false)
+    }
+  }, [
+    scriptRoot,
+    scriptFiles,
+    saving,
+    selectedPath,
+    entryPath,
+    world,
+    validPaths,
+    removeFileState,
+    applyScriptUpdate,
+    setServerConflict,
+  ])
+
   const saveCurrent = useCallback(async () => {
     if (!scriptRoot || !scriptFiles) return
     const path = currentPathRef.current
@@ -1018,17 +1627,17 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       setError('Script entry missing.')
       return
     }
-    if (state.version !== rootVersion) {
-      setError(null)
-      setConflict('Script changed on the server. Refresh or retry.')
+    if (getStateStaleReason(path, state)) {
+      setServerConflict()
       return
     }
+    const updateMode = await resolveScriptUpdateMode()
     setSaving(true)
     setError(null)
     setConflict(null)
     let lockToken
     try {
-      if (!world.admin?.upload || !world.admin?.acquireDeployLock) {
+      if (!world.admin?.upload) {
         setError('Admin connection required.')
         return
       }
@@ -1043,30 +1652,90 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
       const hash = await hashFile(file)
       const assetFilename = `${hash}.${assetExt}`
       const assetUrl = `asset://${assetFilename}`
-      const scope = deriveLockScopeFromBlueprintId(scriptRoot.id)
+      await world.admin.upload(file)
+      const resolvedUrl = world.resolveURL ? world.resolveURL(assetUrl) : assetUrl
+      world.loader.setFile?.(resolvedUrl, file)
+      const nextScriptFiles = { ...scriptFiles, [path]: assetUrl }
+      const entryUrl = nextScriptFiles[entryPath]
+      const scriptUpdate = {
+        script: entryUrl,
+        scriptEntry: entryPath,
+        scriptFiles: nextScriptFiles,
+        scriptFormat: resolveScriptFormatForSave(
+          scriptRoot,
+          entryPath,
+          fileStatesRef.current,
+          path === entryPath ? text : null
+        ),
+      }
+
+      if (updateMode.mode === 'fork') {
+        if (!world.builder?.forkTemplateFromBlueprint) {
+          setError('Builder access required.')
+          return
+        }
+        const sourceBlueprint = updateMode.targetBlueprint || scriptRoot
+        const forked = await world.builder.forkTemplateFromBlueprint(sourceBlueprint, 'Code fork', null, {
+          ...scriptUpdate,
+          scriptRef: null,
+        })
+        if (!forked) return
+        const app = world.ui?.state?.app
+        if (app) {
+          app.modify({ blueprint: forked.id })
+          world.admin.entityModify(
+            { id: app.data.id, blueprint: forked.id },
+            { ignoreNetworkId: world.network.id }
+          )
+        }
+        world.emit('toast', 'Script forked')
+        return
+      }
+
+      if (!world.admin?.acquireDeployLock) {
+        setError('Admin connection required.')
+        return
+      }
+      const scope = normalizeScope(scriptRoot.scope)
+      if (!scope) {
+        setError('Script scope metadata is missing.')
+        return
+      }
       const result = await world.admin.acquireDeployLock({
         owner: world.network.id,
         scope,
       })
       lockToken = result?.token || world.admin.deployLockToken
-      await world.admin.upload(file)
-      const resolvedUrl = world.resolveURL ? world.resolveURL(assetUrl) : assetUrl
-      world.loader.setFile?.(resolvedUrl, file)
-      const nextScriptFiles = { ...scriptFiles, [path]: assetUrl }
       const nextVersion = rootVersion + 1
       const change = {
         id: scriptRoot.id,
         version: nextVersion,
-        script: nextScriptFiles[entryPath],
-        scriptEntry: entryPath,
-        scriptFiles: nextScriptFiles,
-        scriptFormat: scriptRoot.scriptFormat || 'module',
+        ...scriptUpdate,
       }
       world.blueprints.modify(change)
       world.admin.blueprintModify(change, {
         ignoreNetworkId: world.network.id,
         lockToken,
       })
+      if (updateMode.group?.items?.length) {
+        for (const sibling of updateMode.group.items) {
+          if (!sibling?.id || sibling.id === scriptRoot.id) continue
+          const siblingChange = {
+            id: sibling.id,
+            version: (sibling.version || 0) + 1,
+            script: entryUrl,
+            scriptEntry: null,
+            scriptFiles: null,
+            scriptFormat: scriptUpdate.scriptFormat,
+            scriptRef: scriptRoot.id,
+          }
+          world.blueprints.modify(siblingChange)
+          world.admin.blueprintModify(siblingChange, {
+            ignoreNetworkId: world.network.id,
+            lockToken,
+          })
+        }
+      }
       state.originalText = text
       state.dirty = false
       state.version = nextVersion
@@ -1103,6 +1772,9 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     entryPath,
     rootVersion,
     world,
+    getStateStaleReason,
+    resolveScriptUpdateMode,
+    setServerConflict,
   ])
 
   const saveAll = useCallback(
@@ -1133,29 +1805,23 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
           setError('Missing script file.')
           return false
         }
-        if (state.version !== rootVersion) {
-          setError(null)
-          setConflict('Script changed on the server. Refresh or retry.')
+        if (getStateStaleReason(path, state)) {
+          setServerConflict()
           return false
         }
       }
+      const updateMode = await resolveScriptUpdateMode()
       setSaving(true)
       setError(null)
       setConflict(null)
       let lockToken
       try {
-        if (!world.admin?.upload || !world.admin?.acquireDeployLock) {
+        if (!world.admin?.upload) {
           setError('Admin connection required.')
           return false
         }
         const nextScriptFiles = { ...scriptFiles }
         const updates = []
-        const scope = deriveLockScopeFromBlueprintId(scriptRoot.id)
-        const result = await world.admin.acquireDeployLock({
-          owner: world.network.id,
-          scope,
-        })
-        lockToken = result?.token || world.admin.deployLockToken
         for (const { path, state } of pending) {
           const text = state.model.getValue()
           const ext = getFileExtension(path)
@@ -1174,20 +1840,88 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
           nextScriptFiles[path] = assetUrl
           updates.push({ path, text, assetUrl })
         }
+        const entryUrl = nextScriptFiles[entryPath]
+        let nextEntryText = null
+        for (const update of updates) {
+          if (update.path === entryPath) {
+            nextEntryText = update.text
+            break
+          }
+        }
+        const scriptUpdate = {
+          script: entryUrl,
+          scriptEntry: entryPath,
+          scriptFiles: nextScriptFiles,
+          scriptFormat: resolveScriptFormatForSave(scriptRoot, entryPath, fileStatesRef.current, nextEntryText),
+        }
+
+        if (updateMode.mode === 'fork') {
+          if (!world.builder?.forkTemplateFromBlueprint) {
+            setError('Builder access required.')
+            return false
+          }
+          const sourceBlueprint = updateMode.targetBlueprint || scriptRoot
+          const forked = await world.builder.forkTemplateFromBlueprint(sourceBlueprint, 'Code fork', null, {
+            ...scriptUpdate,
+            scriptRef: null,
+          })
+          if (!forked) return false
+          const app = world.ui?.state?.app
+          if (app) {
+            app.modify({ blueprint: forked.id })
+            world.admin.entityModify(
+              { id: app.data.id, blueprint: forked.id },
+              { ignoreNetworkId: world.network.id }
+            )
+          }
+          world.emit('toast', 'Script forked')
+          return true
+        }
+
+        if (!world.admin?.acquireDeployLock) {
+          setError('Admin connection required.')
+          return false
+        }
+        const scope = normalizeScope(scriptRoot.scope)
+        if (!scope) {
+          setError('Script scope metadata is missing.')
+          return false
+        }
+        const result = await world.admin.acquireDeployLock({
+          owner: world.network.id,
+          scope,
+        })
+        lockToken = result?.token || world.admin.deployLockToken
         const nextVersion = rootVersion + 1
         const change = {
           id: scriptRoot.id,
           version: nextVersion,
-          script: nextScriptFiles[entryPath],
-          scriptEntry: entryPath,
-          scriptFiles: nextScriptFiles,
-          scriptFormat: scriptRoot.scriptFormat || 'module',
+          ...scriptUpdate,
         }
         world.blueprints.modify(change)
         world.admin.blueprintModify(change, {
           ignoreNetworkId: world.network.id,
           lockToken,
         })
+        if (updateMode.group?.items?.length) {
+          for (const sibling of updateMode.group.items) {
+            if (!sibling?.id || sibling.id === scriptRoot.id) continue
+            const siblingChange = {
+              id: sibling.id,
+              version: (sibling.version || 0) + 1,
+              script: entryUrl,
+              scriptEntry: null,
+              scriptFiles: null,
+              scriptFormat: scriptUpdate.scriptFormat,
+              scriptRef: scriptRoot.id,
+            }
+            world.blueprints.modify(siblingChange)
+            world.admin.blueprintModify(siblingChange, {
+              ignoreNetworkId: world.network.id,
+              lockToken,
+            })
+          }
+        }
         for (const update of updates) {
           const state = fileStatesRef.current.get(update.path)
           if (!state) continue
@@ -1229,9 +1963,10 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
         }
       }
     },
-    [scriptRoot, scriptFiles, entryPath, rootVersion, world, saving]
+    [scriptRoot, scriptFiles, entryPath, rootVersion, world, saving, resolveScriptUpdateMode, getStateStaleReason, setServerConflict]
   )
 
+  saveCurrentRef.current = saveCurrent
   saveAllRef.current = saveAll
 
   const commitAiProposal = useCallback(async (options = {}) => {
@@ -1343,10 +2078,17 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
     if (!path) return
     const state = fileStatesRef.current.get(path)
     if (!state) return
+    if (scriptFiles && Object.prototype.hasOwnProperty.call(scriptFiles, path)) {
+      const currentAssetUrl = scriptFiles[path]
+      if (currentAssetUrl) {
+        state.assetUrl = currentAssetUrl
+      }
+      state.isNew = false
+    }
     state.version = rootVersion
     setConflict(null)
     await saveCurrent()
-  }, [rootVersion, saveCurrent])
+  }, [rootVersion, saveCurrent, scriptFiles])
 
   useEffect(() => {
     onHandle?.({
@@ -1545,6 +2287,14 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
           &:disabled {
             opacity: 0.5;
             cursor: default;
+          }
+        }
+        .script-files-move.danger {
+          border-color: rgba(255, 107, 107, 0.45);
+          color: #ff8a8a;
+          &:hover {
+            border-color: rgba(255, 107, 107, 0.75);
+            color: #ffb3b3;
           }
         }
         .script-files-entry {
@@ -1757,12 +2507,70 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle }) {
             {newFileError && <div className='script-files-new-error'>{newFileError}</div>}
           </div>
         )}
+        {renameFileOpen && (
+          <div className='script-files-new'>
+            <input
+              ref={renameFileInputRef}
+              value={renameFilePath}
+              placeholder='helpers/util.js'
+              onChange={event => {
+                setRenameFilePath(event.target.value)
+                if (renameFileError) {
+                  setRenameFileError(null)
+                }
+              }}
+              onKeyDown={event => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  renameSelectedFile()
+                } else if (event.key === 'Escape') {
+                  event.preventDefault()
+                  cancelRenameFile()
+                }
+              }}
+            />
+            <div className='script-files-new-actions'>
+              <button
+                className='script-files-new-btn primary'
+                type='button'
+                disabled={!renameFilePath.trim()}
+                onClick={renameSelectedFile}
+              >
+                Rename
+              </button>
+              <button className='script-files-new-btn' type='button' onClick={cancelRenameFile}>
+                Cancel
+              </button>
+            </div>
+            {renameFileError && <div className='script-files-new-error'>{renameFileError}</div>}
+          </div>
+        )}
         {entryPath && <div className='script-files-entry'>Entry: {entryPath}</div>}
+        {canRenameSelected && (
+          <button
+            className='script-files-move'
+            type='button'
+            disabled={!editorReady || saving}
+            onClick={openRenameFile}
+          >
+            Rename
+          </button>
+        )}
+        {canDeleteSelected && (
+          <button
+            className='script-files-move danger'
+            type='button'
+            disabled={!editorReady || saving}
+            onClick={deleteSelectedFile}
+          >
+            Delete
+          </button>
+        )}
         {canMoveToShared && (
           <button
             className='script-files-move'
             type='button'
-            disabled={!editorReady}
+            disabled={!editorReady || saving}
             onClick={moveSelectedToShared}
           >
             Move to shared

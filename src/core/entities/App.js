@@ -195,7 +195,9 @@ export class App extends Entity {
     if (runScript) {
       this.abortController = new AbortController()
       try {
-        this.script.exec(this.getWorldProxy(), this.getAppProxy(), this.fetch, this.effectiveProps, this.setTimeout)
+        this.runInScriptContext(() =>
+          this.script.exec(this.getWorldProxy(), this.getAppProxy(), this.fetch, this.effectiveProps, this.setTimeout)
+        )
         this.scriptError = null
       } catch (err) {
         this.scriptError = serializeError(err)
@@ -279,7 +281,13 @@ export class App extends Entity {
 
   update(delta) {
     // if someone else is moving the app, interpolate updates
-    if (this.data.mover && this.data.mover !== this.world.network.id) {
+    if (
+      this.data.mover &&
+      this.data.mover !== this.world.network.id &&
+      this.networkPos &&
+      this.networkQuat &&
+      this.networkSca
+    ) {
       this.networkPos.update(delta)
       this.networkQuat.update(delta)
       this.networkSca.update(delta)
@@ -344,7 +352,7 @@ export class App extends Entity {
     }
     if (data.hasOwnProperty('position')) {
       this.data.position = data.position
-      if (this.data.mover) {
+      if (this.data.mover && this.networkPos) {
         this.networkPos.pushArray(data.position)
       } else {
         rebuild = true
@@ -352,7 +360,7 @@ export class App extends Entity {
     }
     if (data.hasOwnProperty('quaternion')) {
       this.data.quaternion = data.quaternion
-      if (this.data.mover) {
+      if (this.data.mover && this.networkQuat) {
         this.networkQuat.pushArray(data.quaternion)
       } else {
         rebuild = true
@@ -360,7 +368,7 @@ export class App extends Entity {
     }
     if (data.hasOwnProperty('scale')) {
       this.data.scale = data.scale
-      if (this.data.mover) {
+      if (this.data.mover && this.networkSca) {
         this.networkSca.pushArray(data.scale)
       } else {
         rebuild = true
@@ -432,29 +440,65 @@ export class App extends Entity {
     }
   }
 
+  runInScriptContext(fn) {
+    if (typeof fn !== 'function') return undefined
+    const appId = this.data?.id
+    if (typeof appId !== 'string' || !appId) return fn()
+    if (typeof this.world.scripts?.withAppContext !== 'function') return fn()
+    return this.world.scripts.withAppContext(appId, fn)
+  }
+
   emit(name, a1, a2) {
     if (!this.listeners[name]) return
     for (const callback of this.listeners[name]) {
-      callback(a1, a2)
+      this.runInScriptContext(() => {
+        callback(a1, a2)
+      })
     }
   }
 
   onWorldEvent(name, callback) {
-    this.worldListeners.set(callback, name)
-    this.world.events.on(name, callback)
+    if (typeof callback !== 'function') return
+    let byName = this.worldListeners.get(callback)
+    if (!byName) {
+      byName = new Map()
+      this.worldListeners.set(callback, byName)
+    }
+    if (byName.has(name)) return
+    const wrapped = (...args) =>
+      this.runInScriptContext(() => {
+        callback(...args)
+      })
+    byName.set(name, wrapped)
+    this.world.events.on(name, wrapped)
   }
 
   offWorldEvent(name, callback) {
-    this.worldListeners.delete(callback)
-    this.world.events.off(name, callback)
+    const byName = this.worldListeners.get(callback)
+    if (!byName) {
+      this.world.events.off(name, callback)
+      return
+    }
+    const wrapped = byName.get(name)
+    if (!wrapped) {
+      this.world.events.off(name, callback)
+      return
+    }
+    byName.delete(name)
+    if (!byName.size) {
+      this.worldListeners.delete(callback)
+    }
+    this.world.events.off(name, wrapped)
   }
 
   clearEventListeners() {
     // local
     this.listeners = {}
     // world
-    for (const [callback, name] of this.worldListeners) {
-      this.world.events.off(name, callback)
+    for (const byName of this.worldListeners.values()) {
+      for (const [name, wrapped] of byName) {
+        this.world.events.off(name, wrapped)
+      }
     }
     this.worldListeners.clear()
   }
@@ -494,7 +538,9 @@ export class App extends Entity {
     const hook = this.getDeadHook()
     const timerId = setTimeout(() => {
       if (hook.dead) return
-      fn()
+      this.runInScriptContext(() => {
+        fn()
+      })
     }, ms)
     return timerId
   }

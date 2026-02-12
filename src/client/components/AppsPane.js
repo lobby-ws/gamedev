@@ -25,13 +25,26 @@ import { usePane } from './usePane'
 import { cls } from './cls'
 import { orderBy } from 'lodash-es'
 import { formatBytes } from '../../core/extras/formatBytes'
+import { areBlueprintsTwinUnique, buildScriptGroups } from '../../core/extras/blueprintGroups'
 
 export function AppsPane({ world, close }) {
   const paneRef = useRef()
   const headRef = useRef()
   usePane('apps', paneRef, headRef)
+  const [tab, setTab] = useState('instances')
   const [query, setQuery] = useState('')
   const [refresh, setRefresh] = useState(0)
+  useEffect(() => {
+    const onChange = () => setRefresh(n => n + 1)
+    world.blueprints.on('add', onChange)
+    world.blueprints.on('modify', onChange)
+    world.blueprints.on('remove', onChange)
+    return () => {
+      world.blueprints.off('add', onChange)
+      world.blueprints.off('modify', onChange)
+      world.blueprints.off('remove', onChange)
+    }
+  }, [])
   return (
     <div
       ref={paneRef}
@@ -82,10 +95,34 @@ export function AppsPane({ world, close }) {
             }
           }
         }
+        .apane-tabs {
+          display: flex;
+          gap: 0.5rem;
+          padding: 0.5rem 1.25rem;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .apane-tab {
+          border: 1px solid rgba(255, 255, 255, 0.15);
+          background: transparent;
+          color: rgba(255, 255, 255, 0.6);
+          font-size: 0.75rem;
+          padding: 0.25rem 0.7rem;
+          border-radius: 999px;
+          &:hover {
+            cursor: pointer;
+            color: white;
+            border-color: rgba(255, 255, 255, 0.35);
+          }
+          &.active {
+            color: white;
+            border-color: rgba(76, 224, 161, 0.65);
+            background: rgba(76, 224, 161, 0.12);
+          }
+        }
       `}
     >
       <div className='apane-head' ref={headRef}>
-        <div className='apane-head-title'>Apps</div>
+        <div className='apane-head-title'>Objects</div>
         <div className='apane-head-search'>
           <SearchIcon size={16} />
           <input type='text' placeholder='Search' value={query} onChange={e => setQuery(e.target.value)} />
@@ -97,7 +134,27 @@ export function AppsPane({ world, close }) {
           <XIcon size={20} />
         </div>
       </div>
-      <AppsPaneContent world={world} query={query} refresh={refresh} setRefresh={setRefresh} />
+      <div className='apane-tabs'>
+        <button
+          type='button'
+          className={cls('apane-tab', { active: tab === 'instances' })}
+          onClick={() => setTab('instances')}
+        >
+          Instances
+        </button>
+        <button
+          type='button'
+          className={cls('apane-tab', { active: tab === 'variants' })}
+          onClick={() => setTab('variants')}
+        >
+          Variants
+        </button>
+      </div>
+      {tab === 'instances' ? (
+        <AppsPaneContent world={world} query={query} refresh={refresh} setRefresh={setRefresh} />
+      ) : (
+        <AppsPaneVariants world={world} query={query} refresh={refresh} />
+      )}
     </div>
   )
 }
@@ -399,6 +456,183 @@ function AppsPaneContent({ world, query, refresh, setRefresh }) {
           </div>
         ))}
       </div>
+    </div>
+  )
+}
+
+function AppsPaneVariants({ world, query, refresh }) {
+  const [mergingId, setMergingId] = useState(null)
+  const groups = useMemo(() => {
+    const built = buildScriptGroups(world.blueprints.items)
+    let list = Array.from(built.groups.values()).filter(group => group.items.length > 1)
+    if (query) {
+      const q = query.toLowerCase()
+      list = list.filter(group =>
+        group.items.some(item => (item?.name || item?.id || '').toLowerCase().includes(q))
+      )
+    }
+    list.sort((a, b) => {
+      const aName = (a.main?.name || a.main?.id || '').toLowerCase()
+      const bName = (b.main?.name || b.main?.id || '').toLowerCase()
+      return aName.localeCompare(bName)
+    })
+    return list
+  }, [refresh, query])
+
+  const mergeVariant = async (main, variant) => {
+    if (!main || !variant || variant.id === main.id) return
+    if (!areBlueprintsTwinUnique(main, variant)) return
+    const targets = []
+    for (const entity of world.entities.items.values()) {
+      if (entity?.isApp && entity.data.blueprint === variant.id) {
+        targets.push(entity)
+      }
+    }
+    const ok = await world.ui.confirm({
+      title: 'Merge duplicate',
+      message: `Merge "${variant.name || variant.id}" into "${main.name || main.id}"? ${targets.length} instance(s) will be repointed and the duplicate blueprint deleted.`,
+      confirmText: 'Merge',
+      cancelText: 'Cancel',
+    })
+    if (!ok) return
+    if (world.builder?.ensureAdminReady && !world.builder.ensureAdminReady('Merge')) return
+    setMergingId(variant.id)
+    try {
+      for (const entity of targets) {
+        entity.modify({ blueprint: main.id })
+        world.admin.entityModify({ id: entity.data.id, blueprint: main.id }, { ignoreNetworkId: world.network.id })
+      }
+      await world.admin.blueprintRemove(variant.id)
+      world.emit('toast', 'Merged duplicate blueprint')
+    } catch (err) {
+      console.error(err)
+      world.emit('toast', 'Merge failed')
+    } finally {
+      setMergingId(null)
+    }
+  }
+
+  return (
+    <div
+      className='apane-variants'
+      css={css`
+        flex: 1;
+        overflow-y: auto;
+        padding: 1rem 1.25rem 1.25rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        .apane-variant-group {
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 0.75rem;
+          background: rgba(255, 255, 255, 0.03);
+          padding: 0.75rem;
+        }
+        .apane-variant-head {
+          display: flex;
+          flex-direction: column;
+          gap: 0.25rem;
+          margin-bottom: 0.5rem;
+        }
+        .apane-variant-title {
+          font-weight: 600;
+          font-size: 0.95rem;
+        }
+        .apane-variant-script {
+          font-size: 0.7rem;
+          color: rgba(255, 255, 255, 0.55);
+          word-break: break-all;
+        }
+        .apane-variant-list {
+          display: flex;
+          flex-direction: column;
+          gap: 0.4rem;
+        }
+        .apane-variant-row {
+          display: flex;
+          align-items: center;
+          gap: 0.6rem;
+          padding: 0.4rem 0.5rem;
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 0.6rem;
+          background: rgba(255, 255, 255, 0.02);
+        }
+        .apane-variant-name {
+          flex: 1;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          font-size: 0.85rem;
+        }
+        .apane-variant-main {
+          font-size: 0.7rem;
+          color: rgba(255, 255, 255, 0.6);
+          border: 1px solid rgba(255, 255, 255, 0.2);
+          padding: 0.1rem 0.4rem;
+          border-radius: 999px;
+        }
+        .apane-variant-merge {
+          border: 1px solid rgba(255, 255, 255, 0.15);
+          background: transparent;
+          color: rgba(255, 255, 255, 0.75);
+          font-size: 0.7rem;
+          padding: 0.2rem 0.55rem;
+          border-radius: 999px;
+          &:hover:not(:disabled) {
+            cursor: pointer;
+            color: white;
+            border-color: rgba(255, 255, 255, 0.35);
+          }
+          &:disabled {
+            opacity: 0.45;
+            cursor: default;
+          }
+        }
+        .apane-variant-empty {
+          font-size: 0.8rem;
+          color: rgba(255, 255, 255, 0.5);
+        }
+      `}
+    >
+      {groups.length ? (
+        groups.map(group => {
+          const main = group.main
+          if (!main) return null
+          return (
+            <div key={group.script} className='apane-variant-group'>
+              <div className='apane-variant-head'>
+                <div className='apane-variant-title'>{main.name || main.id}</div>
+                <div className='apane-variant-script'>{group.script}</div>
+              </div>
+              <div className='apane-variant-list'>
+                {group.items.map(variant => {
+                  const isMain = variant.id === main.id
+                  const canMerge = !isMain && areBlueprintsTwinUnique(main, variant)
+                  const isMerging = mergingId === variant.id
+                  return (
+                    <div key={variant.id} className='apane-variant-row'>
+                      <div className='apane-variant-name'>{variant.name || variant.id}</div>
+                      {isMain && <div className='apane-variant-main'>Main</div>}
+                      {!isMain && canMerge && (
+                        <button
+                          type='button'
+                          className='apane-variant-merge'
+                          onClick={() => mergeVariant(main, variant)}
+                          disabled={mergingId && !isMerging}
+                        >
+                          {isMerging ? 'Merging...' : 'Merge'}
+                        </button>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })
+      ) : (
+        <div className='apane-variant-empty'>No variants found.</div>
+      )}
     </div>
   )
 }
