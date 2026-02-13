@@ -45,6 +45,9 @@ const names = [
   'aiCreateRequest',
   // logs
   'serverLog',
+  'serverLogHistory',
+  'subscribeLogs',
+  'unsubscribeLogs',
 ]
 
 const byName = {}

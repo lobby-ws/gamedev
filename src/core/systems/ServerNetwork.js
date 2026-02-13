@@ -204,6 +204,7 @@ export class ServerNetwork extends System {
     this.dirtyApps = new Set()
     this.isServer = true
     this.queue = []
+    this.logSubscribers = new Set()
   }
 
   init({ db, deploymentId }) {
@@ -268,10 +269,14 @@ export class ServerNetwork extends System {
     } catch (err) {
       console.error(err)
     }
-    // broadcast server logs to clients
+    // broadcast server logs to subscribed clients
     this.world.logs?.on('entry', entry => {
-      if (entry.source === 'server') {
-        this.send('serverLog', { level: entry.level, args: entry.args, timestamp: entry.timestamp })
+      if (entry.source === 'server' && this.logSubscribers.size > 0) {
+        const packet = writePacket('serverLog', { level: entry.level, args: entry.args, timestamp: entry.timestamp })
+        for (const socketId of this.logSubscribers) {
+          const socket = this.sockets.get(socketId)
+          socket?.sendPacket(packet)
+        }
       }
     })
     // watch settings changes
@@ -1119,11 +1124,25 @@ export class ServerNetwork extends System {
     )
   }
 
+  onSubscribeLogs = (socket) => {
+    if (!socket.player?.isBuilder()) return
+    this.logSubscribers.add(socket.id)
+    const history = this.world.logs?.entries || []
+    if (history.length > 0) {
+      socket.send('serverLogHistory', history.map(e => ({ level: e.level, args: e.args, timestamp: e.timestamp })))
+    }
+  }
+
+  onUnsubscribeLogs = (socket) => {
+    this.logSubscribers.delete(socket.id)
+  }
+
   onPing = (socket, time) => {
     socket.send('pong', time)
   }
 
   onDisconnect = (socket, code) => {
+    this.logSubscribers.delete(socket.id)
     this.world.livekit.clearModifiers(socket.id)
     socket.player.destroy(true)
     this.sockets.delete(socket.id)

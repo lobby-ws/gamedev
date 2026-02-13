@@ -37,15 +37,15 @@ export class Scripts extends System {
       console: {
         log: (...args) => {
           console.log(...args)
-          this.world.logs?.add(this.world.network?.isServer ? 'server' : 'client', 'log', args)
+          if (this.world.network?.isServer) this.world.logs?.add('server', 'log', args)
         },
         warn: (...args) => {
           console.warn(...args)
-          this.world.logs?.add(this.world.network?.isServer ? 'server' : 'client', 'warn', args)
+          if (this.world.network?.isServer) this.world.logs?.add('server', 'warn', args)
         },
         error: (...args) => {
           console.error(...args)
-          this.world.logs?.add(this.world.network?.isServer ? 'server' : 'client', 'error', args)
+          if (this.world.network?.isServer) this.world.logs?.add('server', 'error', args)
         },
         time: (...args) => console.time(...args),
         timeEnd: (...args) => console.timeEnd(...args),

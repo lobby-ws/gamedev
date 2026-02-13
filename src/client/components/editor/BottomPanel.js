@@ -14,7 +14,7 @@ const tabs = [
   { id: 'app', label: 'Object' },
   { id: 'nodes', label: 'Nodes' },
   { id: 'meta', label: 'Meta' },
-  { id: 'console', label: 'Console' },
+  { id: 'console', label: 'Server Logs' },
 ]
 
 export function BottomPanel({ world }) {

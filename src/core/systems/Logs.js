@@ -6,11 +6,12 @@ export class Logs extends System {
   constructor(world) {
     super(world)
     this.entries = []
+    this.nextId = 0
   }
 
   add(source, level, args) {
     const entry = {
-      id: this.entries.length,
+      id: this.nextId++,
       source,
       level,
       args: args.map(serializeArg),
@@ -21,6 +22,23 @@ export class Logs extends System {
       this.entries.splice(0, this.entries.length - MAX_ENTRIES)
     }
     this.emit('entry', entry)
+  }
+
+  addBatch(source, items) {
+    for (const item of items) {
+      const entry = {
+        id: this.nextId++,
+        source,
+        level: item.level,
+        args: item.args,
+        timestamp: item.timestamp,
+      }
+      this.entries.push(entry)
+    }
+    if (this.entries.length > MAX_ENTRIES) {
+      this.entries.splice(0, this.entries.length - MAX_ENTRIES)
+    }
+    this.emit('batch')
   }
 
   clear() {

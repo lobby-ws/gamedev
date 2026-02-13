@@ -277,6 +277,10 @@ export class ClientNetwork extends System {
     this.world.logs?.add('server', data.level, data.args)
   }
 
+  onServerLogHistory = data => {
+    this.world.logs?.addBatch('server', data)
+  }
+
   onPong = time => {
     this.world.stats?.onPong(time)
   }
