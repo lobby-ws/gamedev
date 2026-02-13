@@ -1,13 +1,13 @@
-import { System } from './System'
-import { uuid } from '../utils'
-import { isValidScriptPath } from '../blueprintValidation'
-import { getBlueprintAppName } from '../blueprintUtils'
+import { uuid } from '../../../../core/utils'
+import { isValidScriptPath } from '../../../../core/blueprintValidation'
+import { buildScriptGroups, getScriptGroupMain } from '../../../../core/extras/blueprintGroups'
+import { getBlueprintAppName } from '../../../../core/blueprintUtils'
 
-function hasScriptFiles(blueprint) {
+export function hasScriptFiles(blueprint) {
   return blueprint?.scriptFiles && typeof blueprint.scriptFiles === 'object' && !Array.isArray(blueprint.scriptFiles)
 }
 
-function resolveScriptRootBlueprint(blueprint, world) {
+export function resolveScriptRootBlueprint(blueprint, world) {
   if (!blueprint) return null
   const scriptRef = typeof blueprint.scriptRef === 'string' ? blueprint.scriptRef.trim() : ''
   if (scriptRef) {
@@ -21,6 +21,8 @@ function resolveScriptRootBlueprint(blueprint, world) {
     const baseBlueprint = world.blueprints.get(appName)
     if (hasScriptFiles(baseBlueprint)) return baseBlueprint
   }
+  const groupMain = getScriptGroupMain(buildScriptGroups(world.blueprints.items), blueprint)
+  if (groupMain && hasScriptFiles(groupMain)) return groupMain
   return null
 }
 
@@ -48,18 +50,21 @@ function normalizeAttachments(input) {
   return output.length ? output : null
 }
 
-export class ClientAIScripts extends System {
+export class ScriptAIController {
   constructor(world) {
-    super(world)
+    this.world = world
     this.inFlightByBlueprint = new Map()
-  }
-
-  init() {
-    // no-op
+    this.docsIndex = []
+    this.docsApiUrl = null
+    this.docsLoaded = false
+    this.docsLoadingPromise = null
+    this.docsSubscribers = new Set()
   }
 
   destroy() {
     this.inFlightByBlueprint.clear()
+    this.docsSubscribers.clear()
+    this.docsLoadingPromise = null
   }
 
   requestEdit = ({ prompt, app, attachments } = {}) => {
@@ -178,11 +183,108 @@ export class ClientAIScripts extends System {
     return false
   }
 
+  getPendingForTarget = ({ targetBlueprintId, scriptRootId } = {}) => {
+    if (targetBlueprintId) return this.isBlueprintPending(targetBlueprintId)
+    if (scriptRootId) return this.isRootPending(scriptRootId)
+    return false
+  }
+
+  subscribeTarget = ({ targetBlueprintId, scriptRootId, onRequest, onPending, onResponse } = {}) => {
+    const matchesTarget = payload => {
+      if (!payload) return false
+      const payloadBlueprintId = typeof payload.targetBlueprintId === 'string' ? payload.targetBlueprintId : null
+      if (targetBlueprintId && payloadBlueprintId) {
+        return payloadBlueprintId === targetBlueprintId
+      }
+      const payloadRootId = typeof payload.scriptRootId === 'string' ? payload.scriptRootId : null
+      if (scriptRootId && payloadRootId) {
+        return payloadRootId === scriptRootId
+      }
+      return true
+    }
+    const handleRequest = payload => {
+      if (!matchesTarget(payload)) return
+      onRequest?.(payload)
+    }
+    const handlePending = payload => {
+      if (!matchesTarget(payload)) return
+      onPending?.(payload)
+    }
+    const handleResponse = payload => {
+      if (!matchesTarget(payload)) return
+      onResponse?.(payload)
+    }
+    this.world.on?.('script-ai-request', handleRequest)
+    this.world.on?.('script-ai-pending', handlePending)
+    this.world.on?.('script-ai-response', handleResponse)
+    return () => {
+      this.world.off?.('script-ai-request', handleRequest)
+      this.world.off?.('script-ai-pending', handlePending)
+      this.world.off?.('script-ai-response', handleResponse)
+    }
+  }
+
+  getDocsIndex = () => this.docsIndex
+
+  subscribeDocsIndex = callback => {
+    if (typeof callback !== 'function') return () => {}
+    this.docsSubscribers.add(callback)
+    callback(this.docsIndex)
+    this.ensureDocsIndex()
+    return () => {
+      this.docsSubscribers.delete(callback)
+    }
+  }
+
+  ensureDocsIndex = async () => {
+    const apiUrl = this.world.network?.apiUrl || null
+    if (!apiUrl) {
+      this.docsApiUrl = null
+      this.docsLoaded = true
+      if (this.docsIndex.length) {
+        this.docsIndex = []
+        this.emitDocsIndex()
+      }
+      return this.docsIndex
+    }
+    if (this.docsLoadingPromise && this.docsApiUrl === apiUrl) {
+      return this.docsLoadingPromise
+    }
+    if (this.docsLoaded && this.docsApiUrl === apiUrl) {
+      return this.docsIndex
+    }
+    this.docsApiUrl = apiUrl
+    this.docsLoaded = false
+    const load = async () => {
+      try {
+        const response = await fetch(`${apiUrl}/ai-docs-index`)
+        if (!response.ok) throw new Error('docs_index_failed')
+        const data = await response.json()
+        const files = Array.isArray(data?.files) ? data.files.filter(Boolean) : []
+        this.docsIndex = files
+      } catch (err) {
+        this.docsIndex = []
+      } finally {
+        this.docsLoaded = true
+        this.docsLoadingPromise = null
+        this.emitDocsIndex()
+      }
+      return this.docsIndex
+    }
+    this.docsLoadingPromise = load()
+    return this.docsLoadingPromise
+  }
+
+  emitDocsIndex = () => {
+    for (const callback of this.docsSubscribers) {
+      callback(this.docsIndex)
+    }
+  }
+
   onProposal = payload => {
     if (!payload) return
     const scriptRootId = typeof payload.scriptRootId === 'string' ? payload.scriptRootId : null
-    const targetBlueprintId =
-      typeof payload.targetBlueprintId === 'string' ? payload.targetBlueprintId : null
+    const targetBlueprintId = typeof payload.targetBlueprintId === 'string' ? payload.targetBlueprintId : null
     let clearedBlueprintId = targetBlueprintId
     if (targetBlueprintId) {
       this.inFlightByBlueprint.delete(targetBlueprintId)
@@ -228,8 +330,7 @@ export class ClientAIScripts extends System {
             : 0,
       applied: payload.applied !== false,
       forked: payload.forked === true,
-      appliedScriptRootId:
-        typeof payload.appliedScriptRootId === 'string' ? payload.appliedScriptRootId : null,
+      appliedScriptRootId: typeof payload.appliedScriptRootId === 'string' ? payload.appliedScriptRootId : null,
     }
     this.world.emit?.('script-ai-response', response)
     if (payload.error) {

@@ -242,10 +242,6 @@ export class ClientNetwork extends System {
   }
 
   onScriptAiProposal = data => {
-    if (this.world.aiScripts?.onProposal) {
-      this.world.aiScripts.onProposal(data)
-      return
-    }
     this.world.emit?.('script-ai-proposal', data)
   }
 
