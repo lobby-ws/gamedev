@@ -552,7 +552,7 @@ export class ClientControls extends System {
   onKeyDown = e => {
     if (e.defaultPrevented) return
     if (e.repeat) return
-    if (this.isInputFocused()) return
+    if (!this.pointer.locked && this.isInputFocused()) return
     const code = e.code
     if (code === 'Tab') {
       // prevent default focus switching behavior
@@ -576,7 +576,7 @@ export class ClientControls extends System {
 
   onKeyUp = e => {
     if (e.repeat) return
-    if (this.isInputFocused()) return
+    if (!this.pointer.locked && this.isInputFocused()) return
     const code = e.code
     if (code === 'MetaLeft' || code === 'MetaRight') {
       // releasing a meta key while another key is down causes browsers not to ever
