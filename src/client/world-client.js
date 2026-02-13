@@ -6,6 +6,7 @@ import { css } from '@firebolt-dev/css'
 
 import { createClientWorld } from '../core/createClientWorld'
 import { CoreUI } from './components/CoreUI'
+import { assetPath } from './utils'
 
 export { System } from '../core/systems/System'
 
@@ -58,9 +59,9 @@ export function Client({ wsUrl, apiUrl, authUrl, connectionStatus, onSetup }) {
       const cssLayer = cssLayerRef.current
       const ui = uiRef.current
       const baseEnvironment = {
-        model: '/base-environment.glb',
+        model: assetPath('/base-environment.glb'),
         bg: null, // '/day2-2k.jpg',
-        hdr: '/Clear_08_4pm_LDR.hdr',
+        hdr: assetPath('/Clear_08_4pm_LDR.hdr'),
         rotationY: 0,
         sunDirection: new THREE.Vector3(-1, -2, -2).normalize(),
         sunIntensity: 1,

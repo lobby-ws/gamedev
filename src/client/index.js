@@ -1,5 +1,6 @@
 import 'ses'
 import '../core/lockdown'
+import { getAddress } from 'ethers'
 import { useCallback, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 
@@ -76,6 +77,183 @@ function buildAuthEndpointCandidates(authBaseUrl, pathSuffix) {
     return [`${base}/${suffix}`]
   }
   return [`${base}/api/${suffix}`, `${base}/${suffix}`]
+}
+
+function createAuthError(message, status, { skipAuth = false } = {}) {
+  const err = new Error(message)
+  if (status) err.status = status
+  if (skipAuth) err.skipAuth = true
+  return err
+}
+
+function toHexString(value) {
+  const bytes = new TextEncoder().encode(String(value))
+  return `0x${[...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('')}`
+}
+
+function getWalletProvider() {
+  if (typeof window === 'undefined') return null
+  const provider = window.ethereum
+  if (!provider || typeof provider.request !== 'function') return null
+  return provider
+}
+
+function normalizeHexAddress(value) {
+  const normalized = typeof value === 'string' ? value.trim() : ''
+  return /^0x[a-fA-F0-9]{40}$/.test(normalized) ? normalized : ''
+}
+
+function normalizeSiweAddress(address) {
+  const normalized = normalizeHexAddress(address)
+  if (!normalized) return ''
+  try {
+    return getAddress(normalized)
+  } catch {
+    return normalized
+  }
+}
+
+function buildSiweMessage({ domain, address, uri, chainId, nonce }) {
+  return `${domain} wants you to sign in with your Ethereum account:
+${address}
+
+Sign in with Ethereum
+
+URI: ${uri}
+Version: 1
+Chain ID: ${chainId}
+Nonce: ${nonce}
+Issued At: ${new Date().toISOString()}`
+}
+
+function getProviderChainId(provider) {
+  return provider
+    .request({ method: 'eth_chainId' })
+    .then(chainId => {
+      const parsed = Number.parseInt(chainId, 16)
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 1
+    })
+    .catch(() => 1)
+}
+
+async function requestWalletAddress(provider) {
+  const getAccounts = await provider.request({ method: 'eth_accounts' }).catch(() => [])
+  let address = normalizeHexAddress(Array.isArray(getAccounts) ? getAccounts[0] : '')
+  if (!address) {
+    try {
+      const requestedAccounts = await provider.request({ method: 'eth_requestAccounts' })
+      address = normalizeHexAddress(Array.isArray(requestedAccounts) ? requestedAccounts[0] : '')
+    } catch (err) {
+      if (err?.code === 4001) {
+        throw createAuthError('Wallet sign-in request was rejected', 401, { skipAuth: true })
+      }
+      throw err
+    }
+  }
+  if (!address) {
+    throw createAuthError('No wallet account available', 401, { skipAuth: true })
+  }
+  return normalizeSiweAddress(address)
+}
+
+async function requestSiweNonce(authBaseUrl, address, { onStatus } = {}) {
+  const endpoints = buildAuthEndpointCandidates(authBaseUrl, 'auth/nonce')
+  for (const endpoint of endpoints) {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json',
+      },
+      body: JSON.stringify({ address }),
+    })
+    if (res.status === 404) {
+      continue
+    }
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: 'Unable to request SIWE nonce' }))
+      throw createAuthError(error.message || error.error || 'Unable to request SIWE nonce', res.status)
+    }
+    const data = await res.json()
+    const nonce = typeof data?.nonce === 'string' ? data.nonce.trim() : ''
+    if (!nonce) {
+      throw createAuthError('Missing SIWE nonce', 401)
+    }
+    onStatus?.('auth', 'Sign-in nonce received...')
+    return nonce
+  }
+  throw createAuthError('Unable to request SIWE nonce', 404)
+}
+
+async function verifySiweMessage(authBaseUrl, message, signature, { onStatus } = {}) {
+  const endpoints = buildAuthEndpointCandidates(authBaseUrl, 'auth/verify')
+  for (const endpoint of endpoints) {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json',
+      },
+      body: JSON.stringify({ message, signature }),
+      credentials: 'include',
+    })
+    if (res.status === 404) {
+      continue
+    }
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: 'Unable to verify SIWE signature' }))
+      const statusError = createAuthError(
+        error.message || error.error || 'Unable to verify SIWE signature',
+        res.status
+      )
+      if (res.status === 401) statusError.skipAuth = true
+      throw statusError
+    }
+    onStatus?.('auth', 'Wallet signature verified...')
+    return
+  }
+  throw createAuthError('Unable to verify SIWE signature', 404)
+}
+
+async function signSiwePayload(provider, address, message, { onStatus } = {}) {
+  const encodedMessage = toHexString(message)
+  try {
+    return await provider.request({ method: 'personal_sign', params: [encodedMessage, address] })
+  } catch (firstError) {
+    try {
+      return await provider.request({ method: 'personal_sign', params: [message, address] })
+    } catch {
+      onStatus?.('error', firstError?.message || 'Wallet signature was rejected')
+      throw createAuthError('Unable to sign SIWE payload', 401, { skipAuth: true })
+    }
+  }
+}
+
+async function fetchIdentityExchangeTokenWithSiwe(authBaseUrl, onStatus) {
+  const provider = getWalletProvider()
+  if (!provider) {
+    onStatus?.('connecting', 'No wallet available - continuing as guest')
+    throw createAuthError('No wallet provider found', 401, { skipAuth: true })
+  }
+
+  const address = await requestWalletAddress(provider)
+  onStatus?.('auth', `Signing in as ${address.slice(0, 6)}...${address.slice(-4)}...`)
+
+  const nonce = await requestSiweNonce(authBaseUrl, address, { onStatus })
+  const chainId = await getProviderChainId(provider)
+  const parsedUrl = new URL(authBaseUrl.replace(/\/+$/, ''))
+  const message = buildSiweMessage({
+    domain: parsedUrl.hostname,
+    address,
+    uri: `${parsedUrl.protocol}//${parsedUrl.host}`,
+    chainId,
+    nonce,
+  })
+
+  const signature = await signSiwePayload(provider, address, message, { onStatus })
+  await verifySiweMessage(authBaseUrl, message, signature, { onStatus })
+  onStatus?.('auth', 'Wallet login complete')
+  return fetchIdentityExchangeToken(authBaseUrl)
 }
 
 async function fetchIdentityExchangeToken(authBaseUrl) {
@@ -186,7 +364,20 @@ async function getConnectionUrl(onStatus, startTime = Date.now()) {
     onStatus?.('auth', 'Authorizing...')
     try {
       const authBaseUrl = env.PUBLIC_AUTH_URL
-      const identityToken = await fetchIdentityExchangeToken(authBaseUrl)
+      let identityToken
+      try {
+        identityToken = await fetchIdentityExchangeToken(authBaseUrl)
+      } catch (err) {
+        if (err?.status !== 401) throw err
+        identityToken = await fetchIdentityExchangeTokenWithSiwe(authBaseUrl, onStatus).catch(err => {
+          if (err?.skipAuth) return null
+          throw err
+        })
+      }
+      if (!identityToken) {
+        onStatus?.('connecting', 'Continuing as guest...')
+        return buildWsUrl(baseWsUrl)
+      }
       const runtimeSessionToken = await exchangeForRuntimeSession(apiUrl, identityToken)
       return buildWsUrl(baseWsUrl, runtimeSessionToken)
     } catch (err) {

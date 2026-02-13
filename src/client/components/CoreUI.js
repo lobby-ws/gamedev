@@ -706,7 +706,10 @@ function LoadingOverlay({ world, connectionStatus }) {
   const [wsStatus, setWsStatus] = useState(null)
   const { title, desc, image } = world.settings
   const activeStatus = wsStatus || connectionStatus
-  const isWaiting = activeStatus?.status === 'waiting' || activeStatus?.status === 'retrying'
+  const isWaiting =
+    activeStatus?.status === 'waiting' ||
+    activeStatus?.status === 'retrying' ||
+    activeStatus?.status === 'auth'
   const isError = activeStatus?.status === 'error'
   const statusMessage = activeStatus?.message
   useEffect(() => {
