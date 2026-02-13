@@ -15,6 +15,14 @@ import { ChevronDoubleUpIcon, HandIcon } from './Icons'
 import { Sidebar } from './Sidebar'
 import { MainMenu } from './MainMenu'
 
+const defaultWalletAuthState = {
+  enabled: false,
+  providerAvailable: false,
+  connected: false,
+  pending: false,
+  address: null,
+}
+
 export function CoreUI({ world, connectionStatus }) {
   const ref = useRef()
   const [ready, setReady] = useState(false)
@@ -28,6 +36,9 @@ export function CoreUI({ world, connectionStatus }) {
   const [apps, setApps] = useState(false)
   const [kicked, setKicked] = useState(null)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [walletAuth, setWalletAuth] = useState(defaultWalletAuthState)
+  const sessionWalletRef = useRef('')
+  const walletMismatchRef = useRef(false)
   useEffect(() => {
     world.on('ready', setReady)
     world.on('player', setPlayer)
@@ -79,6 +90,109 @@ export function CoreUI({ world, connectionStatus }) {
       world.prefs.off('change', onChange)
     }
   }, [])
+
+  useEffect(() => {
+    const auth = globalThis.__runtimeAuth
+    if (!auth?.enabled) {
+      setWalletAuth(defaultWalletAuthState)
+      sessionWalletRef.current = ''
+      walletMismatchRef.current = false
+      return
+    }
+
+    let cancelled = false
+    let removeAccountsChanged = null
+
+    const setAuthState = patch => {
+      if (cancelled) return
+      setWalletAuth(prev => ({ ...prev, ...patch }))
+    }
+
+    const kickForWalletChange = async reason => {
+      if (cancelled || walletMismatchRef.current) return
+      walletMismatchRef.current = true
+      setAuthState({ connected: false, address: null })
+      await auth.logoutAndClearSession?.().catch(() => {})
+      if (cancelled) return
+      world.emit('kick', reason)
+      world.network?.destroy?.()
+      setTimeout(() => {
+        window.location.reload()
+      }, 250)
+    }
+
+    const handleAccountsChanged = accounts => {
+      const expectedAddress = sessionWalletRef.current
+      if (!expectedAddress) return
+      const nextAddress = auth.normalizeSiweAddress?.(Array.isArray(accounts) ? accounts[0] : '') || ''
+      if (!nextAddress) {
+        void kickForWalletChange('wallet_disconnected')
+        return
+      }
+      if (nextAddress.toLowerCase() !== expectedAddress.toLowerCase()) {
+        void kickForWalletChange('wallet_changed')
+      }
+    }
+
+    const initWalletAuth = async () => {
+      const provider = auth.getWalletProvider?.()
+      setAuthState({
+        enabled: true,
+        providerAvailable: !!provider,
+      })
+
+      const session = await auth.getSessionUser?.().catch(() => null)
+      const sessionAddress = auth.normalizeSiweAddress?.(session?.user?.wallet_address || '') || ''
+      sessionWalletRef.current = sessionAddress
+      setAuthState({
+        connected: !!sessionAddress,
+        address: sessionAddress || null,
+      })
+
+      if (!sessionAddress || !provider || typeof provider.request !== 'function') return
+
+      const accounts = await provider.request({ method: 'eth_accounts' }).catch(() => [])
+      const activeAddress = auth.normalizeSiweAddress?.(Array.isArray(accounts) ? accounts[0] : '') || ''
+      if (!activeAddress) {
+        await kickForWalletChange('wallet_disconnected')
+        return
+      }
+      if (activeAddress.toLowerCase() !== sessionAddress.toLowerCase()) {
+        await kickForWalletChange('wallet_changed')
+        return
+      }
+
+      if (typeof provider.on === 'function') {
+        provider.on('accountsChanged', handleAccountsChanged)
+        removeAccountsChanged = () => provider.removeListener?.('accountsChanged', handleAccountsChanged)
+      }
+    }
+
+    initWalletAuth()
+
+    return () => {
+      cancelled = true
+      removeAccountsChanged?.()
+    }
+  }, [world])
+
+  const connectWallet = async () => {
+    const auth = globalThis.__runtimeAuth
+    if (!auth?.enabled) return
+    if (walletAuth.pending || walletAuth.connected) return
+    setWalletAuth(prev => ({ ...prev, pending: true }))
+    try {
+      await auth.connectWalletSession?.()
+      window.location.reload()
+    } catch (err) {
+      if (!err?.skipAuth) {
+        world.emit('toast', err?.message || 'Wallet login failed')
+      }
+    } finally {
+      setWalletAuth(prev => ({ ...prev, pending: false }))
+    }
+  }
+
   return (
     <div
       ref={ref}
@@ -92,7 +206,13 @@ export function CoreUI({ world, connectionStatus }) {
       {disconnected && <Disconnected />}
       {!ui.reticleSuppressors && <Reticle world={world} />}
       {<Toast world={world} />}
-      {ready && <Sidebar world={world} ui={ui} onOpenMenu={() => setMenuOpen(true)} />}
+      {ready && <Sidebar
+        world={world}
+        ui={ui}
+        onOpenMenu={() => setMenuOpen(true)}
+        walletAuth={walletAuth}
+        onConnectWallet={connectWallet}
+      />}
       {ready && <MainMenu world={world} open={menuOpen} onClose={() => setMenuOpen(false)} />}
       {ready && <Chat world={world} />}
       {/* {ready && <Side world={world} player={player} menu={menu} />} */}
@@ -839,6 +959,8 @@ function LoadingOverlay({ world, connectionStatus }) {
 const kickMessages = {
   duplicate_user: 'Player already active on another device or window.',
   player_limit: 'Player limit reached.',
+  wallet_changed: 'Wallet changed. You have been signed out.',
+  wallet_disconnected: 'Wallet disconnected. You have been signed out.',
   unknown: 'You were kicked.',
 }
 function KickedOverlay({ code }) {

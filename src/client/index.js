@@ -3,6 +3,7 @@ import '../core/lockdown'
 import { getAddress } from 'ethers'
 import { useCallback, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { storage } from '../core/storage'
 
 import { Client } from './world-client'
 
@@ -202,11 +203,10 @@ async function signSiwePayload(provider, address, message, { onStatus } = {}) {
   }
 }
 
-async function fetchIdentityExchangeTokenWithSiwe(authBaseUrl, onStatus) {
+async function performSiweLogin(authBaseUrl, onStatus) {
   const provider = getWalletProvider()
   if (!provider) {
-    onStatus?.('connecting', 'No wallet available - continuing as guest')
-    throw createAuthError('No wallet provider found', 401, { skipAuth: true })
+    throw createAuthError('No wallet provider found', 404, { skipAuth: true })
   }
 
   const address = await requestWalletAddress(provider)
@@ -226,7 +226,6 @@ async function fetchIdentityExchangeTokenWithSiwe(authBaseUrl, onStatus) {
   const signature = await signSiwePayload(provider, address, message, { onStatus })
   await verifySiweMessage(authBaseUrl, message, signature, { onStatus })
   onStatus?.('auth', 'Wallet login complete')
-  return fetchIdentityExchangeToken(authBaseUrl)
 }
 
 async function fetchIdentityExchangeToken(authBaseUrl) {
@@ -253,6 +252,48 @@ async function fetchIdentityExchangeToken(authBaseUrl) {
     return token
   }
   throw new Error('Unable to authenticate')
+}
+
+async function fetchAuthMe(authBaseUrl) {
+  const endpoints = buildAuthEndpointCandidates(authBaseUrl, 'auth/me')
+  for (const endpoint of endpoints) {
+    const res = await fetch(endpoint, {
+      method: 'GET',
+      credentials: 'include',
+    })
+    if (res.status === 404) {
+      continue
+    }
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: 'Unable to fetch session' }))
+      throw createAuthError(error.message || error.error || 'Unable to fetch session', res.status)
+    }
+    return res.json()
+  }
+  throw createAuthError('Unable to fetch session', 404)
+}
+
+async function logoutAuthSession(authBaseUrl) {
+  const endpoints = buildAuthEndpointCandidates(authBaseUrl, 'auth/logout')
+  for (const endpoint of endpoints) {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      credentials: 'include',
+    })
+    if (res.status === 404) {
+      continue
+    }
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ error: 'Unable to logout' }))
+      throw createAuthError(error.message || error.error || 'Unable to logout', res.status)
+    }
+    return true
+  }
+  return false
+}
+
+function clearRuntimeAuthState() {
+  storage.remove('authToken')
 }
 
 async function exchangeForRuntimeSession(runtimeApiUrl, identityToken) {
@@ -293,20 +334,7 @@ async function getConnectionUrl(onStatus) {
     onStatus?.('auth', 'Authorizing...')
     try {
       const authBaseUrl = env.PUBLIC_AUTH_URL
-      let identityToken
-      try {
-        identityToken = await fetchIdentityExchangeToken(authBaseUrl)
-      } catch (err) {
-        if (err?.status !== 401) throw err
-        identityToken = await fetchIdentityExchangeTokenWithSiwe(authBaseUrl, onStatus).catch(err => {
-          if (err?.skipAuth) return null
-          throw err
-        })
-      }
-      if (!identityToken) {
-        onStatus?.('connecting', 'Continuing as guest...')
-        return buildWsUrl(baseWsUrl)
-      }
+      const identityToken = await fetchIdentityExchangeToken(authBaseUrl)
       const runtimeSessionToken = await exchangeForRuntimeSession(apiUrl, identityToken)
       return buildWsUrl(baseWsUrl, runtimeSessionToken)
     } catch (err) {
@@ -320,6 +348,40 @@ async function getConnectionUrl(onStatus) {
   }
 
   return buildWsUrl(baseWsUrl)
+}
+
+function createRuntimeAuthBridge() {
+  const authBaseUrl = hasValue(env.PUBLIC_AUTH_URL) ? env.PUBLIC_AUTH_URL : null
+  return {
+    enabled: !!authBaseUrl,
+    hasWalletProvider() {
+      return !!getWalletProvider()
+    },
+    getWalletProvider,
+    normalizeSiweAddress,
+    async connectWalletSession({ onStatus } = {}) {
+      if (!authBaseUrl) {
+        throw createAuthError('Wallet auth is unavailable', 404, { skipAuth: true })
+      }
+      await performSiweLogin(authBaseUrl, onStatus)
+      return fetchAuthMe(authBaseUrl).catch(() => null)
+    },
+    async getSessionUser() {
+      if (!authBaseUrl) return null
+      return fetchAuthMe(authBaseUrl).catch(() => null)
+    },
+    async logoutAndClearSession() {
+      if (authBaseUrl) {
+        await logoutAuthSession(authBaseUrl).catch(() => {})
+      }
+      clearRuntimeAuthState()
+    },
+    clearRuntimeAuthState,
+  }
+}
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.__runtimeAuth = createRuntimeAuthBridge()
 }
 
 function App() {
