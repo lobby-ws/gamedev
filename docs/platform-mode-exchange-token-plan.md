@@ -50,7 +50,9 @@ Notes:
     - `world_connection` (platform join token)
     - `identity_exchange` (Lobby -> runtime exchange input)
     - `runtime_session` (runtime WS token)
-  - Add env matrix for `AUTH_MODE` + inferred identity behavior (`PUBLIC_AUTH_URL` in standalone).
+  - Add env guidance for `PUBLIC_AUTH_URL`:
+    - set => lobby identity exchange mode
+    - unset => local standalone mode
 - Suggested files:
   - `runtime/docs/platform-mode-exchange-token-plan.md` (this file)
   - `runtime/docs/auth-contract.md`
@@ -62,10 +64,9 @@ Notes:
 ### PR-02: Runtime Mode Switch Skeleton
 - [x] Repo: `runtime`
 - Deliverables:
-  - Add `AUTH_MODE=standalone|platform` (default `standalone`).
-  - Infer identity behavior from mode + env:
-    - `platform` always lobby identity
-    - `standalone` uses lobby identity only when `PUBLIC_AUTH_URL` is set
+  - Derive auth behavior from `PUBLIC_AUTH_URL`:
+    - set => lobby identity exchange
+    - unset => local standalone mode
   - Centralize mode parsing/validation without `IDENTITY_MODE`.
 - Suggested files:
   - `runtime/src/server/index.js`
@@ -94,7 +95,7 @@ Notes:
 ### PR-04: Runtime Platform Token Validation
 - [x] Repo: `runtime`
 - Deliverables:
-  - In `AUTH_MODE=platform`, validate:
+  - In legacy platform/join-token mode, validate:
     - signature
     - `typ=world_connection`
     - `worldId === WORLD_ID`
@@ -145,7 +146,7 @@ Notes:
 ### PR-07: Disable Local Escalation in Platform Mode
 - [x] Repo: `runtime`
 - Deliverables:
-  - Disable `/admin <code>` privilege elevation path in `AUTH_MODE=platform`.
+  - Disable `/admin <code>` privilege elevation path in legacy platform/join-token mode.
   - Prevent "everyone admin when ADMIN_CODE missing" behavior in platform mode.
   - Keep behavior unchanged in standalone/local mode.
 - Suggested files:

@@ -21,8 +21,6 @@ export async function hashFile(file) {
  */
 
 const jwtSecret = process.env.JWT_SECRET
-const WORLD_CONNECTION_TYP = 'world_connection'
-const WORLD_CONNECTION_AUDIENCE = 'runtime:connect'
 const RUNTIME_SESSION_TYP = 'runtime_session'
 const RUNTIME_SESSION_AUDIENCE = 'runtime:ws'
 const IDENTITY_EXCHANGE_TYP = 'identity_exchange'
@@ -177,30 +175,4 @@ export async function verifyIdentityExchangeTokenWithLobby(token, { verifyUrl, t
     }
   }
   return null
-}
-
-function resolveWorldConnectionIssuer() {
-  const fromPublicApi = process.env.PUBLIC_API_URL?.trim()
-  if (fromPublicApi) return fromPublicApi.replace(/\/api\/?$/, '')
-  const fromPublicAuth = process.env.PUBLIC_AUTH_URL?.trim()
-  if (fromPublicAuth) return fromPublicAuth
-  return null
-}
-
-export function verifyWorldConnectionToken(token, { worldId, gameServer, audience } = {}) {
-  if (typeof token !== 'string' || !token.trim()) return null
-  try {
-    const issuer = resolveWorldConnectionIssuer()
-    const claims = jwt.verify(token, jwtSecret, {
-      audience: audience || WORLD_CONNECTION_AUDIENCE,
-      ...(issuer ? { issuer } : {}),
-    })
-    if (!claims || typeof claims !== 'object') return null
-    if (claims.typ !== WORLD_CONNECTION_TYP) return null
-    if (worldId && claims.worldId !== worldId) return null
-    if (gameServer && claims.gameServer !== gameServer) return null
-    return claims
-  } catch {
-    return null
-  }
 }

@@ -119,7 +119,7 @@ if (process.env.PUBLIC_WS_URL) {
   if (!process.env.PUBLIC_WS_URL.startsWith('ws')) {
     throw new Error('[envs] PUBLIC_WS_URL must start with ws:// or wss://')
   }
-} else if (authConfig.isStandaloneMode) {
+} else {
   const derivedPublicWsUrl = derivePublicWsUrlFromApiUrl(process.env.PUBLIC_API_URL)
   if (!derivedPublicWsUrl) {
     throw new Error('[envs] PUBLIC_WS_URL could not be derived from PUBLIC_API_URL')
@@ -247,9 +247,6 @@ for (const key in process.env) {
     publicEnvs[key] = value
   }
 }
-if (!publicEnvs.PUBLIC_AUTH_MODE) {
-  publicEnvs.PUBLIC_AUTH_MODE = authConfig.authMode
-}
 const envsCode = `
   if (!globalThis.env) globalThis.env = {}
   globalThis.env = ${JSON.stringify(publicEnvs)}
@@ -267,7 +264,7 @@ fastify.get('/api/upload-check', async (req, reply) => {
 })
 
 fastify.post('/api/auth/exchange', async (req, reply) => {
-  if (!authConfig.isStandaloneMode || !authConfig.usesLobbyIdentity) {
+  if (!authConfig.usesLobbyIdentity) {
     return reply.code(404).send({ error: 'not_found' })
   }
 

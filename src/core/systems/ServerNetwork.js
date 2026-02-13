@@ -209,13 +209,11 @@ export class ServerNetwork extends System {
     this.dirtyApps = new Set()
     this.isServer = true
     this.queue = []
-    this.authMode = 'standalone'
     this.usesLobbyIdentity = false
   }
 
   init({ db, authConfig } = {}) {
     this.db = db
-    this.authMode = authConfig?.authMode || 'standalone'
     this.usesLobbyIdentity = !!authConfig?.usesLobbyIdentity
   }
 

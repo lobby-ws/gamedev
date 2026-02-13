@@ -91,7 +91,7 @@ Acceptance:
 ## PR-03: Add platform-join login fallback in runtime loading flow
 
 - [ ] Update platform flow in `runtime/src/client/index.js`:
-  - detect `AUTH_MODE=platform` + `PUBLIC_AUTH_PROVIDER=privy` + auth-required status from join.
+  - in legacy platform/join-token mode, detect `PUBLIC_AUTH_PROVIDER=privy` + auth-required status from join.
   - on 401/403 from `/worlds/:slug/join`, surface a retryable auth-required state instead of hard-fail.
 - [ ] Wire `LoadingOverlay` to show “Login with Privy” action when auth-required.
 - [ ] Add callback to trigger:
