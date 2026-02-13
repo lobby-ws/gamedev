@@ -2,6 +2,9 @@
 FROM node:22.11.0-alpine AS builder
 WORKDIR /app
 
+# Install Python and build tools
+RUN apk add --no-cache python3 make g++ linux-headers eudev-dev
+
 # Copy package.json and package-lock.json to leverage layer caching
 COPY package.json package-lock.json ./
 RUN npm install
@@ -14,8 +17,9 @@ RUN npm run build
 FROM node:22.11.0-alpine AS production
 WORKDIR /app
 
-# Add curl for healthcheck
-RUN apk add --no-cache curl && \
+# Add curl for healthcheck and ca-certificates for SSL
+RUN apk add --no-cache curl ca-certificates && \
+    update-ca-certificates && \
     adduser -S nodeuser -u 1001
 
 # Copy only necessary files from builder
