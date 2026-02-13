@@ -1,10 +1,17 @@
 import 'ses'
 import '../core/lockdown'
 import { getAddress } from 'ethers'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { storage } from '../core/storage'
+import {
+  PrivyProvider,
+  getEmbeddedConnectedWallet,
+  useCreateWallet,
+  usePrivy,
+  useWallets,
+} from '@privy-io/react-auth'
 
+import { storage } from '../core/storage'
 import { Client } from './world-client'
 
 function buildWsUrl(baseUrl, token) {
@@ -203,12 +210,10 @@ async function signSiwePayload(provider, address, message, { onStatus } = {}) {
   }
 }
 
-async function performSiweLogin(authBaseUrl, onStatus) {
-  const provider = getWalletProvider()
-  if (!provider) {
-    throw createAuthError('No wallet provider found', 404, { skipAuth: true })
+async function performSiweLoginWithProvider(provider, authBaseUrl, onStatus) {
+  if (!provider || typeof provider.request !== 'function') {
+    throw createAuthError('No wallet provider found', 401, { skipAuth: true })
   }
-
   const address = await requestWalletAddress(provider)
   onStatus?.('auth', `Signing in as ${address.slice(0, 6)}...${address.slice(-4)}...`)
 
@@ -350,10 +355,10 @@ async function getConnectionUrl(onStatus) {
   return buildWsUrl(baseWsUrl)
 }
 
-function createRuntimeAuthBridge() {
-  const authBaseUrl = hasValue(env.PUBLIC_AUTH_URL) ? env.PUBLIC_AUTH_URL : null
+function createInjectedRuntimeAuthBridge(authBaseUrl) {
   return {
     enabled: !!authBaseUrl,
+    mode: 'injected',
     hasWalletProvider() {
       return !!getWalletProvider()
     },
@@ -363,7 +368,11 @@ function createRuntimeAuthBridge() {
       if (!authBaseUrl) {
         throw createAuthError('Wallet auth is unavailable', 404, { skipAuth: true })
       }
-      await performSiweLogin(authBaseUrl, onStatus)
+      const provider = getWalletProvider()
+      if (!provider) {
+        throw createAuthError('No wallet provider found', 401, { skipAuth: true })
+      }
+      await performSiweLoginWithProvider(provider, authBaseUrl, onStatus)
       return fetchAuthMe(authBaseUrl).catch(() => null)
     },
     async getSessionUser() {
@@ -377,11 +386,190 @@ function createRuntimeAuthBridge() {
       clearRuntimeAuthState()
     },
     clearRuntimeAuthState,
+    async getActiveWalletAddress() {
+      const provider = getWalletProvider()
+      if (!provider || typeof provider.request !== 'function') return ''
+      const accounts = await provider.request({ method: 'eth_accounts' }).catch(() => [])
+      return normalizeSiweAddress(Array.isArray(accounts) ? accounts[0] : '')
+    },
+    subscribeAccountChanges(listener) {
+      const provider = getWalletProvider()
+      if (!provider || typeof provider.on !== 'function' || typeof listener !== 'function') {
+        return () => {}
+      }
+      const onAccountsChanged = accounts => {
+        const nextAddress = normalizeSiweAddress(Array.isArray(accounts) ? accounts[0] : '')
+        listener(nextAddress)
+      }
+      provider.on('accountsChanged', onAccountsChanged)
+      return () => {
+        provider.removeListener?.('accountsChanged', onAccountsChanged)
+      }
+    },
   }
 }
 
+const PRIVY_WALLET_WAIT_MS = 7000
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function createPrivyBridgeState(authBaseUrl) {
+  return {
+    authBaseUrl,
+    ready: false,
+    authenticated: false,
+    login: null,
+    logout: null,
+    createWallet: null,
+    walletsRef: null,
+    embeddedAddress: '',
+    listeners: new Set(),
+  }
+}
+
+async function waitForPrivyEmbeddedWallet(state, timeoutMs = PRIVY_WALLET_WAIT_MS) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const wallet = getEmbeddedConnectedWallet(state.walletsRef?.current || [])
+    if (wallet) return wallet
+    await sleep(150)
+  }
+  return null
+}
+
+function notifyPrivyAddressChange(state, address) {
+  for (const listener of state.listeners) {
+    try {
+      listener(address)
+    } catch {
+      // ignore listener errors
+    }
+  }
+}
+
+function createPrivyRuntimeAuthBridge(state) {
+  return {
+    enabled: !!state.authBaseUrl,
+    mode: 'privy',
+    hasWalletProvider() {
+      return !!state.ready
+    },
+    getWalletProvider() {
+      return null
+    },
+    normalizeSiweAddress,
+    async connectWalletSession({ onStatus } = {}) {
+      if (!state.authBaseUrl) {
+        throw createAuthError('Wallet auth is unavailable', 404, { skipAuth: true })
+      }
+      if (!state.ready) {
+        throw createAuthError('Privy is still loading', 503, { skipAuth: true })
+      }
+      if (!state.authenticated) {
+        onStatus?.('auth', 'Opening wallet login...')
+        try {
+          await state.login?.()
+        } catch (err) {
+          throw createAuthError(err?.message || 'Wallet login was rejected', 401, { skipAuth: true })
+        }
+        const authDeadline = Date.now() + PRIVY_WALLET_WAIT_MS
+        while (!state.authenticated && Date.now() < authDeadline) {
+          await sleep(100)
+        }
+      }
+      if (!state.authenticated) {
+        throw createAuthError('Wallet login did not complete', 401, { skipAuth: true })
+      }
+
+      let wallet = getEmbeddedConnectedWallet(state.walletsRef?.current || [])
+      if (!wallet) {
+        onStatus?.('auth', 'Creating embedded wallet...')
+        try {
+          const created = await state.createWallet?.()
+          if (created) wallet = created
+        } catch (err) {
+          throw createAuthError(err?.message || 'Unable to create embedded wallet', 500)
+        }
+      }
+      if (!wallet) {
+        wallet = await waitForPrivyEmbeddedWallet(state)
+      }
+      if (!wallet) {
+        throw createAuthError('No embedded wallet available', 401, { skipAuth: true })
+      }
+
+      const provider = await wallet.getEthereumProvider?.().catch(() => null)
+      if (!provider || typeof provider.request !== 'function') {
+        throw createAuthError('Privy wallet provider unavailable', 401, { skipAuth: true })
+      }
+
+      await performSiweLoginWithProvider(provider, state.authBaseUrl, onStatus)
+      return fetchAuthMe(state.authBaseUrl).catch(() => null)
+    },
+    async getSessionUser() {
+      if (!state.authBaseUrl) return null
+      return fetchAuthMe(state.authBaseUrl).catch(() => null)
+    },
+    async logoutAndClearSession() {
+      if (state.authBaseUrl) {
+        await logoutAuthSession(state.authBaseUrl).catch(() => {})
+      }
+      clearRuntimeAuthState()
+      await state.logout?.().catch(() => {})
+    },
+    clearRuntimeAuthState,
+    async getActiveWalletAddress() {
+      return normalizeSiweAddress(state.embeddedAddress || '')
+    },
+    subscribeAccountChanges(listener) {
+      if (typeof listener !== 'function') return () => {}
+      state.listeners.add(listener)
+      return () => {
+        state.listeners.delete(listener)
+      }
+    },
+  }
+}
+
+function PrivyRuntimeAuthSync({ state, children }) {
+  const { ready, authenticated, login, logout } = usePrivy()
+  const { wallets } = useWallets()
+  const { createWallet } = useCreateWallet()
+  const walletsRef = useRef(wallets)
+  walletsRef.current = wallets
+
+  const embeddedAddress = useMemo(() => {
+    const wallet = getEmbeddedConnectedWallet(wallets)
+    return normalizeSiweAddress(wallet?.address || '')
+  }, [wallets])
+
+  useEffect(() => {
+    state.ready = ready
+    state.authenticated = authenticated
+    state.login = login
+    state.logout = logout
+    state.createWallet = createWallet
+    state.walletsRef = walletsRef
+  }, [state, ready, authenticated, login, logout, createWallet])
+
+  useEffect(() => {
+    if (state.embeddedAddress === embeddedAddress) return
+    state.embeddedAddress = embeddedAddress
+    notifyPrivyAddressChange(state, embeddedAddress)
+  }, [state, embeddedAddress])
+
+  return children
+}
+
+const authBaseUrl = hasValue(env.PUBLIC_AUTH_URL) ? env.PUBLIC_AUTH_URL : null
+const privyAppId = hasValue(env.PUBLIC_PRIVY_APP_ID) ? env.PUBLIC_PRIVY_APP_ID : ''
+const privyBridgeState = privyAppId ? createPrivyBridgeState(authBaseUrl) : null
 if (typeof globalThis !== 'undefined') {
-  globalThis.__runtimeAuth = createRuntimeAuthBridge()
+  globalThis.__runtimeAuth = privyBridgeState
+    ? createPrivyRuntimeAuthBridge(privyBridgeState)
+    : createInjectedRuntimeAuthBridge(authBaseUrl)
 }
 
 function App() {
@@ -401,5 +589,28 @@ function App() {
   />
 }
 
+function RootApp() {
+  if (!privyAppId || !privyBridgeState) {
+    return <App />
+  }
+  return (
+    <PrivyProvider
+      appId={privyAppId}
+      config={{
+        appearance: {
+          walletChainType: 'ethereum-only',
+        },
+        embeddedWallets: {
+          ethereum: { createOnLogin: 'users-without-wallets' },
+        },
+      }}
+    >
+      <PrivyRuntimeAuthSync state={privyBridgeState}>
+        <App />
+      </PrivyRuntimeAuthSync>
+    </PrivyProvider>
+  )
+}
+
 const root = createRoot(document.getElementById('root'))
-root.render(<App />)
+root.render(<RootApp />)

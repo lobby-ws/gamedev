@@ -17,6 +17,7 @@ import { MainMenu } from './MainMenu'
 
 const defaultWalletAuthState = {
   enabled: false,
+  mode: null,
   providerAvailable: false,
   connected: false,
   pending: false,
@@ -101,7 +102,8 @@ export function CoreUI({ world, connectionStatus }) {
     }
 
     let cancelled = false
-    let removeAccountsChanged = null
+    let removeAccountSubscription = null
+    let verifyTimerId = null
 
     const setAuthState = patch => {
       if (cancelled) return
@@ -118,13 +120,13 @@ export function CoreUI({ world, connectionStatus }) {
       world.network?.destroy?.()
       setTimeout(() => {
         window.location.reload()
-      }, 250)
+      }, 150)
     }
 
-    const handleAccountsChanged = accounts => {
+    const handleWalletAddressChange = nextValue => {
       const expectedAddress = sessionWalletRef.current
       if (!expectedAddress) return
-      const nextAddress = auth.normalizeSiweAddress?.(Array.isArray(accounts) ? accounts[0] : '') || ''
+      const nextAddress = auth.normalizeSiweAddress?.(nextValue || '') || ''
       if (!nextAddress) {
         void kickForWalletChange('wallet_disconnected')
         return
@@ -134,11 +136,38 @@ export function CoreUI({ world, connectionStatus }) {
       }
     }
 
-    const initWalletAuth = async () => {
-      const provider = auth.getWalletProvider?.()
+    const verifyActiveWallet = async () => {
+      const expectedAddress = sessionWalletRef.current
+      const providerAvailable = !!auth.hasWalletProvider?.()
       setAuthState({
         enabled: true,
-        providerAvailable: !!provider,
+        mode: auth.mode || null,
+        providerAvailable,
+      })
+      if (!expectedAddress) return
+
+      if (!providerAvailable) {
+        if (auth.mode === 'injected') {
+          await kickForWalletChange('wallet_disconnected')
+        }
+        return
+      }
+
+      const activeAddress = auth.normalizeSiweAddress?.(await auth.getActiveWalletAddress?.().catch(() => '')) || ''
+      if (!activeAddress) {
+        await kickForWalletChange('wallet_disconnected')
+        return
+      }
+      if (activeAddress.toLowerCase() !== expectedAddress.toLowerCase()) {
+        await kickForWalletChange('wallet_changed')
+      }
+    }
+
+    const initWalletAuth = async () => {
+      setAuthState({
+        enabled: true,
+        mode: auth.mode || null,
+        providerAvailable: !!auth.hasWalletProvider?.(),
       })
 
       const session = await auth.getSessionUser?.().catch(() => null)
@@ -149,30 +178,21 @@ export function CoreUI({ world, connectionStatus }) {
         address: sessionAddress || null,
       })
 
-      if (!sessionAddress || !provider || typeof provider.request !== 'function') return
-
-      const accounts = await provider.request({ method: 'eth_accounts' }).catch(() => [])
-      const activeAddress = auth.normalizeSiweAddress?.(Array.isArray(accounts) ? accounts[0] : '') || ''
-      if (!activeAddress) {
-        await kickForWalletChange('wallet_disconnected')
-        return
-      }
-      if (activeAddress.toLowerCase() !== sessionAddress.toLowerCase()) {
-        await kickForWalletChange('wallet_changed')
-        return
-      }
-
-      if (typeof provider.on === 'function') {
-        provider.on('accountsChanged', handleAccountsChanged)
-        removeAccountsChanged = () => provider.removeListener?.('accountsChanged', handleAccountsChanged)
-      }
+      removeAccountSubscription = auth.subscribeAccountChanges?.(handleWalletAddressChange) || null
+      await verifyActiveWallet()
+      verifyTimerId = setInterval(() => {
+        void verifyActiveWallet()
+      }, 3000)
     }
 
     initWalletAuth()
 
     return () => {
       cancelled = true
-      removeAccountsChanged?.()
+      removeAccountSubscription?.()
+      if (verifyTimerId) {
+        clearInterval(verifyTimerId)
+      }
     }
   }, [world])
 
@@ -190,6 +210,20 @@ export function CoreUI({ world, connectionStatus }) {
       }
     } finally {
       setWalletAuth(prev => ({ ...prev, pending: false }))
+    }
+  }
+
+  const disconnectWallet = async () => {
+    const auth = globalThis.__runtimeAuth
+    if (!auth?.enabled) return
+    if (walletAuth.pending) return
+    setWalletAuth(prev => ({ ...prev, pending: true }))
+    try {
+      await auth.logoutAndClearSession?.()
+    } catch {
+      // always reload to force a clean guest state
+    } finally {
+      window.location.reload()
     }
   }
 
@@ -212,6 +246,7 @@ export function CoreUI({ world, connectionStatus }) {
         onOpenMenu={() => setMenuOpen(true)}
         walletAuth={walletAuth}
         onConnectWallet={connectWallet}
+        onDisconnectWallet={disconnectWallet}
       />}
       {ready && <MainMenu world={world} open={menuOpen} onClose={() => setMenuOpen(false)} />}
       {ready && <Chat world={world} />}

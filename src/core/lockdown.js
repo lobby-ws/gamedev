@@ -8,7 +8,7 @@ lockdown({
   //
   // regExpTaming: 'unsafe',
   // localeTaming: 'unsafe',
-  // consoleTaming: 'unsafe',
+  consoleTaming: 'unsafe',
   // evalTaming: 'unsafeEval',
   // // stackFiltering: ''
   // overrideTaming: 'min',
