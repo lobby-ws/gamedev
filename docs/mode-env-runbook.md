@@ -42,7 +42,7 @@ Notes:
 2. Missing token is allowed and runtime admits as guest.
 3. Invalid provided runtime session token is rejected.
 
-### 3) `platform`
+### 3) `platform` (legacy compatibility mode)
 
 Required runtime envs:
 1. `AUTH_MODE=platform`
@@ -64,9 +64,10 @@ Required world-service envs:
 3. Kubernetes settings used to spawn runtime (`K8S_NAMESPACE`, image config, etc.)
 
 Notes:
-1. Runtime accepts only `world_connection` tokens on WS.
-2. Runtime user access/role is resolved via world-service internal API.
-3. Runtime posts player join/leave + heartbeat to world-service internal endpoints.
+1. This mode is legacy/internal only. Prefer the standalone modes.
+2. Runtime accepts only `world_connection` tokens on WS.
+3. Runtime user access/role is resolved via world-service internal API.
+4. Runtime posts player join/leave + heartbeat to world-service internal endpoints.
 
 ## Smoke Matrix
 

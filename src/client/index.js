@@ -67,7 +67,7 @@ function resolveAuthMode() {
   if (explicit === 'platform' || explicit === 'standalone') {
     return explicit
   }
-  return hasValue(env.PUBLIC_WORLD_SLUG) ? 'platform' : 'standalone'
+  return 'standalone'
 }
 
 function buildAuthEndpointCandidates(authBaseUrl, pathSuffix) {

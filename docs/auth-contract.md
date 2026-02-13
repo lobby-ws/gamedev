@@ -7,7 +7,7 @@ Last Updated: 2026-02-10
 
 `AUTH_MODE`
 1. `standalone` (default)
-2. `platform`
+2. `platform` (legacy/internal compatibility only)
 
 Identity behavior is inferred:
 1. `AUTH_MODE=platform` always uses Lobby identity.
@@ -16,10 +16,10 @@ Identity behavior is inferred:
 
 ## Token Types
 
-### `world_connection`
+### `world_connection` (legacy/platform)
 Issuer: world-service  
 Audience: `runtime:connect`  
-Usage: client connects to runtime WS in platform mode
+Usage: legacy/platform runtimes that still use world-service-issued connection tokens.
 
 Required claims:
 1. `typ=world_connection`
@@ -77,8 +77,8 @@ Required claims:
 4. Signed-in client obtains `identity_exchange` from Lobby auth and calls runtime `/api/auth/exchange`.
 5. Runtime verifies exchange token via Lobby verifier endpoint, then mints `runtime_session`.
 
-### `platform`
-1. Runtime accepts only `world_connection` on WS.
+### `platform` (legacy/internal)
+1. Legacy/runtime compatibility only: accepts `world_connection` on WS.
 2. Runtime rejects anonymous fallback.
 3. Runtime validates token claims: `typ`, issuer, audience, expiry, and `worldId == WORLD_ID`.
 4. Runtime authorizes user via world-service internal API.
@@ -91,8 +91,8 @@ Common:
 3. `JWT_SECRET`
 4. `PUBLIC_API_URL`
 
-Platform:
-1. `WORLD_SERVICE_API_KEY` (required)
+Platform (legacy/internal):
+1. `WORLD_SERVICE_API_KEY` (required in legacy mode)
 2. `WORLD_SERVICE_INTERNAL_URL` (optional, defaults to `PUBLIC_API_URL`)
 3. `PUBLIC_WS_URL` (optional, derived from `PUBLIC_API_URL`)
 
@@ -107,7 +107,7 @@ Standalone local identity:
 ## Endpoint Contracts
 
 World-service:
-1. `POST /worlds/:slug/join` -> returns `world_connection` token.
+1. `POST /worlds/:slug/join` -> returns `world_connection` token (platform/legacy runtime compatibility only).
 2. `POST /auth/exchange` -> returns `identity_exchange` token for authenticated session.
 3. `POST /auth/exchange/verify` -> validates `identity_exchange` and returns claims.
 

@@ -171,8 +171,7 @@ function isUniqueConstraintError(err) {
   return /unique|constraint/i.test(message)
 }
 
-const AUTH_MODE = (process.env.AUTH_MODE || 'standalone').trim().toLowerCase()
-const REQUIRE_ADMIN_CODE = AUTH_MODE === 'platform'
+const REQUIRE_ADMIN_CODE = false
 
 function isCodeValid(expected, code) {
   if (!expected) return !REQUIRE_ADMIN_CODE
