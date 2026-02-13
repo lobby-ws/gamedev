@@ -54,6 +54,8 @@ export class ScriptAIController {
   constructor(world) {
     this.world = world
     this.inFlightByBlueprint = new Map()
+    this.threadsByTarget = new Map()
+    this.threadSubscribersByTarget = new Map()
     this.docsIndex = []
     this.docsApiUrl = null
     this.docsLoaded = false
@@ -63,6 +65,8 @@ export class ScriptAIController {
 
   destroy() {
     this.inFlightByBlueprint.clear()
+    this.threadsByTarget.clear()
+    this.threadSubscribersByTarget.clear()
     this.docsSubscribers.clear()
     this.docsLoadingPromise = null
   }
@@ -159,6 +163,23 @@ export class ScriptAIController {
       scriptRootId: scriptRoot.id,
       startedAt: Date.now(),
     })
+    if (mode === 'edit' && prompt) {
+      this.appendThreadEntry({
+        targetBlueprintId,
+        scriptRootId: scriptRoot.id,
+        requestId,
+        type: 'user',
+        text: prompt.trim(),
+      })
+    } else if (mode === 'fix') {
+      this.appendThreadEntry({
+        targetBlueprintId,
+        scriptRootId: scriptRoot.id,
+        requestId,
+        type: 'user',
+        text: 'Fix the current script error.',
+      })
+    }
     this.world.emit?.('script-ai-pending', {
       scriptRootId: scriptRoot.id,
       targetBlueprintId,
@@ -181,6 +202,58 @@ export class ScriptAIController {
       if (pending?.scriptRootId === scriptRootId) return true
     }
     return false
+  }
+
+  getTargetKey = ({ targetBlueprintId, scriptRootId } = {}) => {
+    const bp = typeof targetBlueprintId === 'string' && targetBlueprintId ? targetBlueprintId : ''
+    const root = typeof scriptRootId === 'string' && scriptRootId ? scriptRootId : ''
+    return `${bp}::${root}`
+  }
+
+  getThreadForTarget = ({ targetBlueprintId, scriptRootId } = {}) => {
+    const key = this.getTargetKey({ targetBlueprintId, scriptRootId })
+    return this.threadsByTarget.get(key) || []
+  }
+
+  subscribeThread = ({ targetBlueprintId, scriptRootId, onChange } = {}) => {
+    if (typeof onChange !== 'function') return () => {}
+    const key = this.getTargetKey({ targetBlueprintId, scriptRootId })
+    if (!this.threadSubscribersByTarget.has(key)) {
+      this.threadSubscribersByTarget.set(key, new Set())
+    }
+    const subs = this.threadSubscribersByTarget.get(key)
+    subs.add(onChange)
+    onChange(this.threadsByTarget.get(key) || [])
+    return () => {
+      subs.delete(onChange)
+      if (!subs.size) this.threadSubscribersByTarget.delete(key)
+    }
+  }
+
+  appendThreadEntry = ({ targetBlueprintId, scriptRootId, requestId, type, text, meta } = {}) => {
+    if (!type) return
+    const key = this.getTargetKey({ targetBlueprintId, scriptRootId })
+    const current = this.threadsByTarget.get(key) || []
+    const next = current.concat({
+      id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      requestId: requestId || null,
+      type,
+      text: typeof text === 'string' ? text : '',
+      meta: meta && typeof meta === 'object' ? meta : null,
+      createdAt: Date.now(),
+    })
+    const bounded = next.length > 160 ? next.slice(next.length - 160) : next
+    this.threadsByTarget.set(key, bounded)
+    this.emitThread(key)
+  }
+
+  emitThread = key => {
+    const subs = this.threadSubscribersByTarget.get(key)
+    if (!subs || !subs.size) return
+    const items = this.threadsByTarget.get(key) || []
+    for (const callback of subs) {
+      callback(items)
+    }
   }
 
   getPendingForTarget = ({ targetBlueprintId, scriptRootId } = {}) => {
@@ -278,6 +351,91 @@ export class ScriptAIController {
   emitDocsIndex = () => {
     for (const callback of this.docsSubscribers) {
       callback(this.docsIndex)
+    }
+  }
+
+  onEvent = payload => {
+    if (!payload) return
+    const targetBlueprintId = typeof payload.targetBlueprintId === 'string' ? payload.targetBlueprintId : null
+    const scriptRootId = typeof payload.scriptRootId === 'string' ? payload.scriptRootId : null
+    const requestId = typeof payload.requestId === 'string' ? payload.requestId : null
+    const type = typeof payload.type === 'string' ? payload.type : ''
+    if (!type) return
+    if (type === 'session_start') {
+      this.appendThreadEntry({
+        targetBlueprintId,
+        scriptRootId,
+        requestId,
+        type: 'system',
+        text: payload.mode === 'fix' ? 'Started AI fix request.' : 'Started AI edit request.',
+      })
+      return
+    }
+    if (type === 'phase') {
+      const phase = typeof payload.phase === 'string' ? payload.phase : ''
+      const labels = {
+        collecting_context: 'Collecting context...',
+        thinking: 'Thinking...',
+        generating_patch: 'Generating patch...',
+        applying: 'Applying changes...',
+      }
+      this.appendThreadEntry({
+        targetBlueprintId,
+        scriptRootId,
+        requestId,
+        type: 'phase',
+        text: labels[phase] || phase || 'Working...',
+        meta: { phase },
+      })
+      return
+    }
+    if (type === 'patch_preview') {
+      const files = Array.isArray(payload.files) ? payload.files.filter(Boolean) : []
+      const summary = typeof payload.summary === 'string' ? payload.summary.trim() : ''
+      const text = summary || `Prepared changes for ${files.length} file${files.length === 1 ? '' : 's'}.`
+      this.appendThreadEntry({
+        targetBlueprintId,
+        scriptRootId,
+        requestId,
+        type: 'assistant',
+        text,
+        meta: files.length ? { files } : null,
+      })
+      return
+    }
+    if (type === 'apply_result') {
+      const message = typeof payload.message === 'string' ? payload.message : ''
+      const count = Number.isFinite(payload.fileCount) ? payload.fileCount : 0
+      this.appendThreadEntry({
+        targetBlueprintId,
+        scriptRootId,
+        requestId,
+        type: payload.ok ? 'success' : 'error',
+        text: message || (payload.ok ? `Applied ${count} file change(s).` : 'Apply failed.'),
+      })
+      return
+    }
+    if (type === 'assistant_message' || type === 'assistant_delta') {
+      const text = typeof payload.text === 'string' ? payload.text : ''
+      if (!text) return
+      this.appendThreadEntry({
+        targetBlueprintId,
+        scriptRootId,
+        requestId,
+        type: 'assistant',
+        text,
+      })
+      return
+    }
+    if (type === 'error') {
+      const message = typeof payload.message === 'string' ? payload.message : 'AI request failed.'
+      this.appendThreadEntry({
+        targetBlueprintId,
+        scriptRootId,
+        requestId,
+        type: 'error',
+        text: message,
+      })
     }
   }
 

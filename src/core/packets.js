@@ -40,6 +40,7 @@ const names = [
   // ai script editor
   'scriptAiRequest',
   'scriptAiProposal',
+  'scriptAiEvent',
   // ai create
   'aiCreateRequest',
 ]

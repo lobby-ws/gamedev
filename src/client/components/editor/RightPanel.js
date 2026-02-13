@@ -1,5 +1,5 @@
 import { css } from '@firebolt-dev/css'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { editorTheme as theme } from './editorTheme'
 import { Script } from '../sidebar/Script'
 import { storage } from '../../../core/storage'
@@ -7,6 +7,10 @@ import { storage } from '../../../core/storage'
 export function RightPanel({ world }) {
   const panelRef = useRef()
   const resizerRef = useRef()
+  const [mode, setMode] = useState(() => {
+    const saved = storage.get('right-panel-mode', 'chat')
+    return saved === 'code' ? 'code' : 'chat'
+  })
   useEffect(() => {
     const resizer = resizerRef.current
     const panel = panelRef.current
@@ -33,6 +37,10 @@ export function RightPanel({ world }) {
       resizer.removeEventListener('pointerdown', onPointerDown)
     }
   }, [])
+  const setPanelMode = nextMode => {
+    setMode(nextMode)
+    storage.set('right-panel-mode', nextMode)
+  }
   return (
     <div
       ref={panelRef}
@@ -64,11 +72,46 @@ export function RightPanel({ world }) {
             min-height: 0;
           }
         }
+        .right-panel-modes {
+          height: 2.4rem;
+          display: flex;
+          align-items: center;
+          gap: 0.4rem;
+          padding: 0 0.75rem;
+          border-bottom: 1px solid ${theme.panelBorder};
+        }
+        .right-panel-mode {
+          height: 1.7rem;
+          border-radius: 0.4rem;
+          border: 1px solid rgba(255, 255, 255, 0.16);
+          background: transparent;
+          color: rgba(255, 255, 255, 0.72);
+          font-size: 0.72rem;
+          padding: 0 0.6rem;
+          &:hover {
+            cursor: pointer;
+            color: white;
+            border-color: rgba(255, 255, 255, 0.3);
+          }
+        }
+        .right-panel-mode.active {
+          color: white;
+          background: rgba(255, 255, 255, 0.08);
+          border-color: rgba(255, 255, 255, 0.32);
+        }
       `}
     >
       <div className='right-panel-resizer' ref={resizerRef} />
+      <div className='right-panel-modes'>
+        <button className={`right-panel-mode ${mode === 'chat' ? 'active' : ''}`} onClick={() => setPanelMode('chat')}>
+          Chat
+        </button>
+        <button className={`right-panel-mode ${mode === 'code' ? 'active' : ''}`} onClick={() => setPanelMode('code')}>
+          Code
+        </button>
+      </div>
       <div className='right-panel-content'>
-        <Script world={world} hidden={false} />
+        <Script world={world} hidden={false} viewMode={mode} />
       </div>
     </div>
   )

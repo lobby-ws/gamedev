@@ -163,18 +163,42 @@ await world.init({
 })
 
 const registryState = createRegistryState()
+let clientHtmlTemplateCache = null
+
+function loadClientHtmlTemplate() {
+  const candidates = [
+    path.join(__dirname, 'public', 'index.html'),
+    path.join(process.cwd(), 'src/client/public/index.html'),
+  ]
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(candidate)) continue
+      const html = fs.readFileSync(candidate, 'utf-8')
+      if (!html) continue
+      clientHtmlTemplateCache = html
+      return html
+    } catch {
+      // continue trying other candidates
+    }
+  }
+  if (clientHtmlTemplateCache) return clientHtmlTemplateCache
+  return `<!doctype html><html><head><meta charset="utf-8"/><title>Loading...</title></head><body>Rebuilding client bundle, refresh in a moment.</body></html>`
+}
 
 function renderClientHtml(reply) {
   const title = world.settings.title || 'World'
   const desc = world.settings.desc || ''
   const image = world.resolveURL(world.settings.image?.url) || ''
-  const url = process.env.ASSETS_BASE_URL
-  const filePath = path.join(__dirname, 'public', 'index.html')
-  let html = fs.readFileSync(filePath, 'utf-8')
+  const url = process.env.ASSETS_BASE_URL || ''
+  let html = loadClientHtmlTemplate()
   html = html.replaceAll('{url}', url)
   html = html.replaceAll('{title}', title)
   html = html.replaceAll('{desc}', desc)
   html = html.replaceAll('{image}', image)
+  // If we had to fall back to the source template, provide stable script paths.
+  html = html.replaceAll('{jsPath}', '/index.js')
+  html = html.replaceAll('{particlesPath}', '/particles.js')
+  html = html.replaceAll('{buildId}', Date.now())
   reply.type('text/html').send(html)
 }
 

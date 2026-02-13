@@ -245,6 +245,10 @@ export class ClientNetwork extends System {
     this.world.emit?.('script-ai-proposal', data)
   }
 
+  onScriptAiEvent = data => {
+    this.world.emit?.('script-ai-event', data)
+  }
+
   onEntityRemoved = id => {
     this.world.entities.remove(id)
   }
