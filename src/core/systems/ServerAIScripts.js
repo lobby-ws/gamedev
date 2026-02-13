@@ -7,16 +7,10 @@ import { System } from './System'
 import { isValidScriptPath } from '../blueprintValidation'
 import { buildScriptGroups, getScriptGroupMain } from '../extras/blueprintGroups'
 import { hashFile } from '../utils-server'
+import { getBlueprintAppName } from '../blueprintUtils'
 
 function hasScriptFiles(blueprint) {
   return blueprint?.scriptFiles && typeof blueprint.scriptFiles === 'object' && !Array.isArray(blueprint.scriptFiles)
-}
-
-function getBlueprintAppName(id) {
-  if (typeof id !== 'string' || !id) return ''
-  if (id === '$scene') return '$scene'
-  const idx = id.indexOf('__')
-  return idx === -1 ? id : id.slice(0, idx)
 }
 
 function resolveScriptRootBlueprint(blueprint, world) {
@@ -416,7 +410,21 @@ export class ServerAIScripts extends System {
       startedAt: Date.now(),
       playerId: socket?.id || null,
     })
+    this.sendEvent(socket, {
+      requestId,
+      scriptRootId,
+      targetBlueprintId,
+      type: 'session_start',
+      mode,
+    })
     try {
+      this.sendEvent(socket, {
+        requestId,
+        scriptRootId,
+        targetBlueprintId,
+        type: 'phase',
+        phase: 'collecting_context',
+      })
       const fileMap = await this.loadFileMap(scriptRoot.scriptFiles)
       const scriptFormat = scriptRoot.scriptFormat === 'legacy-body' ? 'legacy-body' : 'module'
       const attachments = normalizeAiAttachments(data?.attachments)
@@ -431,7 +439,21 @@ export class ServerAIScripts extends System {
         fileMap,
         attachmentMap,
       })
+      this.sendEvent(socket, {
+        requestId,
+        scriptRootId,
+        targetBlueprintId,
+        type: 'phase',
+        phase: 'thinking',
+      })
       const raw = await this.client.generate(systemPrompt, userPrompt)
+      this.sendEvent(socket, {
+        requestId,
+        scriptRootId,
+        targetBlueprintId,
+        type: 'phase',
+        phase: 'generating_patch',
+      })
       const parsed = extractJson(raw)
       const normalized = normalizeAiPatchSet(parsed)
       if (!normalized) {
@@ -448,6 +470,21 @@ export class ServerAIScripts extends System {
       if (!outputFiles.length) {
         throw new Error('empty_ai_patch')
       }
+      this.sendEvent(socket, {
+        requestId,
+        scriptRootId,
+        targetBlueprintId,
+        type: 'patch_preview',
+        summary: normalized.summary || '',
+        files: outputFiles.map(file => file.path),
+      })
+      this.sendEvent(socket, {
+        requestId,
+        scriptRootId,
+        targetBlueprintId,
+        type: 'phase',
+        phase: 'applying',
+      })
       const scriptUpdate = await this.buildScriptUpdate(scriptRoot, outputFiles)
       const actor = socket?.id || socket?.player?.data?.id || 'ai'
       const applySource = 'ai-scripts'
@@ -485,6 +522,16 @@ export class ServerAIScripts extends System {
         source: modelSource,
         fileCount: outputFiles.length,
         applied: true,
+        forked,
+        message: forked ? 'AI changes applied to a new fork.' : 'AI changes applied.',
+      })
+      this.sendEvent(socket, {
+        requestId,
+        scriptRootId,
+        targetBlueprintId,
+        type: 'apply_result',
+        ok: true,
+        fileCount: outputFiles.length,
         forked,
         message: forked ? 'AI changes applied to a new fork.' : 'AI changes applied.',
       })
@@ -712,6 +759,19 @@ export class ServerAIScripts extends System {
       error,
       message,
     })
+    this.sendEvent(socket, {
+      requestId,
+      scriptRootId,
+      targetBlueprintId,
+      type: 'error',
+      message: message || 'AI request failed.',
+      error: error || 'ai_request_failed',
+    })
+  }
+
+  sendEvent(socket, payload) {
+    if (!payload || !socket?.send) return
+    socket.send('scriptAiEvent', payload)
   }
 }
 

@@ -242,11 +242,11 @@ export class ClientNetwork extends System {
   }
 
   onScriptAiProposal = data => {
-    if (this.world.aiScripts?.onProposal) {
-      this.world.aiScripts.onProposal(data)
-      return
-    }
     this.world.emit?.('script-ai-proposal', data)
+  }
+
+  onScriptAiEvent = data => {
+    this.world.emit?.('script-ai-event', data)
   }
 
   onEntityRemoved = id => {
@@ -271,6 +271,14 @@ export class ClientNetwork extends System {
 
   onMute = data => {
     this.world.livekit.setMuted(data.playerId, data.muted)
+  }
+
+  onServerLog = data => {
+    this.world.logs?.add('server', data.level, data.args)
+  }
+
+  onServerLogHistory = data => {
+    this.world.logs?.addBatch('server', data)
   }
 
   onPong = time => {

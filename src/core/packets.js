@@ -40,8 +40,14 @@ const names = [
   // ai script editor
   'scriptAiRequest',
   'scriptAiProposal',
+  'scriptAiEvent',
   // ai create
   'aiCreateRequest',
+  // logs
+  'serverLog',
+  'serverLogHistory',
+  'subscribeLogs',
+  'unsubscribeLogs',
 ]
 
 const byName = {}
