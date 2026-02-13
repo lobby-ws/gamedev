@@ -268,6 +268,12 @@ export class ServerNetwork extends System {
     } catch (err) {
       console.error(err)
     }
+    // broadcast server logs to clients
+    this.world.logs?.on('entry', entry => {
+      if (entry.source === 'server') {
+        this.send('serverLog', { level: entry.level, args: entry.args, timestamp: entry.timestamp })
+      }
+    })
     // watch settings changes
     this.world.settings.on('change', this.saveSettings)
     // queue first save

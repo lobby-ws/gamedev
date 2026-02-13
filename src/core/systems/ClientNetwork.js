@@ -273,6 +273,10 @@ export class ClientNetwork extends System {
     this.world.livekit.setMuted(data.playerId, data.muted)
   }
 
+  onServerLog = data => {
+    this.world.logs?.add('server', data.level, data.args)
+  }
+
   onPong = time => {
     this.world.stats?.onPong(time)
   }

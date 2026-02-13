@@ -35,9 +35,18 @@ export class Scripts extends System {
     this.moduleSourceCache = new Map()
     this.endowments = {
       console: {
-        log: (...args) => console.log(...args),
-        warn: (...args) => console.warn(...args),
-        error: (...args) => console.error(...args),
+        log: (...args) => {
+          console.log(...args)
+          this.world.logs?.add(this.world.network?.isServer ? 'server' : 'client', 'log', args)
+        },
+        warn: (...args) => {
+          console.warn(...args)
+          this.world.logs?.add(this.world.network?.isServer ? 'server' : 'client', 'warn', args)
+        },
+        error: (...args) => {
+          console.error(...args)
+          this.world.logs?.add(this.world.network?.isServer ? 'server' : 'client', 'error', args)
+        },
         time: (...args) => console.time(...args),
         timeEnd: (...args) => console.timeEnd(...args),
       },

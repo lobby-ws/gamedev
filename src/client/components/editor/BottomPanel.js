@@ -5,6 +5,7 @@ import { PanelTabs } from './PanelTabs'
 import { App } from '../sidebar/App'
 import { Nodes } from '../sidebar/Nodes'
 import { Meta } from '../sidebar/Meta'
+import { Console } from '../sidebar/Console'
 import { exportApp } from '../../../core/extras/appTools'
 import { downloadFile } from '../../../core/extras/downloadFile'
 import { storage } from '../../../core/storage'
@@ -13,6 +14,7 @@ const tabs = [
   { id: 'app', label: 'Object' },
   { id: 'nodes', label: 'Nodes' },
   { id: 'meta', label: 'Meta' },
+  { id: 'console', label: 'Console' },
 ]
 
 export function BottomPanel({ world }) {
@@ -126,6 +128,7 @@ export function BottomPanel({ world }) {
         {activeTab === 'app' && <App key={app.data.id} world={world} hidden={false} />}
         {activeTab === 'nodes' && <Nodes key={app.data.id} world={world} hidden={false} />}
         {activeTab === 'meta' && <Meta key={app.data.id} world={world} hidden={false} />}
+        {activeTab === 'console' && <Console world={world} />}
       </div>
     </div>
   )

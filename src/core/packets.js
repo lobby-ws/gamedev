@@ -43,6 +43,8 @@ const names = [
   'scriptAiEvent',
   // ai create
   'aiCreateRequest',
+  // logs
+  'serverLog',
 ]
 
 const byName = {}
