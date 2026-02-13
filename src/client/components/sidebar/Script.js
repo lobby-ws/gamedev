@@ -325,6 +325,7 @@ export function Script({ world, hidden, viewMode = 'chat' }) {
     if (!requestId) return
     aiPromptRef.current?.blur?.()
     aiRequestRef.current = requestId
+    setAiPrompt('')
     setAiPending(true)
     setAiStatus({ type: 'pending', message: 'Generating changes...' })
   }, [aiAccessIssue, aiLocked, aiPrompt, aiController, app, aiAttachmentPayload])
@@ -352,6 +353,7 @@ export function Script({ world, hidden, viewMode = 'chat' }) {
     if (!requestId) return
     aiPromptRef.current?.blur?.()
     aiRequestRef.current = requestId
+    setAiPrompt('')
     setAiPending(true)
     setAiStatus({ type: 'pending', message: 'Fixing script error...' })
   }, [aiAccessIssue, aiLocked, scriptError, aiController, app, aiAttachmentPayload])
