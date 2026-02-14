@@ -37,20 +37,7 @@ export function Add({ world, hidden }) {
   const createNameRef = useRef(null)
   const isBuiltinTemplate = blueprint => blueprint?.__builtinTemplate === true
   const buildTemplates = () => {
-    const items = Array.from(world.blueprints.items.values()).filter(
-      bp => !bp.scene && !LEGACY_BUILTIN_TEMPLATE_IDS.has(bp.id)
-    )
-    const groups = buildScriptGroups(world.blueprints.items)
-    const mainIds = new Set()
-    for (const group of groups.groups.values()) {
-      if (group?.main?.id) mainIds.add(group.main.id)
-    }
-    const mainsOnly = items.filter(bp => {
-      const scriptKey = typeof bp.script === 'string' ? bp.script.trim() : ''
-      if (!scriptKey) return true
-      return mainIds.has(bp.id)
-    })
-    return sortBy([...CLIENT_BUILTIN_TEMPLATES, ...mainsOnly], bp => (bp.name || bp.id || '').toLowerCase())
+    return sortBy([...CLIENT_BUILTIN_TEMPLATES], bp => (bp.name || bp.id || '').toLowerCase())
   }
   const buildOrphans = () => {
     const used = new Set()
