@@ -273,7 +273,15 @@ fastify.post('/api/auth/exchange', async (req, reply) => {
     return reply.code(400).send({ error: 'invalid_payload', message: 'token is required' })
   }
 
-  const claims = await verifyIdentityExchangeTokenWithLobby(identityToken)
+  const verification = await verifyIdentityExchangeTokenWithLobby(identityToken)
+  if (!verification?.ok) {
+    if (verification?.reason === 'unreachable') {
+      return reply.code(503).send({ error: 'identity_verifier_unreachable' })
+    }
+    return reply.code(401).send({ error: 'invalid_exchange_token' })
+  }
+
+  const claims = verification.claims
   const userId = typeof claims?.userId === 'string' ? claims.userId.trim() : ''
   if (!userId) {
     return reply.code(401).send({ error: 'invalid_exchange_token' })

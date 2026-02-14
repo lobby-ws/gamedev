@@ -127,9 +127,13 @@ export function readJWT(token, { worldId } = {}) {
 }
 
 export async function verifyIdentityExchangeTokenWithLobby(token, { verifyUrl, timeoutMs } = {}) {
-  if (typeof token !== 'string' || !token.trim()) return null
+  if (typeof token !== 'string' || !token.trim()) {
+    return { ok: false, reason: 'invalid' }
+  }
   const endpoint = resolveLobbyIdentityVerifyUrl(verifyUrl)
-  if (!endpoint) return null
+  if (!endpoint) {
+    return { ok: false, reason: 'unreachable' }
+  }
   const resolvedTimeoutMs = parsePositiveInt(timeoutMs, DEFAULT_VERIFY_TIMEOUT_MS)
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), resolvedTimeoutMs)
@@ -143,21 +147,26 @@ export async function verifyIdentityExchangeTokenWithLobby(token, { verifyUrl, t
       body: JSON.stringify({ token: token.trim() }),
       signal: controller.signal,
     })
-    if (!response.ok) return null
+    if (!response.ok) {
+      if (response.status === 400 || response.status === 401 || response.status === 403 || response.status === 422) {
+        return { ok: false, reason: 'invalid' }
+      }
+      return { ok: false, reason: 'unreachable' }
+    }
     const payload = await response.json().catch(() => null)
     if (payload?.valid !== true || !payload?.claims || typeof payload.claims !== 'object') {
-      return null
+      return { ok: false, reason: 'unreachable' }
     }
     const claims = payload.claims
-    if (claims.typ !== IDENTITY_EXCHANGE_TYP) return null
-    if (claims.aud !== IDENTITY_EXCHANGE_AUDIENCE) return null
-    if (typeof claims.userId !== 'string' || !claims.userId.trim()) return null
-    if (typeof claims.sub !== 'string' || claims.sub !== claims.userId) return null
+    if (claims.typ !== IDENTITY_EXCHANGE_TYP) return { ok: false, reason: 'invalid' }
+    if (claims.aud !== IDENTITY_EXCHANGE_AUDIENCE) return { ok: false, reason: 'invalid' }
+    if (typeof claims.userId !== 'string' || !claims.userId.trim()) return { ok: false, reason: 'invalid' }
+    if (typeof claims.sub !== 'string' || claims.sub !== claims.userId) return { ok: false, reason: 'invalid' }
     const expectedIssuer = resolveLobbyIdentityIssuer()
-    if (expectedIssuer && claims.iss !== expectedIssuer) return null
-    return claims
+    if (expectedIssuer && claims.iss !== expectedIssuer) return { ok: false, reason: 'invalid' }
+    return { ok: true, claims }
   } catch {
-    return null
+    return { ok: false, reason: 'unreachable' }
   } finally {
     clearTimeout(timeoutId)
   }

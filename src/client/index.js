@@ -302,20 +302,21 @@ async function getConnectionUrl(onStatus) {
   }
 
   if (usesLobbyIdentity) {
+    const authBaseUrl = env.PUBLIC_AUTH_URL
     onStatus?.('auth', 'Authorizing...')
     try {
-      const authBaseUrl = env.PUBLIC_AUTH_URL
-      const identityToken = await fetchIdentityExchangeToken(authBaseUrl)
-      const runtimeSessionToken = await exchangeForRuntimeSession(apiUrl, identityToken)
-      return buildWsUrl(baseWsUrl, runtimeSessionToken)
+      await fetchAuthMe(authBaseUrl)
     } catch (err) {
-      // Allow unauthenticated users to continue as guests in lobby identity mode.
       if (err?.status === 401) {
         onStatus?.('connecting', 'Continuing as guest...')
         return buildWsUrl(baseWsUrl)
       }
       throw err
     }
+
+    const identityToken = await fetchIdentityExchangeToken(authBaseUrl)
+    const runtimeSessionToken = await exchangeForRuntimeSession(apiUrl, identityToken)
+    return buildWsUrl(baseWsUrl, runtimeSessionToken)
   }
 
   return buildWsUrl(baseWsUrl)
