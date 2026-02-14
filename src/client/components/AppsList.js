@@ -4,14 +4,11 @@ import {
   BoxIcon,
   BrickWallIcon,
   CrosshairIcon,
-  EyeIcon,
-  EyeOffIcon,
   FileCode2Icon,
   HardDriveIcon,
   HashIcon,
   OctagonXIcon,
   Rows3Icon,
-  SettingsIcon,
   TriangleIcon,
 } from 'lucide-react'
 
@@ -128,7 +125,6 @@ export function AppsList({ world, query, perf, refresh, setRefresh }) {
   const inspect = item => {
     const entity = getClosest(item)
     world.ui.setApp(entity)
-    // world.ui.setMenu({ type: 'app', app: entity })
   }
   const toggle = item => {
     const blueprint = world.blueprints.get(item.blueprint.id)
@@ -138,64 +134,47 @@ export function AppsList({ world, query, perf, refresh, setRefresh }) {
     world.admin.blueprintModify({ id: blueprint.id, version, disabled }, { ignoreNetworkId: world.network.id })
     setRefresh(n => n + 1)
   }
+  const sortButtons = [
+    { key: 'count', icon: HashIcon, title: 'Instances' },
+    { key: 'geometries', icon: BoxIcon, title: 'Geometries' },
+    { key: 'triangles', icon: TriangleIcon, title: 'Triangles' },
+    { key: 'textureBytes', icon: BrickWallIcon, title: 'Texture Size' },
+    { key: 'code', icon: FileCode2Icon, title: 'Code' },
+    { key: 'fileBytes', icon: HardDriveIcon, title: 'File Size' },
+  ]
   return (
     <div
-      className={cls('appslist', { hideperf: !perf })}
+      className='appslist'
       css={css`
         flex: 1;
-        .appslist-head {
-          position: sticky;
-          top: 0;
+        .appslist-sortbar {
           display: flex;
           align-items: center;
-          padding: 0.6rem 1rem;
+          gap: 0.25rem;
+          padding: 0.5rem 1rem;
           border-bottom: 1px solid rgba(255, 255, 255, 0.05);
           margin: 0 0 0.3125rem;
         }
-        .appslist-headitem {
-          font-size: 1rem;
-          font-weight: 500;
-          white-space: nowrap;
-          text-overflow: ellipsis;
-          overflow: hidden;
-          &.name {
-            flex: 1;
-          }
-          &.code {
-            width: 3rem;
-            text-align: right;
-          }
-          &.count,
-          &.geometries,
-          &.triangles {
-            width: 4rem;
-            text-align: right;
-          }
-          &.textureSize,
-          &.fileSize {
-            width: 5rem;
-            text-align: right;
-          }
-          &.actions {
-            display: flex;
-            align-items: center;
-            justify-content: flex-end;
-            width: 5.45rem;
-          }
-          &:hover:not(.active) {
+        .appslist-sortbtn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 1.75rem;
+          height: 1.75rem;
+          border-radius: 0.25rem;
+          color: #5d6077;
+          &:hover {
             cursor: pointer;
+            color: rgba(255, 255, 255, 0.7);
+            background: rgba(255, 255, 255, 0.05);
           }
           &.active {
             color: #4088ff;
           }
         }
-        .appslist-rows {
-          /* overflow-y: auto;
-          padding-bottom: 1.25rem;
-          max-height: 18.75rem; */
-        }
         .appslist-row {
           display: flex;
+          flex-wrap: wrap;
           align-items: center;
           padding: 0.6rem 1rem;
           &:hover {
@@ -203,35 +182,17 @@ export function AppsList({ world, query, perf, refresh, setRefresh }) {
             background: rgba(255, 255, 255, 0.03);
           }
         }
-        .appslist-rowitem {
+        .appslist-name {
+          flex: 1;
           font-size: 1rem;
           color: rgba(255, 255, 255, 0.8);
           white-space: nowrap;
           text-overflow: ellipsis;
           overflow: hidden;
-          &.name {
-            flex: 1;
-          }
-          &.code {
-            width: 3rem;
-            text-align: right;
-          }
-          &.count,
-          &.geometries,
-          &.triangles {
-            width: 4rem;
-            text-align: right;
-          }
-          &.textureSize,
-          &.fileSize {
-            width: 5rem;
-            text-align: right;
-          }
-          &.actions {
-            width: 5.45rem;
-            display: flex;
-            justify-content: flex-end;
-          }
+        }
+        .appslist-actions {
+          display: flex;
+          justify-content: flex-end;
         }
         .appslist-action {
           margin-left: 0.625rem;
@@ -243,100 +204,36 @@ export function AppsList({ world, query, perf, refresh, setRefresh }) {
             cursor: pointer;
           }
         }
-        &.hideperf {
-          .appslist-head {
-            display: none;
-          }
-          .appslist-rowitem {
-            &.count,
-            &.code,
-            &.geometries,
-            &.triangles,
-            &.textureSize,
-            &.fileSize {
-              display: none;
-            }
-          }
+        .appslist-stats {
+          width: 100%;
+          font-size: 0.75rem;
+          color: rgba(255, 255, 255, 0.4);
+          line-height: 1.4;
+          margin-top: 0.2rem;
         }
       `}
     >
-      <div className='appslist-head'>
-        <div
-          className={cls('appslist-headitem name', { active: sort === 'name' })}
-          onClick={() => reorder('name')}
-          title='Name'
-        >
-          <span></span>
+      {perf && (
+        <div className='appslist-sortbar'>
+          {sortButtons.map(btn => (
+            <div
+              key={btn.key}
+              className={cls('appslist-sortbtn', { active: sort === btn.key })}
+              onClick={() => reorder(btn.key)}
+              title={btn.title}
+            >
+              <btn.icon size={14} />
+            </div>
+          ))}
         </div>
-        <div
-          className={cls('appslist-headitem count', { active: sort === 'count' })}
-          onClick={() => reorder('count')}
-          title='Instances'
-        >
-          <HashIcon size='1.125rem' />
-        </div>
-        <div
-          className={cls('appslist-headitem geometries', { active: sort === 'geometries' })}
-          onClick={() => reorder('geometries')}
-          title='Geometries'
-        >
-          <BoxIcon size='1.125rem' />
-        </div>
-        <div
-          className={cls('appslist-headitem triangles', { active: sort === 'triangles' })}
-          onClick={() => reorder('triangles')}
-          title='Triangles'
-        >
-          <TriangleIcon size='1.125rem' />
-        </div>
-        <div
-          className={cls('appslist-headitem textureSize', { active: sort === 'textureBytes' })}
-          onClick={() => reorder('textureBytes')}
-          title='Texture Memory Size'
-        >
-          <BrickWallIcon size='1.125rem' />
-        </div>
-        <div
-          className={cls('appslist-headitem code', { active: sort === 'code' })}
-          onClick={() => reorder('code')}
-          title='Code'
-        >
-          <FileCode2Icon size='1.125rem' />
-        </div>
-        <div
-          className={cls('appslist-headitem fileSize', { active: sort === 'fileBytes' })}
-          onClick={() => reorder('fileBytes')}
-          title='File Size'
-        >
-          <HardDriveIcon size={16} />
-        </div>
-        <div className='appslist-headitem actions' />
-      </div>
+      )}
       <div className='appslist-rows'>
         {items.map(item => (
           <div key={item.blueprint.id} className='appslist-row'>
-            <div className='appslist-rowitem name' onClick={() => inspect(item)}>
+            <div className='appslist-name' onClick={() => inspect(item)}>
               <span>{item.name}</span>
             </div>
-            <div className='appslist-rowitem count'>
-              <span>{item.count}</span>
-            </div>
-            <div className='appslist-rowitem geometries'>
-              <span>{item.geometries}</span>
-            </div>
-            <div className='appslist-rowitem triangles'>
-              <span>{formatNumber(item.triangles)}</span>
-            </div>
-            <div className='appslist-rowitem textureSize'>
-              <span>{item.textureSize}</span>
-            </div>
-            <div className='appslist-rowitem code'>
-              <span>{item.code ? 'Yes' : 'No'}</span>
-            </div>
-            <div className='appslist-rowitem fileSize'>
-              <span>{item.fileSize}</span>
-            </div>
-            <div className={'appslist-rowitem actions'}>
+            <div className='appslist-actions'>
               {!item.blueprint.scene && (
                 <>
                   <div
@@ -354,6 +251,11 @@ export function AppsList({ world, query, perf, refresh, setRefresh }) {
                 </>
               )}
             </div>
+            {perf && (
+              <div className='appslist-stats'>
+                {item.count}x · {item.geometries} geo · {formatNumber(item.triangles)} tri · {item.textureSize} tex · {item.fileSize} file{item.code ? ' · code' : ''}
+              </div>
+            )}
           </div>
         ))}
       </div>

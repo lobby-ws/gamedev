@@ -80,7 +80,7 @@ export function Apps({ world, hidden }) {
     }
   }
   return (
-    <Pane width={perf && tab === 'objects' ? '40rem' : '20rem'} hidden={hidden}>
+    <Pane width='20rem' hidden={hidden}>
       <div
         className='apps'
         css={css`
