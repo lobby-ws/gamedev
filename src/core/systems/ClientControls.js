@@ -576,7 +576,6 @@ export class ClientControls extends System {
 
   onKeyUp = e => {
     if (e.repeat) return
-    if (this.isInputFocused()) return
     const code = e.code
     if (code === 'MetaLeft' || code === 'MetaRight') {
       // releasing a meta key while another key is down causes browsers not to ever
@@ -745,6 +744,10 @@ export class ClientControls extends System {
   onPointerLockStart() {
     if (this.pointer.locked) return
     this.pointer.locked = true
+    // Blur any focused input/textarea so it can't intercept game keys (e.g. Monaco stealing Tab)
+    if (document.activeElement && document.activeElement !== document.body) {
+      document.activeElement.blur()
+    }
     this.world.emit('pointer-lock', true)
     // pointerlock is async so if its no longer meant to be locked, exit
     if (!this.pointer.shouldLock) this.unlockPointer()
@@ -791,7 +794,17 @@ export class ClientControls extends System {
   }
 
   isInputFocused() {
-    return document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA'
+    const el = document.activeElement
+    if (el?.tagName === 'INPUT') return true
+    if (el?.tagName === 'TEXTAREA') {
+      // When pointer is locked (game mode), textareas are not intentional input targets.
+      // The only valid pointer-locked input is the chat, which uses <input>.
+      // This prevents Monaco's hidden textarea from blocking game controls
+      // when it steals focus (e.g. after AI code generation).
+      if (this.pointer.locked) return false
+      return true
+    }
+    return false
   }
 
   destroy() {

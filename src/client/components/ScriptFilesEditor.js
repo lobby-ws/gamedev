@@ -722,7 +722,10 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
     if (state.viewState) {
       editor.restoreViewState(state.viewState)
     }
-    editor.focus()
+    // Only focus editor when user is NOT in game mode (pointer lock)
+    if (!document.pointerLockElement) {
+      editor.focus()
+    }
   }, [])
 
   const loadPath = useCallback(
