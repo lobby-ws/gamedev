@@ -12,6 +12,7 @@ import { DEG2RAD, RAD2DEG } from '../extras/general'
 import { createNode } from '../extras/createNode'
 import { importApp } from '../extras/appTools'
 import { buildScriptGroups, getScriptGroupMain } from '../extras/blueprintGroups'
+import { BUILTIN_APP_TEMPLATES } from '../../client/builtinApps'
 
 const FORWARD = new THREE.Vector3(0, 0, -1)
 const SNAP_DISTANCE = 1
@@ -338,6 +339,7 @@ export class ClientBuilder extends System {
       const prompted = await this.world.ui.prompt({
         title: 'Name this blueprint',
         placeholder: placeholderName,
+        defaultValue: placeholderName,
         validate: v => {
           const candidateId = v.replace(/\s+/g, '_').toLowerCase()
           if (this.world.blueprints.get(candidateId)) return 'A blueprint with that name already exists'
@@ -1564,68 +1566,19 @@ export class ClientBuilder extends System {
     const filename = `${hash}.glb`
     // canonical url to this file
     const url = `asset://${filename}`
-    // create a blank module script entry
-    const scriptFile = new File([DEFAULT_MODULE_SCRIPT_SOURCE], DEFAULT_MODULE_SCRIPT_ENTRY, {
-      type: 'text/javascript',
-    })
-    const scriptHash = await hashFile(scriptFile)
-    const scriptUrl = `asset://${scriptHash}.js`
     // cache file locally so this client can insta-load it
     this.world.loader.insert('model', url, file)
-    this.world.loader.insert('script', scriptUrl, scriptFile)
-    // make blueprint
-    const blueprint = {
-      id: uuid(),
-      version: 0,
-      scope: null,
-      name: file.name.split('.')[0],
-      image: null,
-      author: null,
-      url: null,
-      desc: null,
-      model: url,
-      script: scriptUrl,
-      scriptEntry: DEFAULT_MODULE_SCRIPT_ENTRY,
-      scriptFiles: {
-        [DEFAULT_MODULE_SCRIPT_ENTRY]: scriptUrl,
-      },
-      scriptFormat: 'module',
-      scriptRef: null,
-      props: {},
-      preload: false,
-      public: false,
-      locked: false,
+    // fork from the builtin Model template
+    const modelTemplate = BUILTIN_APP_TEMPLATES.find(t => t.name === 'Model')
+    const defaultName = file.name.replace(/\.glb$/i, '')
+    const blueprint = await this.forkTemplateFromBlueprint({ ...modelTemplate, name: defaultName }, 'Build', null, {
       unique: false,
-      scene: false,
-      disabled: false,
-    }
-    if (hasScriptFields(blueprint) && !normalizeScope(blueprint.scope)) {
-      blueprint.scope = blueprint.id
-    }
+      model: url,
+    })
+    if (!blueprint) return
     let app = null
-    let lockToken = null
-    let lockScope = null
     try {
-      if (hasScriptFields(blueprint)) {
-        lockScope = normalizeScope(blueprint.scope)
-        if (!lockScope) {
-          throw new Error('scope_unknown')
-        }
-        const result = await this.world.admin.acquireDeployLock({
-          owner: this.world.network.id,
-          scope: lockScope,
-        })
-        lockToken = result?.token || this.world.admin.deployLockToken
-      }
-      // register blueprint
-      this.world.blueprints.add(blueprint)
-      await this.world.admin.blueprintAdd(blueprint, {
-        ignoreNetworkId: this.world.network.id,
-        lockToken,
-        request: true,
-      })
-      // spawn the app moving
-      // - mover: follows this clients cursor until placed
+      // spawn the app
       // - uploader: other clients see a loading indicator until its fully uploaded
       const data = {
         id: uuid(),
@@ -1642,29 +1595,19 @@ export class ClientBuilder extends System {
       }
       app = this.world.entities.add(data)
       await this.world.admin.entityAdd(data, { ignoreNetworkId: this.world.network.id, request: true })
-      // upload the model + blank module script
-      await Promise.all([this.world.admin.upload(file), this.world.admin.upload(scriptFile)])
+      // upload the model
+      await this.world.admin.upload(file)
       // mark as uploaded so other clients can load it in
       app.onUploaded()
     } catch (err) {
       if (app) {
         app.destroy(true)
       }
-      if (blueprint) {
-        this.world.blueprints.remove(blueprint.id)
-        this.world.admin
-          ?.blueprintRemove?.(blueprint.id)
-          .catch(removeErr => console.error('failed to remove blueprint', removeErr))
-      }
+      this.world.blueprints.remove(blueprint.id)
+      this.world.admin
+        ?.blueprintRemove?.(blueprint.id)
+        .catch(removeErr => console.error('failed to remove blueprint', removeErr))
       this.handleAdminError(err, 'Import failed')
-    } finally {
-      if (lockToken && this.world.admin?.releaseDeployLock) {
-        try {
-          await this.world.admin.releaseDeployLock(lockToken, lockScope)
-        } catch (releaseErr) {
-          console.error('failed to release deploy lock', releaseErr)
-        }
-      }
     }
   }
 
