@@ -67,7 +67,7 @@ function resolveLobbyIdentityVerifyUrl(verifyUrl) {
   if (!base) return null
 
   const normalizedBase = base.replace(/\/+$/, '')
-  return `${normalizedBase}/auth/exchange/verify`
+  return `${normalizedBase}/exchange/verify`
 }
 
 export function createJWT(data, { worldId } = {}) {

@@ -135,7 +135,7 @@ async function requestWalletAddress(provider) {
 }
 
 async function requestSiweNonce(authBaseUrl, address, { onStatus } = {}) {
-  const endpoint = resolveAuthEndpoint(authBaseUrl, 'auth/nonce')
+  const endpoint = resolveAuthEndpoint(authBaseUrl, 'nonce')
   const res = await fetch(endpoint, {
     method: 'POST',
     headers: {
@@ -158,7 +158,7 @@ async function requestSiweNonce(authBaseUrl, address, { onStatus } = {}) {
 }
 
 async function verifySiweMessage(authBaseUrl, message, signature, { onStatus } = {}) {
-  const endpoint = resolveAuthEndpoint(authBaseUrl, 'auth/verify')
+  const endpoint = resolveAuthEndpoint(authBaseUrl, 'verify')
   const res = await fetch(endpoint, {
     method: 'POST',
     headers: {
@@ -218,7 +218,7 @@ async function performSiweLoginWithProvider(provider, authBaseUrl, onStatus) {
 }
 
 async function fetchIdentityExchangeToken(authBaseUrl) {
-  const endpoint = resolveAuthEndpoint(authBaseUrl, 'auth/exchange')
+  const endpoint = resolveAuthEndpoint(authBaseUrl, 'exchange')
   const res = await fetch(endpoint, {
     method: 'POST',
     credentials: 'include',
@@ -238,7 +238,7 @@ async function fetchIdentityExchangeToken(authBaseUrl) {
 }
 
 async function fetchAuthMe(authBaseUrl) {
-  const endpoint = resolveAuthEndpoint(authBaseUrl, 'auth/me')
+  const endpoint = resolveAuthEndpoint(authBaseUrl, 'me')
   const res = await fetch(endpoint, {
     method: 'GET',
     credentials: 'include',
@@ -251,7 +251,7 @@ async function fetchAuthMe(authBaseUrl) {
 }
 
 async function logoutAuthSession(authBaseUrl) {
-  const endpoint = resolveAuthEndpoint(authBaseUrl, 'auth/logout')
+  const endpoint = resolveAuthEndpoint(authBaseUrl, 'logout')
   const res = await fetch(endpoint, {
     method: 'POST',
     credentials: 'include',
