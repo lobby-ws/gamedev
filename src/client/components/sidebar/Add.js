@@ -1,6 +1,6 @@
 import { css } from '@firebolt-dev/css'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { CirclePlusIcon, Trash2Icon } from 'lucide-react'
+import { CirclePlusIcon, SearchIcon, Trash2Icon } from 'lucide-react'
 import { cls } from '../cls'
 import { theme } from '../theme'
 import { sortBy } from 'lodash-es'
@@ -26,8 +26,9 @@ function normalizeBlueprintName(value) {
 }
 
 export function Add({ world, hidden }) {
-  const span = 4
+  const span = 2
   const gap = '0.5rem'
+  const [search, setSearch] = useState('')
   const [trashMode, setTrashMode] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [createName, setCreateName] = useState('')
@@ -39,6 +40,9 @@ export function Add({ world, hidden }) {
     return sortBy([...CLIENT_BUILTIN_TEMPLATES], bp => (bp.name || bp.id || '').toLowerCase())
   }
   const [templates, setTemplates] = useState(() => buildTemplates())
+  const filteredTemplates = search.trim()
+    ? templates.filter(bp => (bp.name || bp.id || '').toLowerCase().includes(search.trim().toLowerCase()))
+    : templates
 
   useEffect(() => {
     const refresh = () => {
@@ -56,6 +60,7 @@ export function Add({ world, hidden }) {
 
   useEffect(() => {
     if (hidden) {
+      setSearch('')
       setCreateOpen(false)
       setCreating(false)
       setCreateError(null)
@@ -220,12 +225,11 @@ export function Add({ world, hidden }) {
           border-radius: ${theme.radius};
           display: flex;
           flex-direction: column;
-          min-height: 22rem;
-          max-height: 22rem;
+          min-height: 17rem;
+          max-height: 17rem;
           position: relative;
           .add-head {
-            height: 3.125rem;
-            padding: 0 1rem;
+            padding: 0.6rem 1rem;
             border-bottom: 1px solid ${theme.borderLight};
             display: flex;
             align-items: center;
@@ -262,6 +266,23 @@ export function Add({ world, hidden }) {
               color: #ff6b6b;
             }
           }
+          .add-search {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            input {
+              margin-left: 0.5rem;
+              flex: 1;
+              font-size: 0.9375rem;
+              &::placeholder {
+                color: #5d6077;
+              }
+              &::selection {
+                background-color: white;
+                color: rgba(0, 0, 0, 0.8);
+              }
+            }
+          }
           .add-content {
             flex: 1;
             overflow-y: auto;
@@ -282,9 +303,11 @@ export function Add({ world, hidden }) {
           }
           .add-item-image {
             width: 100%;
-            aspect-ratio: 1;
+            aspect-ratio: 16 / 10;
             background-color: #1c1d22;
-            background-size: cover;
+            background-size: contain;
+            background-position: center;
+            background-repeat: no-repeat;
             border: 1px solid ${theme.borderLight};
             border-radius: ${theme.radius};
             margin: 0 0 0.4rem;
@@ -474,7 +497,10 @@ export function Add({ world, hidden }) {
         `}
       >
         <div className='add-head'>
-          <div className='add-title'>Templates</div>
+          <label className='add-search'>
+            <SearchIcon size='1.125rem' />
+            <input type='text' placeholder='Search' value={search} onChange={e => setSearch(e.target.value)} />
+          </label>
           <div
             className={cls('add-action', { active: createOpen })}
             onClick={openCreate}
@@ -491,7 +517,7 @@ export function Add({ world, hidden }) {
         </div>
         <div className='add-content noscrollbar'>
           <div className='add-items'>
-            {templates.map(blueprint => {
+            {filteredTemplates.map(blueprint => {
               const imageUrl = blueprint.image?.url || (typeof blueprint.image === 'string' ? blueprint.image : null)
               return (
                 <div

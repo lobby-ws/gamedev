@@ -90,7 +90,7 @@ export function Apps({ world, hidden }) {
           flex: 1;
           display: flex;
           flex-direction: column;
-          min-height: 17rem;
+          min-height: 22rem;
           position: relative;
           .apps-head {
             padding: 0.6rem 1rem;
