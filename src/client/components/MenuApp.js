@@ -70,22 +70,7 @@ function MenuAppIndex({ world, app, blueprint, setBlueprint, pop, push }) {
   const player = world.entities.player
   const frozen = blueprint.frozen // TODO: disable code editor, model change, metadata editing, flag editing etc
   const resolveModelUpdateMode = async () => {
-    if (blueprint.unique || !world.ui?.confirm) return 'all'
-    let count = 0
-    for (const entity of world.entities.items.values()) {
-      if (entity.isApp && entity.data.blueprint === blueprint.id) count += 1
-    }
-    const message =
-      count > 1
-        ? `This model is shared by ${count} instances. Apply to this or fork this app?`
-        : 'This model is shared by this template. Apply to this or fork this app?'
-    const applyAll = await world.ui.confirm({
-      title: 'Apply model change?',
-      message,
-      confirmText: 'Apply to this',
-      cancelText: 'Fork',
-    })
-    return applyAll ? 'all' : 'fork'
+    return 'all'
   }
   const changeModel = async file => {
     if (!file) return
@@ -103,22 +88,7 @@ function MenuAppIndex({ world, app, blueprint, setBlueprint, pop, push }) {
     world.loader.insert(type, url, file)
     // upload model
     await world.admin.upload(file)
-    if (updateMode === 'fork') {
-      if (!world.builder?.forkTemplateFromBlueprint) {
-        world.emit('toast', 'Builder access required.')
-        return
-      }
-      const forked = await world.builder.forkTemplateFromBlueprint(blueprint, 'Model fork', null, {
-        model: url,
-        skipNamePrompt: true,
-      })
-      if (!forked) return
-      app.modify({ blueprint: forked.id })
-      world.admin.entityModify({ id: app.data.id, blueprint: forked.id }, { ignoreNetworkId: world.network.id })
-      if (setBlueprint) setBlueprint(forked)
-      world.emit('toast', 'Model forked')
-      return
-    }
+
     // update blueprint locally (also rebuilds apps)
     const version = blueprint.version + 1
     world.blueprints.modify({ id: blueprint.id, version, model: url })
