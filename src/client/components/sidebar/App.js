@@ -144,7 +144,7 @@ export function App({ world, hidden }) {
         world.emit('toast', 'Builder access required.')
         return
       }
-      const forked = await world.builder.forkTemplateFromBlueprint(blueprint, 'Model fork', null, { model: url })
+      const forked = await world.builder.forkTemplateFromBlueprint(blueprint, 'Model fork', null, { model: url, skipNamePrompt: true })
       if (!forked) return
       app.modify({ blueprint: forked.id })
       world.admin.entityModify(
@@ -232,7 +232,7 @@ export function App({ world, hidden }) {
     world.builder.control.pointer.lock()
     let spawnBlueprint = variant
     if (variant.unique) {
-      spawnBlueprint = await world.builder.forkTemplateFromBlueprint(variant, 'Add')
+      spawnBlueprint = await world.builder.forkTemplateFromBlueprint(variant, 'Add', null, {})
       if (!spawnBlueprint) {
         setAddingId(null)
         return

@@ -174,11 +174,9 @@ export function Add({ world, hidden }) {
     world.builder.toggle(true)
     world.builder.control.pointer.lock()
     let spawnBlueprint = blueprint
-    if (isBuiltinTemplate(blueprint)) {
-      spawnBlueprint = await world.builder.forkTemplateFromBlueprint(blueprint, 'Add', null, { unique: false })
-      if (!spawnBlueprint) return
-    } else if (blueprint.unique) {
-      spawnBlueprint = await world.builder.forkTemplateFromBlueprint(blueprint, 'Add')
+    if (isBuiltinTemplate(blueprint) || blueprint.unique) {
+      const overrides = isBuiltinTemplate(blueprint) ? { unique: false } : {}
+      spawnBlueprint = await world.builder.forkTemplateFromBlueprint(blueprint, 'Add', null, overrides)
       if (!spawnBlueprint) return
     }
     setTimeout(() => {

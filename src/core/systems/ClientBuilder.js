@@ -328,11 +328,43 @@ export class ClientBuilder extends System {
         : {}
     const props =
       mergedProps && typeof mergedProps === 'object' && !Array.isArray(mergedProps) ? mergedProps : baseProps
-    const nextBlueprint = getNextBlueprintVariant(this.world, sourceBlueprint)
+    let nextId, nextName
+    if (overrides?.skipNamePrompt) {
+      const nextBlueprint = getNextBlueprintVariant(this.world, sourceBlueprint)
+      nextId = nextBlueprint.id
+      nextName = nextBlueprint.name
+    } else {
+      const placeholderName = sourceBlueprint.name || sourceBlueprint.id || 'my_blueprint'
+      const prompted = await this.world.ui.prompt({
+        title: 'Name this blueprint',
+        placeholder: placeholderName,
+        validate: v => {
+          const candidateId = v.replace(/\s+/g, '_').toLowerCase()
+          if (this.world.blueprints.get(candidateId)) return 'A blueprint with that name already exists'
+          return null
+        },
+      })
+      if (!prompted) return null
+      const { prefix } = splitBlueprintId(typeof sourceBlueprint === 'string' ? sourceBlueprint : sourceBlueprint?.id)
+      const sanitized = prompted.replace(/[^a-zA-Z0-9_\- ]/g, '').trim()
+      const baseId = sanitized.replace(/\s+/g, '_').toLowerCase()
+      let candidateId = `${prefix}${baseId}`
+      if (this.world.blueprints.get(candidateId)) {
+        for (let n = 2; n < 10000; n++) {
+          const attempt = `${prefix}${baseId}_${n}`
+          if (!this.world.blueprints.get(attempt)) {
+            candidateId = attempt
+            break
+          }
+        }
+      }
+      nextId = candidateId
+      nextName = sanitized
+    }
     const blueprint = {
-      id: nextBlueprint.id,
+      id: nextId,
       version: 0,
-      name: nextBlueprint.name,
+      name: nextName,
       image: sourceBlueprint.image,
       author: sourceBlueprint.author,
       url: sourceBlueprint.url,
@@ -357,7 +389,7 @@ export class ClientBuilder extends System {
       disabled: sourceBlueprint.disabled,
     }
     if (overrides && typeof overrides === 'object' && !Array.isArray(overrides)) {
-      const { id: _id, version: _version, ...rest } = overrides
+      const { id: _id, version: _version, name: _name, skipNamePrompt: _skip, ...rest } = overrides
       Object.assign(blueprint, rest)
     }
     if (hasScriptFields(blueprint) && !normalizeScope(blueprint.scope)) {

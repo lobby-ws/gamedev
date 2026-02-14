@@ -1224,6 +1224,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
         const forked = await world.builder.forkTemplateFromBlueprint(sourceBlueprint, 'Code fork', null, {
           ...scriptUpdate,
           scriptRef: null,
+          skipNamePrompt: true,
         })
         if (!forked) {
           const err = new Error('fork_failed')
@@ -1642,6 +1643,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
         const forked = await world.builder.forkTemplateFromBlueprint(sourceBlueprint, 'Code fork', null, {
           ...scriptUpdate,
           scriptRef: null,
+          skipNamePrompt: true,
         })
         if (!forked) return
         const app = world.ui?.state?.app
@@ -1831,6 +1833,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
           const forked = await world.builder.forkTemplateFromBlueprint(sourceBlueprint, 'Code fork', null, {
             ...scriptUpdate,
             scriptRef: null,
+            skipNamePrompt: true,
           })
           if (!forked) return false
           const app = world.ui?.state?.app

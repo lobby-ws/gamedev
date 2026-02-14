@@ -108,7 +108,7 @@ function MenuAppIndex({ world, app, blueprint, setBlueprint, pop, push }) {
         world.emit('toast', 'Builder access required.')
         return
       }
-      const forked = await world.builder.forkTemplateFromBlueprint(blueprint, 'Model fork', null, { model: url })
+      const forked = await world.builder.forkTemplateFromBlueprint(blueprint, 'Model fork', null, { model: url, skipNamePrompt: true })
       if (!forked) return
       app.modify({ blueprint: forked.id })
       world.admin.entityModify(

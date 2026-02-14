@@ -21,6 +21,7 @@ export function CoreUI({ world, connectionStatus }) {
   const [ui, setUI] = useState(world.ui.state)
   const [menu, setMenu] = useState(null)
   const [confirm, setConfirm] = useState(null)
+  const [prompt, setPrompt] = useState(null)
   const [code, setCode] = useState(false)
   const [avatar, setAvatar] = useState(null)
   const [disconnected, setDisconnected] = useState(false)
@@ -33,6 +34,7 @@ export function CoreUI({ world, connectionStatus }) {
     world.on('ui', setUI)
     world.on('menu', setMenu)
     world.on('confirm', setConfirm)
+    world.on('prompt', setPrompt)
     world.on('code', setCode)
     world.on('apps', setApps)
     world.on('avatar', setAvatar)
@@ -46,6 +48,7 @@ export function CoreUI({ world, connectionStatus }) {
       world.off('ui', setUI)
       world.off('menu', setMenu)
       world.off('confirm', setConfirm)
+      world.off('prompt', setPrompt)
       world.off('code', setCode)
       world.off('apps', setApps)
       world.off('avatar', setAvatar)
@@ -104,6 +107,7 @@ export function CoreUI({ world, connectionStatus }) {
       {ready && isTouch && <TouchBtns world={world} />}
       {ready && isTouch && <TouchStick world={world} />}
       {confirm && <Confirm options={confirm} />}
+      {prompt && <Prompt world={world} options={prompt} />}
       <div id='core-ui-portal' />
     </div>
   )
@@ -1336,6 +1340,149 @@ function Confirm({ options }) {
             <span>{options.confirmText || 'Okay'}</span>
           </div>
           <div className='confirm-action' onClick={options.cancel}>
+            <span>{options.cancelText || 'Cancel'}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Prompt({ world, options }) {
+  const inputRef = useRef()
+  const [value, setValue] = useState(options.defaultValue || '')
+  const [error, setError] = useState(null)
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
+  const handleSubmit = () => {
+    const trimmed = value.trim()
+    if (!trimmed) {
+      setError('Name cannot be empty')
+      return
+    }
+    if (options.validate) {
+      const err = options.validate(trimmed)
+      if (err) {
+        setError(err)
+        return
+      }
+    }
+    options.submit(trimmed)
+  }
+  const handleKeyDown = e => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      handleSubmit()
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      options.cancel()
+    }
+  }
+  return (
+    <div
+      className='prompt'
+      css={css`
+        position: absolute;
+        inset: 0;
+        padding: 1rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 999;
+        .prompt-dialog {
+          pointer-events: auto;
+          background: rgba(11, 10, 21, 0.9);
+          border: 1px solid rgba(255, 255, 255, 0.05);
+          border-radius: 1.375rem;
+          backdrop-filter: blur(5px);
+          width: 18rem;
+        }
+        .prompt-content {
+          padding: 1.4rem;
+        }
+        .prompt-title {
+          text-align: center;
+          font-size: 1.1rem;
+          font-weight: 500;
+          margin: 0 0 0.7rem;
+        }
+        .prompt-message {
+          text-align: center;
+          color: rgba(255, 255, 255, 0.6);
+          font-size: 0.9375rem;
+          line-height: 1.4;
+          margin: 0 0 0.7rem;
+        }
+        .prompt-input {
+          width: 100%;
+          padding: 0.5rem 0.7rem;
+          background: rgba(255, 255, 255, 0.07);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 0.5rem;
+          color: white;
+          font-size: 0.9375rem;
+          outline: none;
+          &:focus {
+            border-color: rgba(255, 255, 255, 0.25);
+          }
+        }
+        .prompt-error {
+          color: #ff6b6b;
+          font-size: 0.8rem;
+          margin-top: 0.4rem;
+          text-align: center;
+        }
+        .prompt-actions {
+          border-top: 1px solid rgba(255, 255, 255, 0.05);
+          display: flex;
+          align-items: stretch;
+        }
+        .prompt-action {
+          flex: 1;
+          min-height: 2.7rem;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          &.left {
+            border-right: 1px solid rgba(255, 255, 255, 0.05);
+          }
+          > span {
+            font-size: 0.9375rem;
+            color: rgba(255, 255, 255, 0.8);
+          }
+          &:hover {
+            cursor: pointer;
+            > span {
+              color: white;
+            }
+          }
+        }
+      `}
+    >
+      <div className='prompt-dialog'>
+        <div className='prompt-content'>
+          <div className='prompt-title'>{options.title}</div>
+          {options.message && <div className='prompt-message'>{options.message}</div>}
+          <input
+            ref={inputRef}
+            className='prompt-input'
+            type='text'
+            placeholder={options.placeholder || ''}
+            value={value}
+            onChange={e => {
+              setValue(e.target.value)
+              setError(null)
+            }}
+            onKeyDown={handleKeyDown}
+          />
+          {error && <div className='prompt-error'>{error}</div>}
+        </div>
+        <div className='prompt-actions'>
+          <div className='prompt-action left' onClick={handleSubmit}>
+            <span>{options.submitText || 'Submit'}</span>
+          </div>
+          <div className='prompt-action' onClick={options.cancel}>
             <span>{options.cancelText || 'Cancel'}</span>
           </div>
         </div>

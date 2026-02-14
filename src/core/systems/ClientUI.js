@@ -113,6 +113,21 @@ export class ClientUI extends System {
     return promise
   }
 
+  prompt(options) {
+    const promise = new Promise(resolve => {
+      options.submit = value => {
+        this.world.emit('prompt', null)
+        resolve(value)
+      }
+      options.cancel = () => {
+        this.world.emit('prompt', null)
+        resolve(null)
+      }
+    })
+    this.world.emit('prompt', options)
+    return promise
+  }
+
   broadcast() {
     this.world.emit('ui', { ...this.state })
   }
