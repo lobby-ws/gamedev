@@ -488,14 +488,22 @@ export class ServerAIScripts extends System {
       const scriptUpdate = await this.buildScriptUpdate(scriptRoot, outputFiles)
       const actor = socket?.id || socket?.player?.data?.id || 'ai'
       const applySource = 'ai-scripts'
-      const { shouldFork, appEntity } = this.resolveForkPlan({
+      const { shouldFork, shouldDetach, appEntity } = this.resolveForkPlan({
         scriptRoot,
         targetBlueprint: targetBlueprint || scriptRoot,
         app,
       })
       let appliedScriptRootId = scriptRootId
       let forked = false
-      if (shouldFork) {
+      if (shouldDetach) {
+        // Unique blueprint: update in-place, detach from script group
+        const detachUpdate = { ...scriptUpdate, scriptRef: null }
+        appliedScriptRootId = await this.applyScriptUpdateToRoot(
+          targetBlueprint || scriptRoot,
+          detachUpdate,
+          { actor, source: applySource }
+        )
+      } else if (shouldFork) {
         const forkResult = await this.applyForkedScriptUpdate({
           sourceBlueprint: targetBlueprint || scriptRoot,
           scriptRoot,
@@ -563,7 +571,7 @@ export class ServerAIScripts extends System {
   resolveForkPlan({ scriptRoot, targetBlueprint, app }) {
     const appEntity = app?.isApp ? app : null
     if (!appEntity) {
-      return { shouldFork: false, appEntity: null }
+      return { shouldFork: false, shouldDetach: false, appEntity: null }
     }
     const groups = buildScriptGroups(this.world.blueprints.items)
     const group =
@@ -572,7 +580,10 @@ export class ServerAIScripts extends System {
     const targetId = typeof targetBlueprint?.id === 'string' ? targetBlueprint.id : null
     const rootId = typeof scriptRoot?.id === 'string' ? scriptRoot.id : null
     const shouldFork = groupSize > 1 || (!!targetId && !!rootId && targetId !== rootId)
-    return { shouldFork, appEntity }
+    if (shouldFork && targetBlueprint?.unique && targetId) {
+      return { shouldFork: false, shouldDetach: true, appEntity }
+    }
+    return { shouldFork, shouldDetach: false, appEntity }
   }
 
   async buildScriptUpdate(scriptRoot, files) {
