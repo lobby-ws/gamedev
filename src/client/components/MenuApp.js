@@ -179,8 +179,8 @@ function MenuItemFields({ world, app, blueprint }) {
     <>
       {fields.length > 0 && (
         <MenuItemToggle
-          label='Template Defaults'
-          hint='Edit defaults shared by all instances of this template'
+          label='Props Scope'
+          hint='Set props on template or instance level'
           trueLabel='Template'
           falseLabel='Instance'
           value={templateMode}
