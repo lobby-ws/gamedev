@@ -70,22 +70,7 @@ function MenuAppIndex({ world, app, blueprint, setBlueprint, pop, push }) {
   const player = world.entities.player
   const frozen = blueprint.frozen // TODO: disable code editor, model change, metadata editing, flag editing etc
   const resolveModelUpdateMode = async () => {
-    if (blueprint.unique || !world.ui?.confirm) return 'all'
-    let count = 0
-    for (const entity of world.entities.items.values()) {
-      if (entity.isApp && entity.data.blueprint === blueprint.id) count += 1
-    }
-    const message =
-      count > 1
-        ? `This model is shared by ${count} instances. Apply to all or fork this app?`
-        : 'This model is shared by this template. Apply to all or fork this app?'
-    const applyAll = await world.ui.confirm({
-      title: 'Apply model change?',
-      message,
-      confirmText: 'Apply to all',
-      cancelText: 'Fork',
-    })
-    return applyAll ? 'all' : 'fork'
+    return 'all'
   }
   const changeModel = async file => {
     if (!file) return
@@ -103,22 +88,7 @@ function MenuAppIndex({ world, app, blueprint, setBlueprint, pop, push }) {
     world.loader.insert(type, url, file)
     // upload model
     await world.admin.upload(file)
-    if (updateMode === 'fork') {
-      if (!world.builder?.forkTemplateFromBlueprint) {
-        world.emit('toast', 'Builder access required.')
-        return
-      }
-      const forked = await world.builder.forkTemplateFromBlueprint(blueprint, 'Model fork', null, { model: url })
-      if (!forked) return
-      app.modify({ blueprint: forked.id })
-      world.admin.entityModify(
-        { id: app.data.id, blueprint: forked.id },
-        { ignoreNetworkId: world.network.id }
-      )
-      if (setBlueprint) setBlueprint(forked)
-      world.emit('toast', 'Model forked')
-      return
-    }
+
     // update blueprint locally (also rebuilds apps)
     const version = blueprint.version + 1
     world.blueprints.modify({ id: blueprint.id, version, model: url })
@@ -156,8 +126,10 @@ function MenuAppIndex({ world, app, blueprint, setBlueprint, pop, push }) {
 function MenuItemFields({ world, app, blueprint }) {
   const [fields, setFields] = useState(() => app.fields)
   const [templateMode, setTemplateMode] = useState(false)
-  const templateProps = blueprint.props && typeof blueprint.props === 'object' && !isArray(blueprint.props) ? blueprint.props : {}
-  const instanceProps = app.data.props && typeof app.data.props === 'object' && !isArray(app.data.props) ? app.data.props : {}
+  const templateProps =
+    blueprint.props && typeof blueprint.props === 'object' && !isArray(blueprint.props) ? blueprint.props : {}
+  const instanceProps =
+    app.data.props && typeof app.data.props === 'object' && !isArray(app.data.props) ? app.data.props : {}
   const effectiveProps = merge({}, templateProps, instanceProps)
   const activeProps = templateMode ? templateProps : effectiveProps
   useEffect(() => {
@@ -181,7 +153,8 @@ function MenuItemFields({ world, app, blueprint }) {
   const modifyInstance = (key, value) => {
     const currentProps =
       app.data.props && typeof app.data.props === 'object' && !isArray(app.data.props) ? app.data.props : {}
-    const baseProps = blueprint.props && typeof blueprint.props === 'object' && !isArray(blueprint.props) ? blueprint.props : {}
+    const baseProps =
+      blueprint.props && typeof blueprint.props === 'object' && !isArray(blueprint.props) ? blueprint.props : {}
     const nextProps = { ...currentProps }
     if (isEqual(value, baseProps[key])) {
       delete nextProps[key]
@@ -206,8 +179,8 @@ function MenuItemFields({ world, app, blueprint }) {
     <>
       {fields.length > 0 && (
         <MenuItemToggle
-          label='Template Defaults'
-          hint='Edit defaults shared by all instances of this template'
+          label='Props Scope'
+          hint='Set props on template or instance level'
           trueLabel='Template'
           falseLabel='Instance'
           value={templateMode}

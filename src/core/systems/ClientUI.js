@@ -1,7 +1,7 @@
 import { isBoolean } from 'lodash-es'
 import { ControlPriorities } from '../extras/ControlPriorities'
+import { validateReticle } from '../extras/ReticleTheme'
 import { System } from './System'
-import { thickness } from 'three/src/nodes/TSL.js'
 
 const appPanes = ['app', 'script', 'nodes', 'meta']
 
@@ -14,6 +14,7 @@ export class ClientUI extends System {
       app: null,
       pane: null,
       reticleSuppressors: 0,
+      reticle: null,
     }
     this.lastAppPane = 'app'
     this.control = null
@@ -92,6 +93,11 @@ export class ClientUI extends System {
     }
   }
 
+  setReticle(options) {
+    this.state.reticle = options ? validateReticle(options) : null
+    this.world.emit('reticle', this.state.reticle)
+  }
+
   confirm(options) {
     const promise = new Promise(resolve => {
       options.confirm = () => {
@@ -104,6 +110,21 @@ export class ClientUI extends System {
       }
     })
     this.world.emit('confirm', options)
+    return promise
+  }
+
+  prompt(options) {
+    const promise = new Promise(resolve => {
+      options.submit = value => {
+        this.world.emit('prompt', null)
+        resolve(value)
+      }
+      options.cancel = () => {
+        this.world.emit('prompt', null)
+        resolve(null)
+      }
+    })
+    this.world.emit('prompt', options)
     return promise
   }
 

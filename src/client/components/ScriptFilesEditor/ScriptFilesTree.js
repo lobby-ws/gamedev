@@ -64,6 +64,8 @@ export function ScriptFilesTree({
   onDeleteSelectedFile,
   onMoveSelectedToShared,
   onSelectPath,
+  treeCollapsed,
+  onToggleTree,
   editorReady,
   saving,
   aiLocked,
@@ -72,9 +74,14 @@ export function ScriptFilesTree({
   canMoveToShared,
 }) {
   return (
-    <div className='script-files-tree noscrollbar'>
+    <div className={cls('script-files-tree noscrollbar', { collapsed: treeCollapsed })}>
       <div className='script-files-heading-row'>
-        <div className='script-files-heading'>Files</div>
+        <div className='script-files-heading'>{!treeCollapsed ? 'Files' : ''}</div>
+        <button className='script-files-add script-files-toggle' type='button' onClick={onToggleTree}>
+          {treeCollapsed ? '[>]' : '[<]'}
+        </button>
+      </div>
+      {!treeCollapsed && (
         <div className='script-files-actions'>
           <button
             className='script-files-add'
@@ -97,101 +104,103 @@ export function ScriptFilesTree({
             Shared
           </button>
         </div>
-      </div>
-      {newFileOpen && (
-        <div className='script-files-new'>
-          <input
-            ref={newFileInputRef}
-            value={newFilePath}
-            placeholder='new-file.js'
-            disabled={aiLocked}
-            onChange={onNewFileChange}
-            onKeyDown={onNewFileKeyDown}
-          />
-          <div className='script-files-new-actions'>
-            <button
-              className='script-files-new-btn primary'
-              type='button'
-              disabled={!newFilePath.trim() || aiLocked}
-              onClick={onCreateNewFile}
-            >
-              Add
-            </button>
-            <button className='script-files-new-btn' type='button' disabled={aiLocked} onClick={onCancelNewFile}>
-              Cancel
-            </button>
-          </div>
-          {newFileError && <div className='script-files-new-error'>{newFileError}</div>}
-        </div>
       )}
-      {renameFileOpen && (
-        <div className='script-files-new'>
-          <input
-            ref={renameFileInputRef}
-            value={renameFilePath}
-            placeholder='helpers/util.js'
-            disabled={aiLocked}
-            onChange={onRenameFileChange}
-            onKeyDown={onRenameFileKeyDown}
-          />
-          <div className='script-files-new-actions'>
+      {!treeCollapsed && (
+        <>
+          {newFileOpen && (
+            <div className='script-files-new'>
+              <input
+                ref={newFileInputRef}
+                value={newFilePath}
+                placeholder='new-file.js'
+                disabled={aiLocked}
+                onChange={onNewFileChange}
+                onKeyDown={onNewFileKeyDown}
+              />
+              <div className='script-files-new-actions'>
+                <button
+                  className='script-files-new-btn primary'
+                  type='button'
+                  disabled={!newFilePath.trim() || aiLocked}
+                  onClick={onCreateNewFile}
+                >
+                  Add
+                </button>
+                <button className='script-files-new-btn' type='button' disabled={aiLocked} onClick={onCancelNewFile}>
+                  Cancel
+                </button>
+              </div>
+              {newFileError && <div className='script-files-new-error'>{newFileError}</div>}
+            </div>
+          )}
+          {renameFileOpen && (
+            <div className='script-files-new'>
+              <input
+                ref={renameFileInputRef}
+                value={renameFilePath}
+                placeholder='helpers/util.js'
+                disabled={aiLocked}
+                onChange={onRenameFileChange}
+                onKeyDown={onRenameFileKeyDown}
+              />
+              <div className='script-files-new-actions'>
+                <button
+                  className='script-files-new-btn primary'
+                  type='button'
+                  disabled={!renameFilePath.trim() || aiLocked}
+                  onClick={onRenameSelectedFile}
+                >
+                  Rename
+                </button>
+                <button className='script-files-new-btn' type='button' disabled={aiLocked} onClick={onCancelRenameFile}>
+                  Cancel
+                </button>
+              </div>
+              {renameFileError && <div className='script-files-new-error'>{renameFileError}</div>}
+            </div>
+          )}
+          {entryPath && <div className='script-files-entry'>Entry: {entryPath}</div>}
+          {canRenameSelected && (
             <button
-              className='script-files-new-btn primary'
+              className='script-files-move'
               type='button'
-              disabled={!renameFilePath.trim() || aiLocked}
-              onClick={onRenameSelectedFile}
+              disabled={!editorReady || saving || aiLocked}
+              onClick={onOpenRenameFile}
             >
               Rename
             </button>
-            <button className='script-files-new-btn' type='button' disabled={aiLocked} onClick={onCancelRenameFile}>
-              Cancel
+          )}
+          {canDeleteSelected && (
+            <button
+              className='script-files-move danger'
+              type='button'
+              disabled={!editorReady || saving || aiLocked}
+              onClick={onDeleteSelectedFile}
+            >
+              Delete
             </button>
-          </div>
-          {renameFileError && <div className='script-files-new-error'>{renameFileError}</div>}
-        </div>
-      )}
-      {entryPath && <div className='script-files-entry'>Entry: {entryPath}</div>}
-      {canRenameSelected && (
-        <button
-          className='script-files-move'
-          type='button'
-          disabled={!editorReady || saving || aiLocked}
-          onClick={onOpenRenameFile}
-        >
-          Rename
-        </button>
-      )}
-      {canDeleteSelected && (
-        <button
-          className='script-files-move danger'
-          type='button'
-          disabled={!editorReady || saving || aiLocked}
-          onClick={onDeleteSelectedFile}
-        >
-          Delete
-        </button>
-      )}
-      {canMoveToShared && (
-        <button
-          className='script-files-move'
-          type='button'
-          disabled={!editorReady || saving || aiLocked}
-          onClick={onMoveSelectedToShared}
-        >
-          Move to shared
-        </button>
-      )}
-      {validPaths.length === 0 && <div className='script-files-entry'>No script files.</div>}
-      {renderTree(tree, {
-        selectedPath,
-        entryPath,
-        onSelect: onSelectPath,
-        dirtyPaths,
-      })}
-      {invalidPaths.length > 0 && (
-        <div className='script-files-warning'>
-          Some script files have invalid paths and are hidden.
-        </div>
+          )}
+          {canMoveToShared && (
+            <button
+              className='script-files-move'
+              type='button'
+              disabled={!editorReady || saving || aiLocked}
+              onClick={onMoveSelectedToShared}
+            >
+              Move to shared
+            </button>
+          )}
+          {validPaths.length === 0 && <div className='script-files-entry'>No script files.</div>}
+          {renderTree(tree, {
+            selectedPath,
+            entryPath,
+            onSelect: onSelectPath,
+            dirtyPaths,
+          })}
+          {invalidPaths.length > 0 && (
+            <div className='script-files-warning'>Some script files have invalid paths and are hidden.</div>
+          )}
+        </>
       )}
     </div>
   )

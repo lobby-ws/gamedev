@@ -1,126 +1,21 @@
 import { css } from '@firebolt-dev/css'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  BookTextIcon,
-  ChevronDownIcon,
-  CodeIcon,
-  LoaderPinwheelIcon,
-  SparkleIcon,
-} from 'lucide-react'
 import { cls } from '../cls'
 import { theme } from '../theme'
-import { isArray } from 'lodash-es'
 import { ScriptFilesEditor } from '../ScriptFilesEditor'
-import { buildScriptGroups, getScriptGroupMain } from '../../../core/extras/blueprintGroups'
-import { storage } from '../../../core/storage'
+import { ScriptAIController, hasScriptFiles, resolveScriptRootBlueprint } from './utils/ScriptAIController'
+import { getBlueprintAppName } from '../../../core/blueprintUtils'
+import { formatScriptError, fuzzyMatchList, getMentionState } from './utils/script'
+import { ScriptChatPanel } from './ScriptChatPanel'
+import { ScriptCodePanel } from './ScriptCodePanel'
 
-function hasScriptFiles(blueprint) {
-  return blueprint?.scriptFiles && typeof blueprint.scriptFiles === 'object' && !isArray(blueprint.scriptFiles)
-}
+// `hasScriptFiles`/`resolveScriptRootBlueprint` are shared with ScriptAIController.
 
-function getBlueprintAppName(id) {
-  if (typeof id !== 'string' || !id) return ''
-  if (id === '$scene') return '$scene'
-  const idx = id.indexOf('__')
-  return idx === -1 ? id : id.slice(0, idx)
-}
-
-function resolveScriptRootBlueprint(blueprint, world) {
-  if (!blueprint) return null
-  const scriptRef = typeof blueprint.scriptRef === 'string' ? blueprint.scriptRef.trim() : ''
-  if (scriptRef) {
-    const scriptRoot = world.blueprints.get(scriptRef)
-    if (!scriptRoot) return null
-    return scriptRoot
-  }
-  if (hasScriptFiles(blueprint)) return blueprint
-  const appName = getBlueprintAppName(blueprint.id)
-  if (appName && appName !== blueprint.id) {
-    const baseBlueprint = world.blueprints.get(appName)
-    if (hasScriptFiles(baseBlueprint)) return baseBlueprint
-  }
-  const groupMain = getScriptGroupMain(buildScriptGroups(world.blueprints.items), blueprint)
-  if (groupMain && hasScriptFiles(groupMain)) return groupMain
-  return null
-}
-
-function formatScriptError(error) {
-  if (!error) {
-    return { title: 'No script error detected.', detail: '' }
-  }
-  const name = error.name || 'Error'
-  const message = error.message || ''
-  const title = message ? `${name}: ${message}` : name
-  const locationParts = []
-  if (error.fileName) {
-    locationParts.push(error.fileName)
-  }
-  if (error.lineNumber) {
-    locationParts.push(error.lineNumber)
-  }
-  if (error.columnNumber) {
-    locationParts.push(error.columnNumber)
-  }
-  const location = locationParts.length ? `at ${locationParts.join(':')}` : ''
-  let detail = ''
-  if (location) {
-    detail = location
-  }
-  if (error.stack) {
-    const lines = String(error.stack).split('\n').slice(0, 6).join('\n')
-    detail = detail ? `${detail}\n${lines}` : lines
-  }
-  return { title, detail }
-}
-
-function getMentionState(value, caret) {
-  if (typeof value !== 'string' || !Number.isFinite(caret)) return null
-  const upto = value.slice(0, caret)
-  const at = upto.lastIndexOf('@')
-  if (at === -1) return null
-  if (at > 0 && !/\s/.test(upto[at - 1])) return null
-  const query = upto.slice(at + 1)
-  if (/\s/.test(query)) return null
-  return { start: at, query }
-}
-
-function fuzzyScore(query, text) {
-  if (!text) return 0
-  const lowerText = text.toLowerCase()
-  const lowerQuery = query.toLowerCase()
-  if (!lowerQuery) return 1
-  let score = 0
-  let index = 0
-  for (let i = 0; i < lowerQuery.length; i += 1) {
-    const ch = lowerQuery[i]
-    const found = lowerText.indexOf(ch, index)
-    if (found === -1) return 0
-    score += found === index ? 3 : 1
-    index = found + 1
-  }
-  if (lowerText.startsWith(lowerQuery)) score += 4
-  return score + lowerQuery.length / Math.max(lowerText.length, 1)
-}
-
-function fuzzyMatchList(query, entries) {
-  const scored = []
-  for (const entry of entries) {
-    const score = fuzzyScore(query, entry.path)
-    if (!score) continue
-    scored.push({ entry, score })
-  }
-  scored.sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score
-    return a.entry.path.localeCompare(b.entry.path)
-  })
-  return scored.map(item => item.entry)
-}
-
-export function Script({ world, hidden }) {
+export function Script({ world, hidden, viewMode = 'chat' }) {
+  const aiController = useMemo(() => new ScriptAIController(world), [world])
   const app = world.ui.state.app
   const targetBlueprintId = app?.data?.blueprint || app?.blueprint?.id || null
   const containerRef = useRef()
-  const resizeRef = useRef()
   const [handle, setHandle] = useState(null)
   const [scriptRoot, setScriptRoot] = useState(() =>
     resolveScriptRootBlueprint(world.blueprints.get(app.data.blueprint) || app.blueprint, world)
@@ -129,33 +24,37 @@ export function Script({ world, hidden }) {
   const [aiPrompt, setAiPrompt] = useState('')
   const [aiMode, setAiMode] = useState('edit')
   const [aiStatus, setAiStatus] = useState(null)
-  const [aiExpanded, setAiExpanded] = useState(true)
-  const [editorCollapsed, setEditorCollapsed] = useState(false)
   const aiRequestRef = useRef(null)
   const aiPromptRef = useRef(null)
   const [aiAttachments, setAiAttachments] = useState([])
-  const [aiDocsIndex, setAiDocsIndex] = useState([])
+  const [aiDocsIndex, setAiDocsIndex] = useState(() => aiController.getDocsIndex?.() || [])
+  const [aiThread, setAiThread] = useState(() =>
+    aiController.getThreadForTarget?.({
+      targetBlueprintId,
+      scriptRootId: moduleRoot?.id,
+    }) || []
+  )
   const [aiMention, setAiMention] = useState(null)
   const scriptError = app?.scriptError || null
   const errorInfo = useMemo(() => formatScriptError(scriptError), [scriptError])
   const fileCount = moduleRoot?.scriptFiles ? Object.keys(moduleRoot.scriptFiles).length : 0
   const entryPath = moduleRoot?.scriptEntry || ''
   const scriptFormat = moduleRoot?.scriptFormat || 'module'
-  const [aiPending, setAiPending] = useState(() =>
-    targetBlueprintId
-      ? !!world.aiScripts?.isBlueprintPending?.(targetBlueprintId)
-      : moduleRoot?.id
-        ? !!world.aiScripts?.isRootPending?.(moduleRoot.id)
-        : false
+  const [aiPending, setAiPending] = useState(
+    () =>
+      !!aiController.getPendingForTarget?.({
+        targetBlueprintId,
+        scriptRootId: moduleRoot?.id,
+      })
   )
-  const aiLocked = aiPending || !!handle?.aiLocked
+  const aiLocked = aiPending
   const canBuild = !!world.builder?.canBuild?.()
   const aiAccessIssue = world.isAdminClient
     ? 'AI requests are not available on admin connections.'
     : !canBuild
       ? 'Builder access required.'
       : null
-  const aiCanUse = !!moduleRoot && !aiAccessIssue && !!world.aiScripts?.requestEdit
+  const aiCanUse = !!moduleRoot && !aiAccessIssue && !!aiController.requestEdit
   const aiCanSendEdit = aiCanUse && !aiLocked && !!aiPrompt.trim()
   const aiCanSendFix = aiCanUse && !aiLocked && !!scriptError
   const aiCanSend = aiMode === 'fix' ? aiCanSendFix : aiCanSendEdit
@@ -171,7 +70,7 @@ export function Script({ world, hidden }) {
     if (aiMode === 'fix') {
       return scriptError ? 'Fix the latest script error' : 'No script error to fix'
     }
-    return 'Ask for edits or fixes'
+    return ''
   }, [aiLocked, aiStatus?.type, aiStatus?.message, aiMode, scriptError])
   const aiAttachmentSet = useMemo(() => {
     const set = new Set()
@@ -205,6 +104,38 @@ export function Script({ world, hidden }) {
     () => aiAttachments.map(item => ({ type: item.type, path: item.path })),
     [aiAttachments]
   )
+  const showChat = viewMode === 'chat'
+  const showCode = viewMode === 'code'
+  useEffect(() => {
+    return () => {
+      aiController.destroy?.()
+    }
+  }, [aiController])
+  useEffect(() => {
+    const onProposal = payload => {
+      aiController.onProposal?.(payload)
+    }
+    const onEvent = payload => {
+      aiController.onEvent?.(payload)
+    }
+    world.on?.('script-ai-proposal', onProposal)
+    world.on?.('script-ai-event', onEvent)
+    return () => {
+      world.off?.('script-ai-proposal', onProposal)
+      world.off?.('script-ai-event', onEvent)
+    }
+  }, [world, aiController])
+  useEffect(() => {
+    if (!aiController.subscribeThread) {
+      setAiThread([])
+      return () => {}
+    }
+    return aiController.subscribeThread({
+      targetBlueprintId,
+      scriptRootId: moduleRoot?.id,
+      onChange: setAiThread,
+    })
+  }, [aiController, targetBlueprintId, moduleRoot?.id])
   useEffect(() => {
     const refresh = () => {
       const blueprint = world.blueprints.get(app.data.blueprint) || app.blueprint
@@ -234,34 +165,20 @@ export function Script({ world, hidden }) {
     setAiAttachments([])
     setAiMention(null)
     aiRequestRef.current = null
-  }, [moduleRoot?.id, targetBlueprintId])
+    setAiPending(
+      !!aiController.getPendingForTarget?.({
+        targetBlueprintId,
+        scriptRootId: moduleRoot?.id,
+      })
+    )
+  }, [moduleRoot?.id, targetBlueprintId, aiController])
   useEffect(() => {
-    let active = true
-    const apiUrl = world.network?.apiUrl
-    if (!apiUrl) {
+    if (!aiController.subscribeDocsIndex) {
       setAiDocsIndex([])
-      return () => { }
+      return () => {}
     }
-    const loadDocs = async () => {
-      try {
-        const response = await fetch(`${apiUrl}/ai-docs-index`)
-        if (!response.ok) {
-          throw new Error('docs_index_failed')
-        }
-        const data = await response.json()
-        if (!active) return
-        const files = Array.isArray(data?.files) ? data.files.filter(Boolean) : []
-        setAiDocsIndex(files)
-      } catch (err) {
-        if (!active) return
-        setAiDocsIndex([])
-      }
-    }
-    loadDocs()
-    return () => {
-      active = false
-    }
-  }, [world.network?.apiUrl])
+    return aiController.subscribeDocsIndex(setAiDocsIndex)
+  }, [aiController, world.network?.apiUrl])
   useEffect(() => {
     if (aiMode === 'fix' && !scriptError) {
       setAiMode('edit')
@@ -273,92 +190,52 @@ export function Script({ world, hidden }) {
     }
   }, [aiMode])
   useEffect(() => {
-    setAiPending(
-      targetBlueprintId
-        ? !!world.aiScripts?.isBlueprintPending?.(targetBlueprintId)
-        : moduleRoot?.id
-          ? !!world.aiScripts?.isRootPending?.(moduleRoot.id)
-          : false
-    )
-  }, [world, targetBlueprintId, moduleRoot?.id])
-  useEffect(() => {
-    if (aiLocked || aiStatus?.type === 'error' || aiStatus?.type === 'success') {
-      setAiExpanded(true)
-    }
-  }, [aiLocked, aiStatus?.type])
-  useEffect(() => {
-    const matchesCurrent = payload => {
-      if (!payload) return false
-      const payloadBlueprintId =
-        typeof payload.targetBlueprintId === 'string' ? payload.targetBlueprintId : null
-      if (targetBlueprintId && payloadBlueprintId) {
-        return payloadBlueprintId === targetBlueprintId
-      }
-      const payloadRootId = typeof payload.scriptRootId === 'string' ? payload.scriptRootId : null
-      if (moduleRoot?.id && payloadRootId) {
-        return payloadRootId === moduleRoot.id
-      }
-      return true
-    }
-    const onRequest = payload => {
-      if (!payload) return
-      if (!matchesCurrent(payload)) return
-      aiRequestRef.current = payload.requestId || null
-      const mode = payload.mode === 'fix' ? 'fix' : 'edit'
-      setAiMode(mode)
-      if (typeof payload.prompt === 'string') {
-        setAiPrompt(payload.prompt)
-      }
-      setAiPending(true)
-      setAiStatus({
-        type: 'pending',
-        message: mode === 'fix' ? 'Fixing script error...' : 'Generating changes...',
-      })
-      setAiExpanded(true)
-    }
-    const onPending = payload => {
-      if (!payload) return
-      if (!matchesCurrent(payload)) return
-      if (aiRequestRef.current && payload.requestId && payload.requestId !== aiRequestRef.current) return
-      setAiPending(payload.pending === true)
-    }
-    const onResponse = payload => {
-      if (!payload) return
-      if (!matchesCurrent(payload)) return
-      if (aiRequestRef.current && payload.requestId && payload.requestId !== aiRequestRef.current) return
-      aiRequestRef.current = null
-      setAiPending(false)
-      if (payload.error) {
+    if (!aiController.subscribeTarget) return () => {}
+    return aiController.subscribeTarget({
+      targetBlueprintId,
+      scriptRootId: moduleRoot?.id,
+      onRequest: payload => {
+        aiRequestRef.current = payload.requestId || null
+        const mode = payload.mode === 'fix' ? 'fix' : 'edit'
+        setAiMode(mode)
+        if (typeof payload.prompt === 'string') {
+          setAiPrompt(payload.prompt)
+        }
+        setAiPending(true)
         setAiStatus({
-          type: 'error',
-          message: payload.message || 'AI request failed.',
+          type: 'pending',
+          message: mode === 'fix' ? 'Fixing script error...' : 'Generating changes...',
         })
-      } else {
-        const appliedMessage =
-          payload.message ||
-          (payload.forked ? 'AI changes applied to a new fork.' : 'AI changes applied.')
-        setAiStatus({
-          type: 'success',
-          message: appliedMessage,
-          summary: payload.summary || '',
-          source: payload.source || '',
-          fileCount: payload.fileCount || 0,
-          forked: payload.forked === true,
-          appliedScriptRootId:
-            typeof payload.appliedScriptRootId === 'string' ? payload.appliedScriptRootId : null,
-        })
-      }
-      setAiExpanded(true)
-    }
-    world.on('script-ai-request', onRequest)
-    world.on('script-ai-pending', onPending)
-    world.on('script-ai-response', onResponse)
-    return () => {
-      world.off('script-ai-request', onRequest)
-      world.off('script-ai-pending', onPending)
-      world.off('script-ai-response', onResponse)
-    }
-  }, [world, moduleRoot?.id, targetBlueprintId])
+      },
+      onPending: payload => {
+        if (aiRequestRef.current && payload.requestId && payload.requestId !== aiRequestRef.current) return
+        setAiPending(payload.pending === true)
+      },
+      onResponse: payload => {
+        if (aiRequestRef.current && payload.requestId && payload.requestId !== aiRequestRef.current) return
+        aiRequestRef.current = null
+        setAiPending(false)
+        if (payload.error) {
+          setAiStatus({
+            type: 'error',
+            message: payload.message || 'AI request failed.',
+          })
+        } else {
+          const appliedMessage =
+            payload.message || (payload.forked ? 'AI changes applied to a new fork.' : 'AI changes applied.')
+          setAiStatus({
+            type: 'success',
+            message: appliedMessage,
+            summary: payload.summary || '',
+            source: payload.source || '',
+            fileCount: payload.fileCount || 0,
+            forked: payload.forked === true,
+            appliedScriptRootId: typeof payload.appliedScriptRootId === 'string' ? payload.appliedScriptRootId : null,
+          })
+        }
+      },
+    })
+  }, [aiController, moduleRoot?.id, targetBlueprintId])
   const updateAiMention = useCallback(
     (value, caret) => {
       if (!aiFileIndex.length) {
@@ -372,10 +249,8 @@ export function Script({ world, hidden }) {
       }
       const items = fuzzyMatchList(mention.query, aiFileIndex).slice(0, 8)
       setAiMention(prev => {
-        const nextIndex =
-          prev && prev.query === mention.query ? prev.activeIndex : 0
-        const bounded =
-          items.length > 0 ? Math.min(nextIndex, items.length - 1) : 0
+        const nextIndex = prev && prev.query === mention.query ? prev.activeIndex : 0
+        const bounded = items.length > 0 ? Math.min(nextIndex, items.length - 1) : 0
         return {
           open: true,
           query: mention.query,
@@ -419,16 +294,14 @@ export function Script({ world, hidden }) {
   )
   const removeAiAttachment = useCallback(item => {
     if (!item?.type || !item?.path) return
-    setAiAttachments(current =>
-      current.filter(entry => entry.type !== item.type || entry.path !== item.path)
-    )
+    setAiAttachments(current => current.filter(entry => entry.type !== item.type || entry.path !== item.path))
   }, [])
   const sendAiEdit = useCallback(() => {
     if (aiAccessIssue) {
       setAiStatus({ type: 'error', message: aiAccessIssue })
       return
     }
-    if (!world.aiScripts?.requestEdit) {
+    if (!aiController?.requestEdit) {
       setAiStatus({ type: 'error', message: 'AI scripts are not available in this session.' })
       return
     }
@@ -444,7 +317,7 @@ export function Script({ world, hidden }) {
       setAiStatus({ type: 'error', message: 'Enter a prompt to request edits.' })
       return
     }
-    const requestId = world.aiScripts.requestEdit({
+    const requestId = aiController.requestEdit({
       prompt: trimmed,
       app,
       attachments: aiAttachmentPayload,
@@ -452,16 +325,16 @@ export function Script({ world, hidden }) {
     if (!requestId) return
     aiPromptRef.current?.blur?.()
     aiRequestRef.current = requestId
+    setAiPrompt('')
     setAiPending(true)
     setAiStatus({ type: 'pending', message: 'Generating changes...' })
-    setAiExpanded(true)
-  }, [aiAccessIssue, aiLocked, aiPrompt, world, app, aiAttachmentPayload])
+  }, [aiAccessIssue, aiLocked, aiPrompt, aiController, app, aiAttachmentPayload])
   const sendAiFix = useCallback(() => {
     if (aiAccessIssue) {
       setAiStatus({ type: 'error', message: aiAccessIssue })
       return
     }
-    if (!world.aiScripts?.requestFix) {
+    if (!aiController?.requestFix) {
       setAiStatus({ type: 'error', message: 'AI scripts are not available in this session.' })
       return
     }
@@ -476,14 +349,14 @@ export function Script({ world, hidden }) {
       setAiStatus({ type: 'error', message: 'No script error detected.' })
       return
     }
-    const requestId = world.aiScripts.requestFix({ app, attachments: aiAttachmentPayload })
+    const requestId = aiController.requestFix({ app, attachments: aiAttachmentPayload })
     if (!requestId) return
     aiPromptRef.current?.blur?.()
     aiRequestRef.current = requestId
+    setAiPrompt('')
     setAiPending(true)
     setAiStatus({ type: 'pending', message: 'Fixing script error...' })
-    setAiExpanded(true)
-  }, [aiAccessIssue, aiLocked, scriptError, world, app, aiAttachmentPayload])
+  }, [aiAccessIssue, aiLocked, scriptError, aiController, app, aiAttachmentPayload])
   const sendAiRequest = useCallback(() => {
     if (aiMode === 'fix') {
       sendAiFix()
@@ -507,15 +380,18 @@ export function Script({ world, hidden }) {
         sendAiRequest()
         return
       }
-      if (!aiMention?.open) return
+      if (!aiMention?.open) {
+        if ((e.key === 'Enter' || e.code === 'Enter') && !e.shiftKey) {
+          e.preventDefault()
+          sendAiRequest()
+        }
+        return
+      }
       if (e.key === 'ArrowDown') {
         e.preventDefault()
         setAiMention(current => {
           if (!current) return current
-          const next =
-            current.activeIndex + 1 >= current.items.length
-              ? 0
-              : current.activeIndex + 1
+          const next = current.activeIndex + 1 >= current.items.length ? 0 : current.activeIndex + 1
           return { ...current, activeIndex: next }
         })
         return
@@ -524,10 +400,7 @@ export function Script({ world, hidden }) {
         e.preventDefault()
         setAiMention(current => {
           if (!current) return current
-          const next =
-            current.activeIndex - 1 < 0
-              ? Math.max(current.items.length - 1, 0)
-              : current.activeIndex - 1
+          const next = current.activeIndex - 1 < 0 ? Math.max(current.items.length - 1, 0) : current.activeIndex - 1
           return { ...current, activeIndex: next }
         })
         return
@@ -560,31 +433,6 @@ export function Script({ world, hidden }) {
       active.blur()
     }
   }, [hidden])
-  useEffect(() => {
-    const elem = resizeRef.current
-    const container = containerRef.current
-    container.style.width = `${storage.get('code-editor-width', 500)}px`
-    function onPointerDown(e) {
-      elem.addEventListener('pointermove', onPointerMove)
-      elem.addEventListener('pointerup', onPointerUp)
-      e.currentTarget.setPointerCapture(e.pointerId)
-    }
-    function onPointerMove(e) {
-      let newWidth = container.offsetWidth + e.movementX
-      if (newWidth < 250) newWidth = 250
-      container.style.width = `${newWidth}px`
-      storage.set('code-editor-width', newWidth)
-    }
-    function onPointerUp(e) {
-      e.currentTarget.releasePointerCapture(e.pointerId)
-      elem.removeEventListener('pointermove', onPointerMove)
-      elem.removeEventListener('pointerup', onPointerUp)
-    }
-    elem.addEventListener('pointerdown', onPointerDown)
-    return () => {
-      elem.removeEventListener('pointerdown', onPointerDown)
-    }
-  }, [])
   return (
     <div
       ref={containerRef}
@@ -704,6 +552,8 @@ export function Script({ world, hidden }) {
           display: flex;
           flex-direction: column;
           gap: 0.75rem;
+          flex: 1;
+          min-height: 0;
         }
         .script-ai-panel-head {
           display: flex;
@@ -757,6 +607,71 @@ export function Script({ world, hidden }) {
           display: flex;
           flex-direction: column;
           gap: 0.75rem;
+          min-height: 0;
+          flex: 1;
+        }
+        .script-ai-thread {
+          display: flex;
+          flex-direction: column;
+          gap: 0.4rem;
+          max-height: none;
+          flex: 1;
+          min-height: 9rem;
+          overflow: auto;
+          padding: 0.2rem 0.15rem 0.2rem 0;
+          scrollbar-width: thin;
+          scrollbar-color: rgba(255, 255, 255, 0.26) transparent;
+        }
+        .script-ai-thread::-webkit-scrollbar {
+          width: 10px;
+        }
+        .script-ai-thread::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .script-ai-thread::-webkit-scrollbar-thumb {
+          background: rgba(255, 255, 255, 0.2);
+          border-radius: 999px;
+          border: 2px solid transparent;
+          background-clip: padding-box;
+        }
+        .script-ai-msg {
+          border-radius: ${theme.radiusSmall};
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          background: rgba(255, 255, 255, 0.03);
+          padding: 0.52rem 0.62rem;
+          font-size: 0.74rem;
+          line-height: 1.4;
+          color: rgba(255, 255, 255, 0.85);
+          white-space: pre-wrap;
+          max-width: 90%;
+          align-self: flex-start;
+        }
+        .script-ai-msg.user {
+          align-self: flex-end;
+          border-color: rgba(0, 167, 255, 0.45);
+          color: #d7f2ff;
+          background: rgba(0, 167, 255, 0.18);
+        }
+        .script-ai-msg.phase {
+          color: rgba(255, 255, 255, 0.65);
+          font-style: italic;
+          border-style: dashed;
+        }
+        .script-ai-msg.error {
+          border-color: rgba(255, 107, 107, 0.6);
+          color: #ffb4b4;
+          background: rgba(255, 107, 107, 0.09);
+        }
+        .script-ai-msg.success {
+          border-color: rgba(0, 167, 255, 0.45);
+          color: #91d8ff;
+        }
+        .script-ai-empty {
+          border-radius: ${theme.radiusSmall};
+          border: 1px dashed rgba(255, 255, 255, 0.16);
+          padding: 0.7rem;
+          font-size: 0.72rem;
+          color: rgba(255, 255, 255, 0.48);
         }
         .script-ai-proposal {
           padding: 0.75rem;
@@ -815,7 +730,7 @@ export function Script({ world, hidden }) {
         .script-ai-input {
           position: relative;
           border-radius: ${theme.radius};
-          border: 1px solid rgba(255, 255, 255, 0.08);
+          border: 1px solid rgba(255, 255, 255, 0.14);
           background: ${theme.bgInput};
           padding: 0.5rem 0.75rem;
         }
@@ -839,6 +754,20 @@ export function Script({ world, hidden }) {
           z-index: 5;
           padding: 0.35rem;
           box-shadow: 0 10px 25px rgba(0, 0, 0, 0.35);
+          scrollbar-width: thin;
+          scrollbar-color: rgba(255, 255, 255, 0.26) transparent;
+        }
+        .script-ai-mentions::-webkit-scrollbar {
+          width: 10px;
+        }
+        .script-ai-mentions::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .script-ai-mentions::-webkit-scrollbar-thumb {
+          background: rgba(255, 255, 255, 0.2);
+          border-radius: 999px;
+          border: 2px solid transparent;
+          background-clip: padding-box;
         }
         .script-ai-mention-item {
           display: flex;
@@ -952,6 +881,9 @@ export function Script({ world, hidden }) {
           justify-content: space-between;
           gap: 0.75rem;
           flex-wrap: wrap;
+          margin-top: auto;
+          border-top: 1px solid rgba(255, 255, 255, 0.08);
+          padding-top: 0.55rem;
         }
         .script-ai-hint {
           font-size: 0.7rem;
@@ -1010,256 +942,54 @@ export function Script({ world, hidden }) {
             transform: rotate(360deg);
           }
         }
-        .script-resizer {
-          position: absolute;
-          top: 0;
-          bottom: 0;
-          right: -5px;
-          width: 10px;
-          cursor: ew-resize;
-        }
         &.hidden {
           opacity: 0;
           pointer-events: none;
         }
       `}
     >
-      <div className='script-head'>
-        <div className='script-title'>Script: {app.blueprint?.name}</div>
-        <div className='script-note'>
-          {moduleRoot
-            ? handle?.dirtyCount
-              ? `${handle.dirtyCount} unsaved file${handle.dirtyCount === 1 ? '' : 's'}`
-              : 'Module sources'
-            : 'Code is managed by dev server'}
-        </div>
-        <div className='script-actions'>
-          {moduleRoot && (
-            <>
-              <button
-                className='script-action'
-                type='button'
-                disabled={!handle?.dirty || handle?.saving || aiLocked}
-                onClick={() => handle?.save?.()}
-              >
-                {handle?.saving ? 'Saving...' : 'Save'}
-              </button>
-              <button
-                className='script-action'
-                type='button'
-                disabled={handle?.saving || !handle?.refresh || aiLocked}
-                onClick={() => handle?.refresh?.()}
-              >
-                Refresh
-              </button>
-              {handle?.conflict && (
-                <button
-                  className='script-action'
-                  type='button'
-                  disabled={handle?.saving || aiLocked}
-                  onClick={() => handle?.retry?.()}
-                >
-                  Retry
-                </button>
-              )}
-            </>
-          )}
-          <button className='script-action' type='button' onClick={() => handle?.copy?.()}>
-            Copy
-          </button>
-          {moduleRoot && (
-            <button
-              className='script-action'
-              type='button'
-              onClick={() => setEditorCollapsed(collapsed => !collapsed)}
-            >
-              {editorCollapsed ? 'Show Editor' : 'Hide Editor'}
-            </button>
-          )}
-        </div>
-      </div>
-      {moduleRoot && (handle?.error || handle?.conflict) && (
-        <div className={cls('script-status', { error: handle?.error, conflict: handle?.conflict })}>
-          {handle?.error || handle?.conflict}
-        </div>
+      {showChat && (
+        <ScriptChatPanel
+          moduleRoot={moduleRoot}
+          aiMetaClass={aiMetaClass}
+          aiMeta={aiMeta}
+          aiMode={aiMode}
+          aiStatus={aiStatus}
+          setAiStatus={setAiStatus}
+          scriptError={scriptError}
+          errorInfo={errorInfo}
+          aiPromptRef={aiPromptRef}
+          aiPrompt={aiPrompt}
+          aiCanUse={aiCanUse}
+          aiLocked={aiLocked}
+          handlePromptChange={handlePromptChange}
+          handlePromptKeyDown={handlePromptKeyDown}
+          handlePromptKeyUp={handlePromptKeyUp}
+          setAiMention={setAiMention}
+          aiMention={aiMention}
+          aiAttachmentSet={aiAttachmentSet}
+          addAiAttachment={addAiAttachment}
+          aiAttachments={aiAttachments}
+          removeAiAttachment={removeAiAttachment}
+          entryPath={entryPath}
+          fileCount={fileCount}
+          scriptFormat={scriptFormat}
+          aiCanSend={aiCanSend}
+          sendAiRequest={sendAiRequest}
+          aiAccessIssue={aiAccessIssue}
+          handle={handle}
+          aiThread={aiThread}
+        />
       )}
-      {moduleRoot && (
-        <div className='script-ai-panel'>
-          <button
-            className='script-ai-panel-head'
-            type='button'
-            onClick={() => setAiExpanded(open => !open)}
-          >
-            <div className='script-ai-title'>
-              <SparkleIcon size='0.9rem' />
-              AI Prompts
-            </div>
-            <div className={aiMetaClass}>{aiMeta}</div>
-            <div className={cls('script-ai-toggle', { open: aiExpanded })}>
-              <ChevronDownIcon size='1rem' />
-            </div>
-          </button>
-          {aiExpanded && (
-            <div className='script-ai-panel-body'>
-              <div className='script-ai-modes'>
-                <button
-                  className={cls('script-ai-mode', { active: aiMode === 'edit' })}
-                  type='button'
-                  onClick={() => {
-                    if (aiStatus?.type === 'error') setAiStatus(null)
-                    setAiMode('edit')
-                  }}
-                >
-                  Edit
-                </button>
-                <button
-                  className={cls('script-ai-mode', { active: aiMode === 'fix' })}
-                  type='button'
-                  disabled={!scriptError}
-                  title={scriptError ? 'Fix the latest script error' : 'No script error detected'}
-                  onClick={() => {
-                    if (aiStatus?.type === 'error') setAiStatus(null)
-                    setAiMode('fix')
-                  }}
-                >
-                  Fix Error
-                </button>
-              </div>
-              {aiMode === 'edit' ? (
-                <div className='script-ai-input'>
-                  <textarea
-                    ref={aiPromptRef}
-                    value={aiPrompt}
-                    disabled={!aiCanUse || aiLocked}
-                    placeholder='Describe the change you want the AI to make. Use @ to attach files.'
-                    onChange={handlePromptChange}
-                    onKeyDown={handlePromptKeyDown}
-                    onKeyUp={handlePromptKeyUp}
-                    onBlur={() => setAiMention(null)}
-                  />
-                  {aiMention?.open && (
-                    <div className='script-ai-mentions' onMouseDown={e => e.preventDefault()}>
-                      {aiMention.items.length ? (
-                        aiMention.items.map((item, index) => {
-                          const attached = aiAttachmentSet.has(item.id)
-                          return (
-                            <div
-                              key={item.id}
-                              className={cls('script-ai-mention-item', {
-                                active: index === aiMention.activeIndex,
-                                disabled: attached,
-                              })}
-                              onMouseDown={e => e.preventDefault()}
-                              onClick={() => {
-                                if (!attached) addAiAttachment(item)
-                              }}
-                            >
-                              <span className='script-ai-mention-icon'>
-                                {item.type === 'doc' ? (
-                                  <BookTextIcon size='0.85rem' />
-                                ) : (
-                                  <CodeIcon size='0.85rem' />
-                                )}
-                              </span>
-                              <span className='script-ai-mention-path'>{item.path}</span>
-                              <span className='script-ai-mention-tag'>
-                                {attached ? 'attached' : item.type}
-                              </span>
-                            </div>
-                          )
-                        })
-                      ) : (
-                        <div className='script-ai-mention-empty'>No matches</div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className='script-ai-error'>
-                  <div className='script-ai-error-title'>Latest script error</div>
-                  <div className='script-ai-error-summary'>{errorInfo.title}</div>
-                  {errorInfo.detail && (
-                    <pre className='script-ai-error-text'>{errorInfo.detail}</pre>
-                  )}
-                </div>
-              )}
-              {aiAttachments.length > 0 && (
-                <div className='script-ai-attachments'>
-                  {aiAttachments.map(item => (
-                    <div key={`${item.type}:${item.path}`} className='script-ai-attachment'>
-                      <span className='script-ai-attachment-icon'>
-                        {item.type === 'doc' ? (
-                          <BookTextIcon size='0.75rem' />
-                        ) : (
-                          <CodeIcon size='0.75rem' />
-                        )}
-                      </span>
-                      <span className='script-ai-attachment-path'>{item.path}</span>
-                      <button
-                        className='script-ai-attachment-remove'
-                        type='button'
-                        onClick={() => removeAiAttachment(item)}
-                      >
-                        x
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <div className='script-ai-footer'>
-                <div className='script-ai-hint'>
-                  Entry: {entryPath || 'Unknown'} | {fileCount} file{fileCount === 1 ? '' : 's'} |{' '}
-                  {scriptFormat}
-                </div>
-                <div className='script-ai-buttons'>
-                  <button
-                    className='script-ai-btn'
-                    type='button'
-                    disabled={!aiPrompt || aiLocked}
-                    onClick={() => {
-                      setAiPrompt('')
-                      if (aiStatus?.type === 'error' || aiStatus?.type === 'success') setAiStatus(null)
-                      setAiMention(null)
-                    }}
-                  >
-                    Clear
-                  </button>
-                  <button
-                    className='script-ai-btn primary'
-                    type='button'
-                    disabled={!aiCanSend}
-                    onClick={sendAiRequest}
-                  >
-                    {aiMode === 'fix' ? 'Fix Error' : 'Send Prompt'}
-                  </button>
-                </div>
-              </div>
-              {aiAccessIssue && <div className='script-ai-status error'>{aiAccessIssue}</div>}
-              {aiLocked && (
-                <div className='script-ai-status pending'>
-                  <LoaderPinwheelIcon size='0.9rem' className='script-ai-spinner' />
-                  {aiStatus?.message || 'Generating changes...'}
-                </div>
-              )}
-              {aiStatus?.type === 'error' && !aiAccessIssue && (
-                <div className='script-ai-status error'>{aiStatus.message}</div>
-              )}
-              {aiStatus?.type === 'success' && !aiAccessIssue && !aiLocked && (
-                <div className='script-ai-status'>{aiStatus.message}</div>
-              )}
-              {handle?.dirtyCount && !aiLocked ? (
-                <div className='script-ai-status'>
-                  Unsaved edits will be reverted when an AI request starts.
-                </div>
-              ) : null}
-            </div>
-          )}
-        </div>
-      )}
-      <div className={cls('script-editor-shell', { collapsed: editorCollapsed })}>
+      <ScriptCodePanel
+        moduleRoot={moduleRoot}
+        handle={handle}
+        aiLocked={aiLocked}
+        showChrome={showCode}
+        forceCollapsed={!showCode}
+      >
         <ScriptFilesEditor scriptRoot={moduleRoot} world={world} onHandle={setHandle} aiLocked={aiLocked} />
-      </div>
-      <div className='script-resizer' ref={resizeRef} />
+      </ScriptCodePanel>
     </div>
   )
 }

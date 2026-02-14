@@ -60,6 +60,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
   const [renameFileOpen, setRenameFileOpen] = useState(false)
   const [renameFilePath, setRenameFilePath] = useState('')
   const [renameFileError, setRenameFileError] = useState(null)
+  const [treeCollapsed, setTreeCollapsed] = useState(true)
 
   const scriptFiles = scriptRoot?.scriptFiles
   const entryPath = scriptRoot?.scriptEntry || ''
@@ -1198,10 +1199,13 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
     const groupSize = group?.items?.length || 0
     const targetId = typeof targetBlueprint?.id === 'string' ? targetBlueprint.id : null
     const scriptRootId = typeof scriptRoot?.id === 'string' ? scriptRoot.id : null
-    const shouldFork =
-      !!app &&
-      (groupSize > 1 || (!!targetId && !!scriptRootId && targetId !== scriptRootId))
-    return { mode: shouldFork ? 'fork' : 'group', group, targetBlueprint }
+    if (app && targetId && scriptRootId && targetId !== scriptRootId) {
+      return { mode: 'detach', group, targetBlueprint }
+    }
+    if (app && groupSize > 1) {
+      return { mode: 'fork', group, targetBlueprint }
+    }
+    return { mode: 'group', group, targetBlueprint }
   }, [world, scriptRoot])
 
   const applyScriptUpdate = useCallback(
@@ -1223,6 +1227,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
         const forked = await world.builder.forkTemplateFromBlueprint(sourceBlueprint, 'Code fork', null, {
           ...scriptUpdate,
           scriptRef: null,
+          skipNamePrompt: true,
         })
         if (!forked) {
           const err = new Error('fork_failed')
@@ -1242,7 +1247,13 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
         err.code = 'admin_required'
         throw err
       }
-      const scope = normalizeScope(scriptRoot?.scope)
+      const isDetach = updateMode.mode === 'detach'
+      const detachTarget =
+        updateMode?.targetBlueprint && typeof updateMode.targetBlueprint.id === 'string'
+          ? updateMode.targetBlueprint
+          : null
+      const targetBlueprint = (isDetach ? detachTarget : null) || scriptRoot
+      const scope = normalizeScope(targetBlueprint?.scope) || normalizeScope(scriptRoot?.scope)
       if (!scope) {
         const err = new Error('scope_required')
         err.code = 'scope_required'
@@ -1256,11 +1267,12 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
           scope,
         })
         lockToken = result?.token || world.admin.deployLockToken
-        const nextVersion = rootVersion + 1
+        const nextVersion = (targetBlueprint?.version || 0) + 1
         const change = {
-          id: scriptRoot.id,
+          id: targetBlueprint.id,
           version: nextVersion,
           ...scriptUpdate,
+          ...(isDetach ? { scriptRef: null } : {}),
         }
         await world.admin.blueprintModify(change, {
           ignoreNetworkId: world.network.id,
@@ -1269,7 +1281,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
         })
 
         const siblingChanges = []
-        if (updateMode.group?.items?.length) {
+        if (!isDetach && updateMode.group?.items?.length) {
           for (const sibling of updateMode.group.items) {
             if (!sibling?.id || sibling.id === scriptRoot.id) continue
             const siblingChange = {
@@ -1305,7 +1317,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
         }
       }
     },
-    [resolveScriptUpdateMode, world, scriptRoot, rootVersion]
+    [resolveScriptUpdateMode, world, scriptRoot]
   )
   applyScriptUpdateRef.current = applyScriptUpdate
 
@@ -1641,6 +1653,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
         const forked = await world.builder.forkTemplateFromBlueprint(sourceBlueprint, 'Code fork', null, {
           ...scriptUpdate,
           scriptRef: null,
+          skipNamePrompt: true,
         })
         if (!forked) return
         const app = world.ui?.state?.app
@@ -1656,7 +1669,13 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
         setError('Admin connection required.')
         return
       }
-      const scope = normalizeScope(scriptRoot.scope)
+      const isDetach = updateMode.mode === 'detach'
+      const detachTarget =
+        updateMode?.targetBlueprint && typeof updateMode.targetBlueprint.id === 'string'
+          ? updateMode.targetBlueprint
+          : null
+      const targetBlueprint = (isDetach ? detachTarget : null) || scriptRoot
+      const scope = normalizeScope(targetBlueprint?.scope) || normalizeScope(scriptRoot?.scope)
       if (!scope) {
         setError('Script scope metadata is missing.')
         return
@@ -1666,18 +1685,19 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
         scope,
       })
       lockToken = result?.token || world.admin.deployLockToken
-      const nextVersion = rootVersion + 1
+      const nextVersion = (targetBlueprint?.version || 0) + 1
       const change = {
-        id: scriptRoot.id,
+        id: targetBlueprint.id,
         version: nextVersion,
         ...scriptUpdate,
+        ...(isDetach ? { scriptRef: null } : {}),
       }
       world.blueprints.modify(change)
       world.admin.blueprintModify(change, {
         ignoreNetworkId: world.network.id,
         lockToken,
       })
-      if (updateMode.group?.items?.length) {
+      if (!isDetach && updateMode.group?.items?.length) {
         for (const sibling of updateMode.group.items) {
           if (!sibling?.id || sibling.id === scriptRoot.id) continue
           const siblingChange = {
@@ -1732,7 +1752,6 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
     scriptRoot,
     scriptFiles,
     entryPath,
-    rootVersion,
     world,
     getStateStaleReason,
     resolveScriptUpdateMode,
@@ -1830,6 +1849,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
           const forked = await world.builder.forkTemplateFromBlueprint(sourceBlueprint, 'Code fork', null, {
             ...scriptUpdate,
             scriptRef: null,
+            skipNamePrompt: true,
           })
           if (!forked) return false
           const app = world.ui?.state?.app
@@ -1845,7 +1865,13 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
           setError('Admin connection required.')
           return false
         }
-        const scope = normalizeScope(scriptRoot.scope)
+        const isDetach = updateMode.mode === 'detach'
+        const detachTarget =
+          updateMode?.targetBlueprint && typeof updateMode.targetBlueprint.id === 'string'
+            ? updateMode.targetBlueprint
+            : null
+        const targetBlueprint = (isDetach ? detachTarget : null) || scriptRoot
+        const scope = normalizeScope(targetBlueprint?.scope) || normalizeScope(scriptRoot?.scope)
         if (!scope) {
           setError('Script scope metadata is missing.')
           return false
@@ -1855,18 +1881,19 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
           scope,
         })
         lockToken = result?.token || world.admin.deployLockToken
-        const nextVersion = rootVersion + 1
+        const nextVersion = (targetBlueprint?.version || 0) + 1
         const change = {
-          id: scriptRoot.id,
+          id: targetBlueprint.id,
           version: nextVersion,
           ...scriptUpdate,
+          ...(isDetach ? { scriptRef: null } : {}),
         }
         world.blueprints.modify(change)
         world.admin.blueprintModify(change, {
           ignoreNetworkId: world.network.id,
           lockToken,
         })
-        if (updateMode.group?.items?.length) {
+        if (!isDetach && updateMode.group?.items?.length) {
           for (const sibling of updateMode.group.items) {
             if (!sibling?.id || sibling.id === scriptRoot.id) continue
             const siblingChange = {
@@ -1932,7 +1959,6 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
       scriptRoot,
       scriptFiles,
       entryPath,
-      rootVersion,
       world,
       saving,
       resolveScriptUpdateMode,
@@ -2143,6 +2169,16 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
           padding: 0.75rem;
           overflow-y: auto;
         }
+        .script-files-tree.collapsed {
+          width: 1.2rem;
+          padding: 0.4rem 0.2rem;
+        }
+        .script-files-tree.collapsed .script-files-heading-row {
+          justify-content: center;
+        }
+        .script-files-tree.collapsed .script-files-heading {
+          display: none;
+        }
         .script-files-heading {
           font-size: 0.75rem;
           text-transform: uppercase;
@@ -2161,18 +2197,29 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
           display: flex;
           align-items: center;
           gap: 0.35rem;
+          margin-bottom: 0.5rem;
+        }
+        .script-files-toggle {
+          width: auto;
+          min-width: 1.2rem;
+          height: 0.9rem;
+          padding: 0 0.2rem;
+          border-radius: 0.2rem;
+          border-color: rgba(255, 255, 255, 0.25);
+          font-size: 0.5rem;
+          letter-spacing: 0;
         }
         .script-files-add {
-          height: 1.4rem;
-          padding: 0 0.6rem;
+          height: 1.2rem;
+          padding: 0 0.45rem;
           display: flex;
           align-items: center;
           justify-content: center;
-          border-radius: 999px;
+          border-radius: 0.2rem;
           border: 1px solid rgba(255, 255, 255, 0.15);
           background: transparent;
           color: rgba(255, 255, 255, 0.75);
-          font-size: 0.6rem;
+          font-size: 0.5rem;
           text-transform: uppercase;
           letter-spacing: 0.08em;
           &:hover {
@@ -2467,6 +2514,8 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
         onDeleteSelectedFile={deleteSelectedFile}
         onMoveSelectedToShared={moveSelectedToShared}
         onSelectPath={path => setSelectedPath(path)}
+        treeCollapsed={treeCollapsed}
+        onToggleTree={() => setTreeCollapsed(current => !current)}
         editorReady={editorReady}
         saving={saving}
         aiLocked={aiLocked}

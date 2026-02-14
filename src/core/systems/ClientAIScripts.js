@@ -1,16 +1,10 @@
 import { System } from './System'
 import { uuid } from '../utils'
 import { isValidScriptPath } from '../blueprintValidation'
+import { getBlueprintAppName } from '../blueprintUtils'
 
 function hasScriptFiles(blueprint) {
   return blueprint?.scriptFiles && typeof blueprint.scriptFiles === 'object' && !Array.isArray(blueprint.scriptFiles)
-}
-
-function getBlueprintAppName(id) {
-  if (typeof id !== 'string' || !id) return ''
-  if (id === '$scene') return '$scene'
-  const idx = id.indexOf('__')
-  return idx === -1 ? id : id.slice(0, idx)
 }
 
 function resolveScriptRootBlueprint(blueprint, world) {

@@ -6,6 +6,7 @@ import { css } from '@firebolt-dev/css'
 
 import { createClientWorld } from '../core/createClientWorld'
 import { CoreUI } from './components/CoreUI'
+import { EditorLayout } from './components/editor/EditorLayout'
 
 export { System } from '../core/systems/System'
 
@@ -86,9 +87,12 @@ export function Client({ wsUrl, apiUrl, authUrl, connectionStatus, onSetup }) {
         height: 100vh;
         height: 100dvh;
         .App__viewport {
-          position: absolute;
-          inset: 0;
+          position: relative;
           overflow: hidden;
+          min-width: 0;
+          min-height: 0;
+          width: 100%;
+          height: 100%;
         }
         .App__cssLayer {
           position: absolute;
@@ -99,18 +103,20 @@ export function Client({ wsUrl, apiUrl, authUrl, connectionStatus, onSetup }) {
         .App__ui {
           position: absolute;
           inset: 0;
-          z-index: 2;
+          z-index: 10;
           pointer-events: none;
           user-select: none;
           display: ${ui.visible ? 'block' : 'none'};
         }
       `}
     >
-      <div className='App__viewport' ref={viewportRef}>
-        <div className='App__cssLayer' ref={cssLayerRef} />
-        <div className='App__ui' ref={uiRef}>
-          <CoreUI world={world} connectionStatus={connectionStatus} />
+      <EditorLayout world={world} ui={ui}>
+        <div className='App__viewport' ref={viewportRef}>
+          <div className='App__cssLayer' ref={cssLayerRef} />
         </div>
+      </EditorLayout>
+      <div className='App__ui' ref={uiRef}>
+        <CoreUI world={world} connectionStatus={connectionStatus} />
       </div>
     </div>
   )

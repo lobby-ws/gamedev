@@ -83,6 +83,8 @@ function deriveAdminUrlFromRequest(req) {
   let proto = headers['x-forwarded-proto']
   if (Array.isArray(proto)) proto = proto[0]
   if (proto) proto = String(proto).split(',')[0].trim()
+  if (proto === 'wss') proto = 'https'
+  if (proto === 'ws') proto = 'http'
   if (!proto && req?.protocol) proto = req.protocol
   if (!proto) proto = 'https'
 
@@ -235,6 +237,7 @@ export class ServerNetwork extends System {
     this.dirtyApps = new Set()
     this.isServer = true
     this.queue = []
+    this.logSubscribers = new Set()
     this.authMode = 'standalone'
     this.usesLobbyIdentity = false
     this.worldServiceClient = null
@@ -303,6 +306,16 @@ export class ServerNetwork extends System {
     } catch (err) {
       console.error(err)
     }
+    // broadcast server logs to subscribed clients
+    this.world.logs?.on('entry', entry => {
+      if (entry.source === 'server' && this.logSubscribers.size > 0) {
+        const packet = writePacket('serverLog', { level: entry.level, args: entry.args, timestamp: entry.timestamp })
+        for (const socketId of this.logSubscribers) {
+          const socket = this.sockets.get(socketId)
+          socket?.sendPacket(packet)
+        }
+      }
+    })
     // watch settings changes
     this.world.settings.on('change', this.saveSettings)
     // queue first save
@@ -1344,6 +1357,28 @@ export class ServerNetwork extends System {
     this.sendTo(data.networkId, 'playerSessionAvatar', data.avatar)
   }
 
+  onPlayerAvatar = async (socket, data) => {
+    const player = socket.player
+    if (!player) return
+    await this.applyEntityModified(
+      { id: player.data.id, avatar: data.avatar, sessionAvatar: null },
+      { ignoreNetworkId: socket.id }
+    )
+  }
+
+  onSubscribeLogs = (socket) => {
+    if (!socket.player?.isBuilder()) return
+    this.logSubscribers.add(socket.id)
+    const history = this.world.logs?.entries || []
+    if (history.length > 0) {
+      socket.send('serverLogHistory', history.map(e => ({ level: e.level, args: e.args, timestamp: e.timestamp })))
+    }
+  }
+
+  onUnsubscribeLogs = (socket) => {
+    this.logSubscribers.delete(socket.id)
+  }
+
   onPing = (socket, time) => {
     socket.send('pong', time)
   }
@@ -1364,6 +1399,7 @@ export class ServerNetwork extends System {
   }
 
   onDisconnect = (socket, code) => {
+    this.logSubscribers.delete(socket.id)
     this.world.livekit.clearModifiers(socket.id)
     socket.player.destroy(true)
     this.sockets.delete(socket.id)

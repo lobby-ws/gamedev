@@ -1,11 +1,26 @@
-import { isNumber, isString } from 'lodash-es'
+import { isNumber, isString, isPlainObject } from 'lodash-es'
 import { Node } from './Node'
 import * as THREE from '../extras/three'
+
+const MAX_SHADER_LENGTH = 8192
+
+function isValidUniforms(value) {
+  if (!isPlainObject(value)) return false
+  for (const key in value) {
+    const v = value[key]
+    if (isNumber(v)) continue
+    if (Array.isArray(v) && v.length >= 2 && v.length <= 4 && v.every(isNumber)) continue
+    return false
+  }
+  return true
+}
 
 // NOTE: actual defaults bubble up to ClientEnvironment.js
 const defaults = {
   bg: null,
   hdr: null,
+  shader: null,
+  shaderUniforms: null,
   rotationY: null,
   sunDirection: null,
   sunIntensity: null,
@@ -22,6 +37,8 @@ export class Sky extends Node {
 
     this.bg = data.bg
     this.hdr = data.hdr
+    this.shader = data.shader
+    this.shaderUniforms = data.shaderUniforms
     this.rotationY = data.rotationY
     this.sunDirection = data.sunDirection
     this.sunIntensity = data.sunIntensity
@@ -51,6 +68,8 @@ export class Sky extends Node {
     super.copy(source, recursive)
     this._bg = source._bg
     this._hdr = source._hdr
+    this._shader = source._shader
+    this._shaderUniforms = source._shaderUniforms
     this._rotationY = source._rotationY
     this._sunDirection = source._sunDirection
     this._sunIntensity = source._sunIntensity
@@ -85,6 +104,36 @@ export class Sky extends Node {
     }
     if (this._hdr === value) return
     this._hdr = value
+    this.needsRebuild = true
+    this.setDirty()
+  }
+
+  get shader() {
+    return this._shader
+  }
+
+  set shader(value = defaults.shader) {
+    if (value !== null && !isString(value)) {
+      throw new Error('[sky] shader not a string')
+    }
+    if (value !== null && value.length > MAX_SHADER_LENGTH) {
+      throw new Error('[sky] shader exceeds max length')
+    }
+    if (this._shader === value) return
+    this._shader = value
+    this.needsRebuild = true
+    this.setDirty()
+  }
+
+  get shaderUniforms() {
+    return this._shaderUniforms
+  }
+
+  set shaderUniforms(value = defaults.shaderUniforms) {
+    if (value !== null && !isValidUniforms(value)) {
+      throw new Error('[sky] shaderUniforms must be an object of numbers or number arrays (vec2/vec3/vec4)')
+    }
+    this._shaderUniforms = value
     this.needsRebuild = true
     this.setDirty()
   }
@@ -244,6 +293,18 @@ export class Sky extends Node {
         },
         set fogColor(value) {
           self.fogColor = value
+        },
+        get shader() {
+          return self.shader
+        },
+        set shader(value) {
+          self.shader = value
+        },
+        get shaderUniforms() {
+          return self.shaderUniforms
+        },
+        set shaderUniforms(value) {
+          self.shaderUniforms = value
         },
       }
       proxy = Object.defineProperties(proxy, Object.getOwnPropertyDescriptors(super.getProxy())) // inherit Node properties

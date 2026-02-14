@@ -855,6 +855,7 @@ interface Player {
 
   // methods
   teleport(position: Vector3Like, rotationY?: number): void
+  firstPerson(value?: boolean): void
   getBoneTransform(boneName: string): Matrix4 | null
   damage(amount: number): void
   heal(amount: number): void

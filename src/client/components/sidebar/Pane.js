@@ -1,8 +1,5 @@
 import { css } from '@firebolt-dev/css'
-import { useContext } from 'react'
 import { cls } from '../cls'
-import { theme } from '../theme'
-import { HintContext } from '../Hint'
 
 export function Pane({ width = '20rem', hidden, children }) {
   return (
@@ -26,29 +23,6 @@ export function Pane({ width = '20rem', hidden, children }) {
       `}
     >
       <div className='sidebarpane-content'>{children}</div>
-      <Hint />
-    </div>
-  )
-}
-
-function Hint() {
-  const { hint } = useContext(HintContext)
-  if (!hint) return null
-  return (
-    <div
-      className='hint'
-      css={css`
-        margin-top: 0.25rem;
-        background: ${theme.bgPanel};
-        border: 1px solid ${theme.border};
-        backdrop-filter: blur(5px);
-        border-radius: ${theme.radius};
-        min-width: 0;
-        padding: 1rem;
-        font-size: 0.9375rem;
-      `}
-    >
-      <span>{hint}</span>
     </div>
   )
 }

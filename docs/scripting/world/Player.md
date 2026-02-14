@@ -63,6 +63,19 @@ const dir = FORWARD.clone().applyQuaternion(quat).normalize()
 world.getPlayer().push(dir.multiplyScalar(30)) // short forward burst
 ```
 
+### `.firstPerson(value = true)`
+
+Forces the local player into first-person view while `value` is `true`. When set back to `false`, the camera returns to the previous third-person zoom distance that was active when the force began.
+
+Only works on the local player and must be called on the client.
+
+Example:
+```js
+const player = world.getPlayer()
+player.firstPerson(true)
+setTimeout(() => player.firstPerson(false), 1500)
+```
+
 ### `.getBoneTransform(boneName)`: Matrix4
 
 Returns a matrix of the bone transform in world space.
@@ -104,6 +117,12 @@ All options are optional.
 Can only be called on a local player.
 
 Prompts the player to share their screen, and then casts it to all video nodes that have a matching `.screenId` property.
+
+### `.setAvatar(url)`
+
+Sets the player's persistent avatar, saved to the database. Pass `null` to clear and revert to the world default.
+
+Can be called from server scripts on any player, or from client scripts on the local player only.
 
 ### `.setSessionAvatar(url)`
 

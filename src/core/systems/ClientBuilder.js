@@ -12,6 +12,7 @@ import { DEG2RAD, RAD2DEG } from '../extras/general'
 import { createNode } from '../extras/createNode'
 import { importApp } from '../extras/appTools'
 import { buildScriptGroups, getScriptGroupMain } from '../extras/blueprintGroups'
+import { BUILTIN_APP_TEMPLATES } from '../../client/builtinApps'
 
 const FORWARD = new THREE.Vector3(0, 0, -1)
 const SNAP_DISTANCE = 1
@@ -34,10 +35,42 @@ function splitBlueprintId(id) {
   return { prefix: '', base: id || 'blueprint' }
 }
 
+function stripVariantSuffix(base) {
+  if (typeof base !== 'string') return base
+  const match = base.match(/^(.*)_([1-9]\d*)$/)
+  if (!match) return base
+  const stem = match[1]
+  const index = Number.parseInt(match[2], 10)
+  if (!stem || !Number.isFinite(index) || index < 2) return base
+  return stem
+}
+
+function hasVariantFamily(world, prefix, base) {
+  const baseId = `${prefix}${base}`
+  if (world?.blueprints?.get?.(baseId)) return true
+  const items = world?.blueprints?.items
+  if (!Array.isArray(items)) return false
+  const variantPrefix = `${baseId}_`
+  for (const blueprint of items) {
+    const id = typeof blueprint?.id === 'string' ? blueprint.id : ''
+    if (!id.startsWith(variantPrefix)) continue
+    const suffix = id.slice(variantPrefix.length)
+    if (/^[1-9]\d*$/.test(suffix)) return true
+  }
+  return false
+}
+
+function normalizeVariantBase(world, prefix, base) {
+  const safe = typeof base === 'string' && base ? base : 'blueprint'
+  const stripped = stripVariantSuffix(safe)
+  if (stripped === safe) return safe
+  return hasVariantFamily(world, prefix, stripped) ? stripped : safe
+}
+
 function getNextBlueprintVariant(world, sourceBlueprint) {
   const sourceId = typeof sourceBlueprint === 'string' ? sourceBlueprint : sourceBlueprint?.id
   const { prefix, base } = splitBlueprintId(sourceId)
-  let safeBase = base || 'blueprint'
+  let safeBase = normalizeVariantBase(world, prefix, base || 'blueprint')
   if (sourceBlueprint && typeof sourceBlueprint === 'object') {
     const scriptKey = typeof sourceBlueprint.script === 'string' ? sourceBlueprint.script.trim() : ''
     if (scriptKey) {
@@ -46,7 +79,7 @@ function getNextBlueprintVariant(world, sourceBlueprint) {
       const mainName = typeof main?.name === 'string' && main.name.trim() ? main.name.trim() : main?.id
       if (mainName) {
         const { base: mainBase } = splitBlueprintId(mainName)
-        safeBase = mainBase || mainName
+        safeBase = normalizeVariantBase(world, prefix, mainBase || mainName)
       }
     }
   }
@@ -127,6 +160,10 @@ export class ClientBuilder extends System {
     this.file = null
   }
 
+  get isGizmoMode() {
+    return this.mode === 'translate' || this.mode === 'rotate' || this.mode === 'scale'
+  }
+
   async init({ viewport }) {
     this.viewport = viewport
     this.viewport.addEventListener('dragover', this.onDragOver)
@@ -142,7 +179,7 @@ export class ClientBuilder extends System {
     this.control.mouseLeft.onPress = () => {
       // pointer lock requires user-gesture in safari
       // so this can't be done during update cycle
-      if (!this.control.pointer.locked) {
+      if (!this.control.pointer.locked && (!this.isGizmoMode || !this.selected)) {
         this.control.pointer.lock()
         this.justPointerLocked = true
         return true // capture
@@ -324,11 +361,44 @@ export class ClientBuilder extends System {
         : {}
     const props =
       mergedProps && typeof mergedProps === 'object' && !Array.isArray(mergedProps) ? mergedProps : baseProps
-    const nextBlueprint = getNextBlueprintVariant(this.world, sourceBlueprint)
+    let nextId, nextName
+    if (overrides?.skipNamePrompt) {
+      const nextBlueprint = getNextBlueprintVariant(this.world, sourceBlueprint)
+      nextId = nextBlueprint.id
+      nextName = nextBlueprint.name
+    } else {
+      const placeholderName = sourceBlueprint.name || sourceBlueprint.id || 'my_blueprint'
+      const prompted = await this.world.ui.prompt({
+        title: 'Name this blueprint',
+        placeholder: placeholderName,
+        defaultValue: placeholderName,
+        validate: v => {
+          const candidateId = v.replace(/\s+/g, '_').toLowerCase()
+          if (this.world.blueprints.get(candidateId)) return 'A blueprint with that name already exists'
+          return null
+        },
+      })
+      if (!prompted) return null
+      const { prefix } = splitBlueprintId(typeof sourceBlueprint === 'string' ? sourceBlueprint : sourceBlueprint?.id)
+      const sanitized = prompted.replace(/[^a-zA-Z0-9_\- ]/g, '').trim()
+      const baseId = sanitized.replace(/\s+/g, '_').toLowerCase()
+      let candidateId = `${prefix}${baseId}`
+      if (this.world.blueprints.get(candidateId)) {
+        for (let n = 2; n < 10000; n++) {
+          const attempt = `${prefix}${baseId}_${n}`
+          if (!this.world.blueprints.get(attempt)) {
+            candidateId = attempt
+            break
+          }
+        }
+      }
+      nextId = candidateId
+      nextName = sanitized
+    }
     const blueprint = {
-      id: nextBlueprint.id,
+      id: nextId,
       version: 0,
-      name: nextBlueprint.name,
+      name: nextName,
       image: sourceBlueprint.image,
       author: sourceBlueprint.author,
       url: sourceBlueprint.url,
@@ -353,7 +423,7 @@ export class ClientBuilder extends System {
       disabled: sourceBlueprint.disabled,
     }
     if (overrides && typeof overrides === 'object' && !Array.isArray(overrides)) {
-      const { id: _id, version: _version, ...rest } = overrides
+      const { id: _id, version: _version, name: _name, skipNamePrompt: _skip, ...rest } = overrides
       Object.assign(blueprint, rest)
     }
     if (hasScriptFields(blueprint) && !normalizeScope(blueprint.scope)) {
@@ -411,6 +481,10 @@ export class ClientBuilder extends System {
     // deselect if dead
     if (this.selected?.destroyed) {
       this.select(null)
+    }
+    // clear UI app if destroyed externally
+    if (this.world.ui.state.app?.destroyed) {
+      this.world.ui.setApp(null)
     }
     // deselect if stolen
     if (this.selected && this.selected?.data.mover !== this.world.network.id) {
@@ -478,7 +552,7 @@ export class ClientBuilder extends System {
     // inspect in pointer-lock
     if (this.beam.active && this.control.mouseRight.pressed) {
       const entity = this.getEntityAtBeam()
-      if (entity?.isApp) {
+      if (entity?.isApp && !entity.blueprint.scene) {
         this.select(null)
         this.control.pointer.unlock()
         this.world.ui.setApp(entity)
@@ -490,9 +564,9 @@ export class ClientBuilder extends System {
       }
     }
     // inspect out of pointer-lock
-    else if (!this.selected && !this.beam.active && this.control.mouseRight.pressed) {
+    else if (!this.beam.active && this.control.mouseRight.pressed) {
       const entity = this.getEntityAtCursor()
-      if (entity?.isApp) {
+      if (entity?.isApp && !entity.blueprint.scene) {
         this.select(null)
         this.control.pointer.unlock()
         this.world.ui.setApp(entity)
@@ -504,8 +578,8 @@ export class ClientBuilder extends System {
       }
     }
     // fork template from instance
-    if (this.control.keyU.pressed && this.beam.active) {
-      const entity = this.selected || this.getEntityAtBeam()
+    if (this.control.keyU.pressed && (this.beam.active || this.isGizmoMode)) {
+      const entity = this.selected || (this.beam.active ? this.getEntityAtBeam() : this.getEntityAtCursor())
       if (entity?.isApp && !entity.blueprint.scene) {
         void (async () => {
           const blueprint = await this.forkTemplateFromEntity(entity, 'Template fork')
@@ -523,8 +597,8 @@ export class ClientBuilder extends System {
       }
     }
     // pin/unpin
-    if (this.control.keyP.pressed && this.beam.active) {
-      const entity = this.selected || this.getEntityAtBeam()
+    if (this.control.keyP.pressed && (this.beam.active || this.isGizmoMode)) {
+      const entity = this.selected || (this.beam.active ? this.getEntityAtBeam() : this.getEntityAtCursor())
       if (entity?.isApp) {
         entity.data.pinned = !entity.data.pinned
         this.world.admin.entityModify(
@@ -589,8 +663,22 @@ export class ClientBuilder extends System {
         else this.select(null)
       }
     }
-    // deselect on pointer unlock
-    if (this.selected && !this.beam.active) {
+    // cursor-based selection in gizmo mode (pointer unlocked)
+    if (
+      this.isGizmoMode &&
+      !this.beam.active &&
+      this.control.mouseLeft.pressed &&
+      !this.gizmoActive
+    ) {
+      const entity = this.getEntityAtCursor()
+      if (entity?.isApp && !entity.data.pinned && !entity.blueprint.scene) {
+        this.select(entity)
+      } else if (this.selected) {
+        this.select(null)
+      }
+    }
+    // deselect on pointer unlock (but not in gizmo mode where pointer is intentionally unlocked)
+    if (this.selected && !this.beam.active && !this.isGizmoMode) {
       this.select(null)
     }
     // duplicate
@@ -600,7 +688,7 @@ export class ClientBuilder extends System {
       duplicate = true
     } else if (
       !this.justPointerLocked &&
-      this.beam.active &&
+      (this.beam.active || this.isGizmoMode) &&
       this.control.keyR.pressed &&
       !this.control.metaLeft.down &&
       !this.control.controlLeft.down
@@ -608,7 +696,7 @@ export class ClientBuilder extends System {
       duplicate = true
     }
     if (duplicate) {
-      const entity = this.selected || this.getEntityAtBeam()
+      const entity = this.selected || (this.beam.active ? this.getEntityAtBeam() : this.getEntityAtCursor())
       if (entity?.isApp && !entity.blueprint.scene) {
         if (entity.blueprint.unique) {
           void (async () => {
@@ -679,6 +767,9 @@ export class ClientBuilder extends System {
           name: 'add-entity',
           data: cloneDeep(entity.data),
         })
+        if (this.world.ui.state.app === entity) {
+          this.world.ui.setApp(null)
+        }
         entity?.destroy(true)
         // Then clear selection without sending mover updates/rebuilds
         this.select(null)
@@ -904,11 +995,13 @@ export class ClientBuilder extends System {
         this.target.quaternion.copy(app.root.quaternion)
         this.target.scale.copy(app.root.scale)
         this.target.limit = PROJECT_MAX
+        this.control.pointer.lock()
       }
     }
-    if (this.mode === 'translate' || this.mode === 'rotate' || this.mode === 'scale') {
+    if (this.isGizmoMode) {
       if (this.selected) {
         this.attachGizmo(this.selected, this.mode)
+        this.control.pointer.unlock()
       }
     }
     this.updateActions()
@@ -945,8 +1038,9 @@ export class ClientBuilder extends System {
         this.control.keyC.capture = false
         this.control.scrollDelta.capture = false
       }
-      if (this.mode === 'translate' || this.mode === 'rotate' || this.mode === 'scale') {
+      if (this.isGizmoMode) {
         this.detachGizmo()
+        this.control.pointer.lock()
       }
     }
     // select new (if any)
@@ -975,8 +1069,9 @@ export class ClientBuilder extends System {
         this.target.scale.copy(app.root.scale)
         this.target.limit = PROJECT_MAX
       }
-      if (this.mode === 'translate' || this.mode === 'rotate' || this.mode === 'scale') {
+      if (this.isGizmoMode) {
         this.attachGizmo(app, this.mode)
+        this.control.pointer.unlock()
       }
     }
     // update actions
@@ -1503,68 +1598,19 @@ export class ClientBuilder extends System {
     const filename = `${hash}.glb`
     // canonical url to this file
     const url = `asset://${filename}`
-    // create a blank module script entry
-    const scriptFile = new File([DEFAULT_MODULE_SCRIPT_SOURCE], DEFAULT_MODULE_SCRIPT_ENTRY, {
-      type: 'text/javascript',
-    })
-    const scriptHash = await hashFile(scriptFile)
-    const scriptUrl = `asset://${scriptHash}.js`
     // cache file locally so this client can insta-load it
     this.world.loader.insert('model', url, file)
-    this.world.loader.insert('script', scriptUrl, scriptFile)
-    // make blueprint
-    const blueprint = {
-      id: uuid(),
-      version: 0,
-      scope: null,
-      name: file.name.split('.')[0],
-      image: null,
-      author: null,
-      url: null,
-      desc: null,
-      model: url,
-      script: scriptUrl,
-      scriptEntry: DEFAULT_MODULE_SCRIPT_ENTRY,
-      scriptFiles: {
-        [DEFAULT_MODULE_SCRIPT_ENTRY]: scriptUrl,
-      },
-      scriptFormat: 'module',
-      scriptRef: null,
-      props: {},
-      preload: false,
-      public: false,
-      locked: false,
+    // fork from the builtin Model template
+    const modelTemplate = BUILTIN_APP_TEMPLATES.find(t => t.name === 'Model')
+    const defaultName = file.name.replace(/\.glb$/i, '')
+    const blueprint = await this.forkTemplateFromBlueprint({ ...modelTemplate, name: defaultName }, 'Build', null, {
       unique: false,
-      scene: false,
-      disabled: false,
-    }
-    if (hasScriptFields(blueprint) && !normalizeScope(blueprint.scope)) {
-      blueprint.scope = blueprint.id
-    }
+      model: url,
+    })
+    if (!blueprint) return
     let app = null
-    let lockToken = null
-    let lockScope = null
     try {
-      if (hasScriptFields(blueprint)) {
-        lockScope = normalizeScope(blueprint.scope)
-        if (!lockScope) {
-          throw new Error('scope_unknown')
-        }
-        const result = await this.world.admin.acquireDeployLock({
-          owner: this.world.network.id,
-          scope: lockScope,
-        })
-        lockToken = result?.token || this.world.admin.deployLockToken
-      }
-      // register blueprint
-      this.world.blueprints.add(blueprint)
-      await this.world.admin.blueprintAdd(blueprint, {
-        ignoreNetworkId: this.world.network.id,
-        lockToken,
-        request: true,
-      })
-      // spawn the app moving
-      // - mover: follows this clients cursor until placed
+      // spawn the app
       // - uploader: other clients see a loading indicator until its fully uploaded
       const data = {
         id: uuid(),
@@ -1581,29 +1627,19 @@ export class ClientBuilder extends System {
       }
       app = this.world.entities.add(data)
       await this.world.admin.entityAdd(data, { ignoreNetworkId: this.world.network.id, request: true })
-      // upload the model + blank module script
-      await Promise.all([this.world.admin.upload(file), this.world.admin.upload(scriptFile)])
+      // upload the model
+      await this.world.admin.upload(file)
       // mark as uploaded so other clients can load it in
       app.onUploaded()
     } catch (err) {
       if (app) {
         app.destroy(true)
       }
-      if (blueprint) {
-        this.world.blueprints.remove(blueprint.id)
-        this.world.admin
-          ?.blueprintRemove?.(blueprint.id)
-          .catch(removeErr => console.error('failed to remove blueprint', removeErr))
-      }
+      this.world.blueprints.remove(blueprint.id)
+      this.world.admin
+        ?.blueprintRemove?.(blueprint.id)
+        .catch(removeErr => console.error('failed to remove blueprint', removeErr))
       this.handleAdminError(err, 'Import failed')
-    } finally {
-      if (lockToken && this.world.admin?.releaseDeployLock) {
-        try {
-          await this.world.admin.releaseDeployLock(lockToken, lockScope)
-        } catch (releaseErr) {
-          console.error('failed to release deploy lock', releaseErr)
-        }
-      }
     }
   }
 

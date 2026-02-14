@@ -12,7 +12,6 @@ import { ControlPriorities } from '../../core/extras/ControlPriorities'
 // import { MenuMain } from './MenuMain'
 // import { MenuApp } from './MenuApp'
 import { ChevronDoubleUpIcon, HandIcon } from './Icons'
-import { Sidebar } from './Sidebar'
 import { MainMenu } from './MainMenu'
 
 export function CoreUI({ world, connectionStatus }) {
@@ -22,6 +21,7 @@ export function CoreUI({ world, connectionStatus }) {
   const [ui, setUI] = useState(world.ui.state)
   const [menu, setMenu] = useState(null)
   const [confirm, setConfirm] = useState(null)
+  const [prompt, setPrompt] = useState(null)
   const [code, setCode] = useState(false)
   const [avatar, setAvatar] = useState(null)
   const [disconnected, setDisconnected] = useState(false)
@@ -34,22 +34,27 @@ export function CoreUI({ world, connectionStatus }) {
     world.on('ui', setUI)
     world.on('menu', setMenu)
     world.on('confirm', setConfirm)
+    world.on('prompt', setPrompt)
     world.on('code', setCode)
     world.on('apps', setApps)
     world.on('avatar', setAvatar)
     world.on('kick', setKicked)
     world.on('disconnect', setDisconnected)
+    const onOpenMenu = () => setMenuOpen(true)
+    world.on('open-menu', onOpenMenu)
     return () => {
       world.off('ready', setReady)
       world.off('player', setPlayer)
       world.off('ui', setUI)
       world.off('menu', setMenu)
       world.off('confirm', setConfirm)
+      world.off('prompt', setPrompt)
       world.off('code', setCode)
       world.off('apps', setApps)
       world.off('avatar', setAvatar)
       world.off('kick', setKicked)
       world.off('disconnect', setDisconnected)
+      world.off('open-menu', onOpenMenu)
     }
   }, [])
 
@@ -92,7 +97,6 @@ export function CoreUI({ world, connectionStatus }) {
       {disconnected && <Disconnected />}
       {!ui.reticleSuppressors && <Reticle world={world} />}
       {<Toast world={world} />}
-      {ready && <Sidebar world={world} ui={ui} onOpenMenu={() => setMenuOpen(true)} />}
       {ready && <MainMenu world={world} open={menuOpen} onClose={() => setMenuOpen(false)} />}
       {ready && <Chat world={world} />}
       {/* {ready && <Side world={world} player={player} menu={menu} />} */}
@@ -103,6 +107,7 @@ export function CoreUI({ world, connectionStatus }) {
       {ready && isTouch && <TouchBtns world={world} />}
       {ready && isTouch && <TouchStick world={world} />}
       {confirm && <Confirm options={confirm} />}
+      {prompt && <Prompt world={world} options={prompt} />}
       <div id='core-ui-portal' />
     </div>
   )
@@ -326,13 +331,16 @@ function Chat({ world }) {
   const inputRef = useRef()
   const [msg, setMsg] = useState('')
   const [active, setActive] = useState(false)
+  const [buildMode, setBuildMode] = useState(false)
   useEffect(() => {
     const onToggle = () => {
       setActive(value => !value)
     }
     world.on('sidebar-chat-toggle', onToggle)
+    world.on('build-mode', setBuildMode)
     return () => {
       world.off('sidebar-chat-toggle', onToggle)
+      world.off('build-mode', setBuildMode)
     }
   }, [])
   useEffect(() => {
@@ -352,11 +360,12 @@ function Chat({ world }) {
   }, [active])
   useEffect(() => {
     if (active) {
-      inputRef.current.focus()
+      inputRef.current?.focus()
     } else {
-      inputRef.current.blur()
+      inputRef.current?.blur()
     }
   }, [active])
+  if (buildMode) return null
   const send = async e => {
     if (world.controls.pointer.locked) {
       setTimeout(() => setActive(false), 10)
@@ -867,39 +876,147 @@ function KickedOverlay({ code }) {
   )
 }
 
+function arcPath(cx, cy, r, startDeg, endDeg) {
+  const s = (startDeg - 90) * Math.PI / 180
+  const e = (endDeg - 90) * Math.PI / 180
+  const x1 = cx + r * Math.cos(s)
+  const y1 = cy + r * Math.sin(s)
+  const x2 = cx + r * Math.cos(e)
+  const y2 = cy + r * Math.sin(e)
+  const large = Math.abs(endDeg - startDeg) > 180 ? 1 : 0
+  return `M${x1},${y1}A${r},${r},0,${large},1,${x2},${y2}`
+}
+
+function ReticleLayer({ layer, cx, cy, spread, defaultColor, buildMode }) {
+  const color = buildMode ? 'rgba(255, 77, 77, 0.6)' : (layer.color || defaultColor)
+  const ol = layer.outlineColor && layer.outlineWidth > 0
+  const s = spread
+  switch (layer.shape) {
+    case 'dot':
+      return (
+        <g opacity={layer.opacity}>
+          {ol && <circle cx={cx} cy={cy} r={layer.radius + layer.outlineWidth} fill={layer.outlineColor} />}
+          <circle cx={cx} cy={cy} r={layer.radius} fill={color} />
+        </g>
+      )
+    case 'circle':
+      return (
+        <g opacity={layer.opacity}>
+          {ol && <circle cx={cx} cy={cy} r={layer.radius + s} fill='none' stroke={layer.outlineColor} strokeWidth={layer.thickness + layer.outlineWidth * 2} />}
+          <circle cx={cx} cy={cy} r={layer.radius + s} fill='none' stroke={color} strokeWidth={layer.thickness} />
+        </g>
+      )
+    case 'line': {
+      const a = layer.angle * Math.PI / 180
+      const gx = Math.sin(a) * (layer.gap + s)
+      const gy = -Math.cos(a) * (layer.gap + s)
+      const lx = Math.sin(a) * (layer.gap + layer.length + s)
+      const ly = -Math.cos(a) * (layer.gap + layer.length + s)
+      return (
+        <g opacity={layer.opacity}>
+          {ol && <line x1={cx + gx} y1={cy + gy} x2={cx + lx} y2={cy + ly} stroke={layer.outlineColor} strokeWidth={layer.thickness + layer.outlineWidth * 2} strokeLinecap='round' />}
+          <line x1={cx + gx} y1={cy + gy} x2={cx + lx} y2={cy + ly} stroke={color} strokeWidth={layer.thickness} strokeLinecap='round' />
+        </g>
+      )
+    }
+    case 'rect': {
+      const hw = layer.width / 2
+      const hh = layer.height / 2
+      return (
+        <g opacity={layer.opacity}>
+          {ol && <rect x={cx - hw} y={cy - hh} width={layer.width} height={layer.height} rx={layer.rx} fill='none' stroke={layer.outlineColor} strokeWidth={layer.thickness + layer.outlineWidth * 2} />}
+          <rect x={cx - hw} y={cy - hh} width={layer.width} height={layer.height} rx={layer.rx} fill='none' stroke={color} strokeWidth={layer.thickness} />
+        </g>
+      )
+    }
+    case 'arc': {
+      const d = arcPath(cx, cy, layer.radius + s, layer.startAngle, layer.endAngle)
+      return (
+        <g opacity={layer.opacity}>
+          {ol && <path d={d} fill='none' stroke={layer.outlineColor} strokeWidth={layer.thickness + layer.outlineWidth * 2} strokeLinecap='round' />}
+          <path d={d} fill='none' stroke={color} strokeWidth={layer.thickness} strokeLinecap='round' />
+        </g>
+      )
+    }
+    default:
+      return null
+  }
+}
+
+const DEFAULT_RETICLE_SIZE = 10
+
+function ReticleSVG({ reticle, buildMode }) {
+  if (!reticle || !reticle.layers.length) {
+    const size = DEFAULT_RETICLE_SIZE
+    const half = size / 2
+    const color = buildMode ? 'rgba(255, 77, 77, 0.6)' : 'rgba(255, 255, 255, 0.5)'
+    const svgSize = size + 8
+    const c = svgSize / 2
+    return (
+      <svg width={svgSize} height={svgSize}>
+        <rect x={c - half} y={c - half} width={size} height={size} rx={2} fill='none' stroke={color} strokeWidth={1.5} />
+      </svg>
+    )
+  }
+  const svgSize = 148
+  const cx = svgSize / 2
+  const cy = svgSize / 2
+  return (
+    <svg width={svgSize} height={svgSize} style={{ opacity: reticle.opacity }}>
+      {reticle.layers.map((layer, i) => (
+        <ReticleLayer key={i} layer={layer} cx={cx} cy={cy} spread={reticle.spread} defaultColor={reticle.color} buildMode={buildMode} />
+      ))}
+    </svg>
+  )
+}
+
 function Reticle({ world }) {
   const [pointerLocked, setPointerLocked] = useState(world.controls.pointer.locked)
   const [buildMode, setBuildMode] = useState(world.builder.enabled)
+  const [reticle, setReticle] = useState(() => world.ui.state.reticle)
+  const [rect, setRect] = useState(() => {
+    const vp = world.graphics?.viewport
+    if (vp) {
+      const r = vp.getBoundingClientRect()
+      return { top: r.top, left: r.left, width: r.width, height: r.height }
+    }
+    return null
+  })
   useEffect(() => {
     world.on('pointer-lock', setPointerLocked)
     world.on('build-mode', setBuildMode)
+    world.on('reticle', setReticle)
+    const updateRect = () => {
+      const vp = world.graphics?.viewport
+      if (!vp) return
+      const r = vp.getBoundingClientRect()
+      setRect({ top: r.top, left: r.left, width: r.width, height: r.height })
+    }
+    world.graphics?.on('resize', updateRect)
     return () => {
       world.off('pointer-lock', setPointerLocked)
       world.off('build-mode', setBuildMode)
+      world.off('reticle', setReticle)
+      world.graphics?.off('resize', updateRect)
     }
   }, [])
   const visible = isTouch ? true : pointerLocked
   if (!visible) return null
+  const style = rect
+    ? { position: 'absolute', top: rect.top, left: rect.left, width: rect.width, height: rect.height }
+    : { position: 'absolute', inset: 0 }
   return (
     <div
       className='reticle'
       css={css`
-        position: absolute;
-        inset: 0;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 1rem;
-        .reticle-item {
-          width: 0.6rem;
-          height: 0.6rem;
-          border: 1.5px solid ${buildMode ? 'rgba(255, 77, 77, 0.6)' : 'rgba(255, 255, 255, 0.5)'};
-          border-radius: 2px;
-          filter: drop-shadow(0 0 3px rgba(255, 255, 255, 0.15));
-        }
+        pointer-events: none;
       `}
+      style={style}
     >
-      <div className='reticle-item' />
+      <ReticleSVG reticle={reticle} buildMode={buildMode} />
     </div>
   )
 }
@@ -1223,6 +1340,149 @@ function Confirm({ options }) {
             <span>{options.confirmText || 'Okay'}</span>
           </div>
           <div className='confirm-action' onClick={options.cancel}>
+            <span>{options.cancelText || 'Cancel'}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Prompt({ world, options }) {
+  const inputRef = useRef()
+  const [value, setValue] = useState(options.defaultValue || '')
+  const [error, setError] = useState(null)
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
+  const handleSubmit = () => {
+    const trimmed = value.trim()
+    if (!trimmed) {
+      setError('Name cannot be empty')
+      return
+    }
+    if (options.validate) {
+      const err = options.validate(trimmed)
+      if (err) {
+        setError(err)
+        return
+      }
+    }
+    options.submit(trimmed)
+  }
+  const handleKeyDown = e => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      handleSubmit()
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      options.cancel()
+    }
+  }
+  return (
+    <div
+      className='prompt'
+      css={css`
+        position: absolute;
+        inset: 0;
+        padding: 1rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 999;
+        .prompt-dialog {
+          pointer-events: auto;
+          background: rgba(11, 10, 21, 0.9);
+          border: 1px solid rgba(255, 255, 255, 0.05);
+          border-radius: 1.375rem;
+          backdrop-filter: blur(5px);
+          width: 18rem;
+        }
+        .prompt-content {
+          padding: 1.4rem;
+        }
+        .prompt-title {
+          text-align: center;
+          font-size: 1.1rem;
+          font-weight: 500;
+          margin: 0 0 0.7rem;
+        }
+        .prompt-message {
+          text-align: center;
+          color: rgba(255, 255, 255, 0.6);
+          font-size: 0.9375rem;
+          line-height: 1.4;
+          margin: 0 0 0.7rem;
+        }
+        .prompt-input {
+          width: 100%;
+          padding: 0.5rem 0.7rem;
+          background: rgba(255, 255, 255, 0.07);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 0.5rem;
+          color: white;
+          font-size: 0.9375rem;
+          outline: none;
+          &:focus {
+            border-color: rgba(255, 255, 255, 0.25);
+          }
+        }
+        .prompt-error {
+          color: #ff6b6b;
+          font-size: 0.8rem;
+          margin-top: 0.4rem;
+          text-align: center;
+        }
+        .prompt-actions {
+          border-top: 1px solid rgba(255, 255, 255, 0.05);
+          display: flex;
+          align-items: stretch;
+        }
+        .prompt-action {
+          flex: 1;
+          min-height: 2.7rem;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          &.left {
+            border-right: 1px solid rgba(255, 255, 255, 0.05);
+          }
+          > span {
+            font-size: 0.9375rem;
+            color: rgba(255, 255, 255, 0.8);
+          }
+          &:hover {
+            cursor: pointer;
+            > span {
+              color: white;
+            }
+          }
+        }
+      `}
+    >
+      <div className='prompt-dialog'>
+        <div className='prompt-content'>
+          <div className='prompt-title'>{options.title}</div>
+          {options.message && <div className='prompt-message'>{options.message}</div>}
+          <input
+            ref={inputRef}
+            className='prompt-input'
+            type='text'
+            placeholder={options.placeholder || ''}
+            value={value}
+            onChange={e => {
+              setValue(e.target.value)
+              setError(null)
+            }}
+            onKeyDown={handleKeyDown}
+          />
+          {error && <div className='prompt-error'>{error}</div>}
+        </div>
+        <div className='prompt-actions'>
+          <div className='prompt-action left' onClick={handleSubmit}>
+            <span>{options.submitText || 'Submit'}</span>
+          </div>
+          <div className='prompt-action' onClick={options.cancel}>
             <span>{options.cancelText || 'Cancel'}</span>
           </div>
         </div>

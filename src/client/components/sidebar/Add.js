@@ -1,6 +1,6 @@
 import { css } from '@firebolt-dev/css'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { CirclePlusIcon, SquareCheckBigIcon, SquareIcon, Trash2Icon } from 'lucide-react'
+import { CirclePlusIcon, SearchIcon, Trash2Icon } from 'lucide-react'
 import { cls } from '../cls'
 import { theme } from '../theme'
 import { sortBy } from 'lodash-es'
@@ -26,10 +26,10 @@ function normalizeBlueprintName(value) {
 }
 
 export function Add({ world, hidden }) {
-  const span = 4
+  const span = 2
   const gap = '0.5rem'
+  const [search, setSearch] = useState('')
   const [trashMode, setTrashMode] = useState(false)
-  const [tab, setTab] = useState('templates')
   const [createOpen, setCreateOpen] = useState(false)
   const [createName, setCreateName] = useState('')
   const [createError, setCreateError] = useState(null)
@@ -37,58 +37,30 @@ export function Add({ world, hidden }) {
   const createNameRef = useRef(null)
   const isBuiltinTemplate = blueprint => blueprint?.__builtinTemplate === true
   const buildTemplates = () => {
-    const items = Array.from(world.blueprints.items.values()).filter(
-      bp => !bp.scene && !LEGACY_BUILTIN_TEMPLATE_IDS.has(bp.id)
-    )
-    const groups = buildScriptGroups(world.blueprints.items)
-    const mainIds = new Set()
-    for (const group of groups.groups.values()) {
-      if (group?.main?.id) mainIds.add(group.main.id)
-    }
-    const mainsOnly = items.filter(bp => {
-      const scriptKey = typeof bp.script === 'string' ? bp.script.trim() : ''
-      if (!scriptKey) return true
-      return mainIds.has(bp.id)
-    })
-    return sortBy([...CLIENT_BUILTIN_TEMPLATES, ...mainsOnly], bp => (bp.name || bp.id || '').toLowerCase())
-  }
-  const buildOrphans = () => {
-    const used = new Set()
-    for (const entity of world.entities.items.values()) {
-      if (entity?.isApp) {
-        used.add(entity.data.blueprint)
-      }
-    }
-    const items = Array.from(world.blueprints.items.values()).filter(
-      bp => !bp.scene && !used.has(bp.id) && bp.keep !== true
-    )
-    return sortBy(items, bp => (bp.name || bp.id || '').toLowerCase())
+    return sortBy([...CLIENT_BUILTIN_TEMPLATES], bp => (bp.name || bp.id || '').toLowerCase())
   }
   const [templates, setTemplates] = useState(() => buildTemplates())
-  const [orphans, setOrphans] = useState(() => buildOrphans())
-  const [cleaning, setCleaning] = useState(false)
+  const filteredTemplates = search.trim()
+    ? templates.filter(bp => (bp.name || bp.id || '').toLowerCase().includes(search.trim().toLowerCase()))
+    : templates
 
   useEffect(() => {
     const refresh = () => {
       setTemplates(buildTemplates())
-      setOrphans(buildOrphans())
     }
     world.blueprints.on('add', refresh)
     world.blueprints.on('modify', refresh)
     world.blueprints.on('remove', refresh)
-    world.entities.on('added', refresh)
-    world.entities.on('removed', refresh)
     return () => {
       world.blueprints.off('add', refresh)
       world.blueprints.off('modify', refresh)
       world.blueprints.off('remove', refresh)
-      world.entities.off('added', refresh)
-      world.entities.off('removed', refresh)
     }
   }, [])
 
   useEffect(() => {
     if (hidden) {
+      setSearch('')
       setCreateOpen(false)
       setCreating(false)
       setCreateError(null)
@@ -174,11 +146,9 @@ export function Add({ world, hidden }) {
     world.builder.toggle(true)
     world.builder.control.pointer.lock()
     let spawnBlueprint = blueprint
-    if (isBuiltinTemplate(blueprint)) {
-      spawnBlueprint = await world.builder.forkTemplateFromBlueprint(blueprint, 'Add', null, { unique: false })
-      if (!spawnBlueprint) return
-    } else if (blueprint.unique) {
-      spawnBlueprint = await world.builder.forkTemplateFromBlueprint(blueprint, 'Add')
+    if (isBuiltinTemplate(blueprint) || blueprint.unique) {
+      const overrides = isBuiltinTemplate(blueprint) ? { unique: false } : {}
+      spawnBlueprint = await world.builder.forkTemplateFromBlueprint(blueprint, 'Add', null, overrides)
       if (!spawnBlueprint) return
     }
     setTimeout(() => {
@@ -233,34 +203,7 @@ export function Add({ world, hidden }) {
     }
   }
 
-  const toggleKeep = blueprint => {
-    const nextKeep = !blueprint.keep
-    const version = blueprint.version + 1
-    world.blueprints.modify({ id: blueprint.id, version, keep: nextKeep })
-    world.admin.blueprintModify({ id: blueprint.id, version, keep: nextKeep }, { ignoreNetworkId: world.network.id })
-  }
-
-  const runClean = async () => {
-    if (cleaning) return
-    if (world.builder?.ensureAdminReady && !world.builder.ensureAdminReady('Clean now')) return
-    if (!world.admin?.runClean) {
-      world.emit('toast', 'Clean endpoint unavailable')
-      return
-    }
-    setCleaning(true)
-    try {
-      await world.admin.runClean()
-      world.emit('toast', 'Cleanup complete')
-    } catch (err) {
-      console.error(err)
-      world.emit('toast', 'Cleanup failed')
-    } finally {
-      setCleaning(false)
-    }
-  }
-
   const openCreate = () => {
-    if (tab !== 'templates') return
     if (creating) return
     if (createOpen) {
       setCreateOpen(false)
@@ -271,15 +214,6 @@ export function Add({ world, hidden }) {
     setCreateOpen(true)
   }
 
-  const switchTab = next => {
-    setTab(next)
-    if (next !== 'templates') {
-      setTrashMode(false)
-      setCreateOpen(false)
-      setCreateError(null)
-      setCreateName('')
-    }
-  }
 
   return (
     <Pane hidden={hidden}>
@@ -291,15 +225,15 @@ export function Add({ world, hidden }) {
           border-radius: ${theme.radius};
           display: flex;
           flex-direction: column;
-          min-height: 22rem;
-          max-height: 22rem;
+          min-height: 17rem;
+          max-height: 17rem;
           position: relative;
           .add-head {
-            height: 3.125rem;
-            padding: 0 1rem;
+            padding: 0.6rem 1rem;
             border-bottom: 1px solid ${theme.borderLight};
             display: flex;
             align-items: center;
+            gap: 0.5rem;
           }
           .add-title {
             flex: 1;
@@ -307,33 +241,10 @@ export function Add({ world, hidden }) {
             font-size: 1rem;
             line-height: 1;
           }
-          .add-tabs {
-            display: inline-flex;
-            gap: 0.35rem;
-            margin-right: 0.5rem;
-          }
-          .add-tab {
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            background: transparent;
-            color: rgba(255, 255, 255, 0.6);
-            font-size: 0.75rem;
-            padding: 0.25rem 0.65rem;
-            border-radius: ${theme.radiusSmall};
-            &:hover {
-              cursor: pointer;
-              color: white;
-              border-color: rgba(255, 255, 255, 0.35);
-            }
-            &.active {
-              color: white;
-              border-color: rgba(76, 224, 161, 0.65);
-              background: rgba(76, 224, 161, 0.12);
-            }
-          }
           .add-action,
           .add-toggle {
-            width: 2rem;
-            height: 2rem;
+            width: 1.5rem;
+            height: 1.5rem;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -342,6 +253,10 @@ export function Add({ world, hidden }) {
               cursor: pointer;
               color: white;
             }
+            &.hidden {
+              visibility: hidden;
+              pointer-events: none;
+            }
           }
           .add-action.active {
             color: #4ce0a1;
@@ -349,6 +264,23 @@ export function Add({ world, hidden }) {
           .add-toggle {
             &.active {
               color: #ff6b6b;
+            }
+          }
+          .add-search {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            input {
+              margin-left: 0.5rem;
+              flex: 1;
+              font-size: 0.9375rem;
+              &::placeholder {
+                color: #5d6077;
+              }
+              &::selection {
+                background-color: white;
+                color: rgba(0, 0, 0, 0.8);
+              }
             }
           }
           .add-content {
@@ -371,9 +303,11 @@ export function Add({ world, hidden }) {
           }
           .add-item-image {
             width: 100%;
-            aspect-ratio: 1;
+            aspect-ratio: 16 / 10;
             background-color: #1c1d22;
-            background-size: cover;
+            background-size: contain;
+            background-position: center;
+            background-repeat: no-repeat;
             border: 1px solid ${theme.borderLight};
             border-radius: ${theme.radius};
             margin: 0 0 0.4rem;
@@ -384,86 +318,6 @@ export function Add({ world, hidden }) {
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
-          }
-          .add-orphans {
-            display: flex;
-            flex-direction: column;
-            gap: 0.75rem;
-          }
-          .add-orphans-head {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 0.75rem;
-          }
-          .add-orphans-title {
-            font-weight: 500;
-            font-size: 0.9rem;
-          }
-          .add-orphans-clean {
-            border-radius: ${theme.radiusSmall};
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            padding: 0.35rem 0.85rem;
-            font-size: 0.75rem;
-            background: rgba(255, 255, 255, 0.06);
-            color: rgba(255, 255, 255, 0.75);
-            &:hover:not(:disabled) {
-              cursor: pointer;
-              color: white;
-              border-color: rgba(255, 255, 255, 0.35);
-            }
-            &:disabled {
-              opacity: 0.5;
-              cursor: default;
-            }
-          }
-          .add-orphans-list {
-            display: flex;
-            flex-direction: column;
-            gap: 0.5rem;
-          }
-          .add-orphan-row {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 0.75rem;
-            padding: 0.5rem 0.75rem;
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: ${theme.radius};
-            background: rgba(255, 255, 255, 0.03);
-          }
-          .add-orphan-name {
-            flex: 1;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            font-size: 0.85rem;
-          }
-          .add-orphan-toggle {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.35rem;
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            background: transparent;
-            color: rgba(255, 255, 255, 0.65);
-            padding: 0.25rem 0.5rem;
-            border-radius: ${theme.radiusSmall};
-            font-size: 0.75rem;
-            &:hover {
-              cursor: pointer;
-              color: white;
-              border-color: rgba(255, 255, 255, 0.35);
-            }
-            &.active {
-              color: white;
-              border-color: rgba(76, 224, 161, 0.65);
-              background: rgba(76, 224, 161, 0.12);
-            }
-          }
-          .add-orphans-empty {
-            font-size: 0.8rem;
-            color: rgba(255, 255, 255, 0.5);
-            padding: 0.5rem 0.25rem;
           }
           .add-create-overlay {
             position: absolute;
@@ -643,92 +497,47 @@ export function Add({ world, hidden }) {
         `}
       >
         <div className='add-head'>
-          <div className='add-title'>Add</div>
-          <div className='add-tabs'>
-            <button
-              type='button'
-              className={cls('add-tab', { active: tab === 'templates' })}
-              onClick={() => switchTab('templates')}
-            >
-              Templates
-            </button>
-            <button
-              type='button'
-              className={cls('add-tab', { active: tab === 'orphans' })}
-              onClick={() => switchTab('orphans')}
-            >
-              Recycle Bin
-            </button>
+          <label className='add-search'>
+            <SearchIcon size='1.125rem' />
+            <input type='text' placeholder='Search' value={search} onChange={e => setSearch(e.target.value)} />
+          </label>
+          <div
+            className={cls('add-action', { active: createOpen })}
+            onClick={openCreate}
+            title='Create'
+          >
+            <CirclePlusIcon size='1.125rem' />
           </div>
-          {tab === 'templates' && (
-            <>
-              <div className={cls('add-action', { active: createOpen })} onClick={openCreate} title='Create'>
-                <CirclePlusIcon size='1.125rem' />
-              </div>
-              <div className={cls('add-toggle', { active: trashMode })} onClick={() => setTrashMode(!trashMode)}>
-                <Trash2Icon size='1.125rem' />
-              </div>
-            </>
-          )}
+          <div
+            className={cls('add-toggle', { active: trashMode })}
+            onClick={() => setTrashMode(!trashMode)}
+          >
+            <Trash2Icon size='1.125rem' />
+          </div>
         </div>
         <div className='add-content noscrollbar'>
-          {tab === 'templates' ? (
-            <div className='add-items'>
-              {templates.map(blueprint => {
-                const imageUrl = blueprint.image?.url || (typeof blueprint.image === 'string' ? blueprint.image : null)
-                return (
-                  <div
-                    className={cls('add-item', { trash: trashMode && !isBuiltinTemplate(blueprint) })}
-                    key={blueprint.__templateKey || blueprint.id}
-                    onClick={() => handleClick(blueprint)}
-                  >
-                    <div
-                      className='add-item-image'
-                      css={css`
-                        ${imageUrl ? `background-image: url(${world.resolveURL(imageUrl)});` : ''}
-                      `}
-                    ></div>
-                    <div className='add-item-name' title={blueprint.name || blueprint.id}>
-                      {blueprint.name || blueprint.id}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          ) : (
-            <div className='add-orphans'>
-              <div className='add-orphans-head'>
-                <div className='add-orphans-title'>Recycle Bin ({orphans.length})</div>
-                <button
-                  type='button'
-                  className='add-orphans-clean'
-                  onClick={runClean}
-                  disabled={!orphans.length || cleaning}
+          <div className='add-items'>
+            {filteredTemplates.map(blueprint => {
+              const imageUrl = blueprint.image?.url || (typeof blueprint.image === 'string' ? blueprint.image : null)
+              return (
+                <div
+                  className={cls('add-item', { trash: trashMode && !isBuiltinTemplate(blueprint) })}
+                  key={blueprint.__templateKey || blueprint.id}
+                  onClick={() => handleClick(blueprint)}
                 >
-                  {cleaning ? 'Cleaning...' : 'Clean now'}
-                </button>
-              </div>
-              {orphans.length ? (
-                <div className='add-orphans-list'>
-                  {orphans.map(blueprint => (
-                    <div className='add-orphan-row' key={blueprint.id}>
-                      <div className='add-orphan-name'>{blueprint.name || blueprint.id}</div>
-                      <button
-                        type='button'
-                        className={cls('add-orphan-toggle', { active: blueprint.keep })}
-                        onClick={() => toggleKeep(blueprint)}
-                      >
-                        {blueprint.keep ? <SquareCheckBigIcon size='0.85rem' /> : <SquareIcon size='0.85rem' />}
-                        <span>Keep</span>
-                      </button>
-                    </div>
-                  ))}
+                  <div
+                    className='add-item-image'
+                    css={css`
+                      ${imageUrl ? `background-image: url(${world.resolveURL(imageUrl)});` : ''}
+                    `}
+                  ></div>
+                  <div className='add-item-name' title={blueprint.name || blueprint.id}>
+                    {blueprint.name || blueprint.id}
+                  </div>
                 </div>
-              ) : (
-                <div className='add-orphans-empty'>Recycle bin is empty.</div>
-              )}
-            </div>
-          )}
+              )
+            })}
+          </div>
         </div>
         {createOpen && (
           <div className='add-create-overlay' onMouseDown={e => e.stopPropagation()}>

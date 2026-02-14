@@ -35,9 +35,18 @@ export class Scripts extends System {
     this.moduleSourceCache = new Map()
     this.endowments = {
       console: {
-        log: (...args) => console.log(...args),
-        warn: (...args) => console.warn(...args),
-        error: (...args) => console.error(...args),
+        log: (...args) => {
+          console.log(...args)
+          if (this.world.network?.isServer) this.world.logs?.add('server', 'log', args)
+        },
+        warn: (...args) => {
+          console.warn(...args)
+          if (this.world.network?.isServer) this.world.logs?.add('server', 'warn', args)
+        },
+        error: (...args) => {
+          console.error(...args)
+          if (this.world.network?.isServer) this.world.logs?.add('server', 'error', args)
+        },
         time: (...args) => console.time(...args),
         timeEnd: (...args) => console.timeEnd(...args),
       },
@@ -71,6 +80,24 @@ export class Scripts extends System {
       // pause: () => this.world.pause(),
     }
     this.compartment = new Compartment(this.endowments)
+  }
+
+  init() {
+    const onBlueprintChange = (data) => {
+      const id = data?.id
+      if (id) this.invalidateBlueprintCache(id)
+    }
+    this.world.blueprints.on('remove', onBlueprintChange)
+    this.world.blueprints.on('modify', onBlueprintChange)
+  }
+
+  invalidateBlueprintCache(blueprintId) {
+    const prefix = `app://${blueprintId}@`
+    for (const key of this.moduleSourceCache.keys()) {
+      if (key.startsWith(prefix)) {
+        this.moduleSourceCache.delete(key)
+      }
+    }
   }
 
   evaluate(code) {

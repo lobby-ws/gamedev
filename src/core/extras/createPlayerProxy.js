@@ -72,6 +72,17 @@ export function createPlayerProxy(entity, player) {
     getBoneTransform(boneName) {
       return player.avatar?.getBoneTransform?.(boneName)
     },
+    setAvatar(url) {
+      const avatar = url || null
+      if (world.network.isServer) {
+        world.network.applyEntityModified({ id: player.data.id, avatar, sessionAvatar: null })
+      } else if (player.data.owner === world.network.id) {
+        player.modify({ avatar, sessionAvatar: null })
+        world.network.send('playerAvatar', { avatar })
+      } else {
+        console.error('setAvatar can only be called on the local player from client scripts')
+      }
+    },
     setSessionAvatar(url) {
       const avatar = url
       if (player.data.owner === world.network.id) {
@@ -157,6 +168,15 @@ export function createPlayerProxy(entity, player) {
         // if we're the server we need to notify the player
         world.network.sendTo(player.data.owner, 'playerPush', { force })
       }
+    },
+    firstPerson(value = true) {
+      if (!world.network.isClient) {
+        return console.error('firstPerson can only be called on the client')
+      }
+      if (player.data.owner !== world.network.id) {
+        return console.error('firstPerson can only be called on local player')
+      }
+      player.firstPerson(value)
     },
     screenshare(targetId) {
       if (!targetId) {
