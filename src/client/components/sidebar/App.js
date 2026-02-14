@@ -106,8 +106,7 @@ export function App({ world, hidden }) {
   const scriptGroup = scriptGroups.byId.get(blueprint.id) || null
   const variantMain = scriptGroup?.main || blueprint
   const variants = scriptGroup?.items?.length ? scriptGroup.items : [blueprint]
-  const isVariantOrphan = variant =>
-    !variant?.scene && !usedBlueprintIds.has(variant.id) && variant.keep !== true
+  const isVariantOrphan = variant => !variant?.scene && !usedBlueprintIds.has(variant.id) && variant.keep !== true
   const visibleVariants = variants.filter(variant => !isVariantOrphan(variant))
   const frozen = blueprint.frozen
   const resolveModelUpdateMode = async () => {
@@ -118,12 +117,12 @@ export function App({ world, hidden }) {
     }
     const message =
       count > 1
-        ? `This model is shared by ${count} instances. Apply to all or fork this app?`
-        : 'This model is shared by this template. Apply to all or fork this app?'
+        ? `This model is shared by ${count} instances. Apply to this or fork this app?`
+        : 'This model is shared by this template. Apply to this or fork this app?'
     const applyAll = await world.ui.confirm({
       title: 'Apply model change?',
       message,
-      confirmText: 'Apply to all',
+      confirmText: 'Apply to this',
       cancelText: 'Fork',
     })
     return applyAll ? 'all' : 'fork'
@@ -144,13 +143,13 @@ export function App({ world, hidden }) {
         world.emit('toast', 'Builder access required.')
         return
       }
-      const forked = await world.builder.forkTemplateFromBlueprint(blueprint, 'Model fork', null, { model: url, skipNamePrompt: true })
+      const forked = await world.builder.forkTemplateFromBlueprint(blueprint, 'Model fork', null, {
+        model: url,
+        skipNamePrompt: true,
+      })
       if (!forked) return
       app.modify({ blueprint: forked.id })
-      world.admin.entityModify(
-        { id: app.data.id, blueprint: forked.id },
-        { ignoreNetworkId: world.network.id }
-      )
+      world.admin.entityModify({ id: app.data.id, blueprint: forked.id }, { ignoreNetworkId: world.network.id })
       setBlueprint(forked)
       world.emit('toast', 'Model forked')
       return
@@ -677,8 +676,10 @@ function AppModelBtn({ value, onChange, children }) {
 function AppFields({ world, app, blueprint }) {
   const [fields, setFields] = useState(() => app.fields)
   const [templateMode, setTemplateMode] = useState(false)
-  const templateProps = blueprint.props && typeof blueprint.props === 'object' && !isArray(blueprint.props) ? blueprint.props : {}
-  const instanceProps = app.data.props && typeof app.data.props === 'object' && !isArray(app.data.props) ? app.data.props : {}
+  const templateProps =
+    blueprint.props && typeof blueprint.props === 'object' && !isArray(blueprint.props) ? blueprint.props : {}
+  const instanceProps =
+    app.data.props && typeof app.data.props === 'object' && !isArray(app.data.props) ? app.data.props : {}
   const effectiveProps = merge({}, templateProps, instanceProps)
   const activeProps = templateMode ? templateProps : effectiveProps
   useEffect(() => {
@@ -700,7 +701,8 @@ function AppFields({ world, app, blueprint }) {
   const modifyInstance = (key, value) => {
     const currentProps =
       app.data.props && typeof app.data.props === 'object' && !isArray(app.data.props) ? app.data.props : {}
-    const baseProps = blueprint.props && typeof blueprint.props === 'object' && !isArray(blueprint.props) ? blueprint.props : {}
+    const baseProps =
+      blueprint.props && typeof blueprint.props === 'object' && !isArray(blueprint.props) ? blueprint.props : {}
     const nextProps = { ...currentProps }
     if (isEqual(value, baseProps[key])) {
       delete nextProps[key]
