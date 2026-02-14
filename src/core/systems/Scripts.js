@@ -82,6 +82,24 @@ export class Scripts extends System {
     this.compartment = new Compartment(this.endowments)
   }
 
+  init() {
+    const onBlueprintChange = (data) => {
+      const id = data?.id
+      if (id) this.invalidateBlueprintCache(id)
+    }
+    this.world.blueprints.on('remove', onBlueprintChange)
+    this.world.blueprints.on('modify', onBlueprintChange)
+  }
+
+  invalidateBlueprintCache(blueprintId) {
+    const prefix = `app://${blueprintId}@`
+    for (const key of this.moduleSourceCache.keys()) {
+      if (key.startsWith(prefix)) {
+        this.moduleSourceCache.delete(key)
+      }
+    }
+  }
+
   evaluate(code) {
     let value
     const result = {
