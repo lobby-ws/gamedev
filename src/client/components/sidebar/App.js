@@ -2,7 +2,6 @@ import { css } from '@firebolt-dev/css'
 import { useContext, useEffect, useMemo, useState } from 'react'
 import {
   BoxIcon,
-  ChevronsUpDownIcon,
   LoaderPinwheelIcon,
   OctagonXIcon,
   PinIcon,
@@ -41,8 +40,6 @@ const extToType = {
   vrm: 'avatar',
 }
 const allowedModels = ['glb', 'vrm']
-let showTransforms = false
-
 const e1 = new THREE.Euler(0, 0, 0, 'YXZ')
 const q1 = new THREE.Quaternion()
 
@@ -50,16 +47,12 @@ export function App({ world, hidden }) {
   const { setHint } = useContext(HintContext)
   const app = world.ui.state.app
   const [pinned, setPinned] = useState(app.data.pinned)
-  const [transforms, setTransforms] = useState(showTransforms)
   const [blueprint, setBlueprint] = useState(app.blueprint)
-  const [appTab, setAppTab] = useState('settings')
+  const [centerTab, setCenterTab] = useState('props')
   const [mergingId, setMergingId] = useState(null)
   const [addingId, setAddingId] = useState(null)
   const [entityTick, setEntityTick] = useState(0)
   const [variantTick, setVariantTick] = useState(0)
-  useEffect(() => {
-    showTransforms = transforms
-  }, [transforms])
   useEffect(() => {
     window.app = app
   }, [app])
@@ -246,30 +239,6 @@ export function App({ world, hidden }) {
             display: flex;
             align-items: center;
           }
-          .app-tabs {
-            padding: 0.45rem 1rem;
-            display: flex;
-            gap: 0.5rem;
-            border-bottom: 1px solid ${theme.borderLight};
-          }
-          .app-tab {
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            background: transparent;
-            color: rgba(255, 255, 255, 0.6);
-            font-size: 0.75rem;
-            padding: 0.25rem 0.7rem;
-            border-radius: ${theme.radiusSmall};
-            &:hover {
-              cursor: pointer;
-              color: white;
-              border-color: rgba(255, 255, 255, 0.35);
-            }
-            &.active {
-              color: white;
-              border-color: rgba(76, 224, 161, 0.65);
-              background: rgba(76, 224, 161, 0.12);
-            }
-          }
           .app-title {
             flex: 1;
             font-weight: 500;
@@ -298,12 +267,55 @@ export function App({ world, hidden }) {
               opacity: 0.5;
             }
           }
-          .app-toggles {
-            padding: 0.5rem 1.4rem;
-            border-bottom: 1px solid ${theme.borderLight};
+          .app-body {
             display: flex;
-            align-items: center;
-            justify-content: space-between;
+            flex: 1;
+            overflow: hidden;
+          }
+          .app-left {
+            width: 10rem;
+            flex-shrink: 0;
+            overflow-y: auto;
+            border-right: 1px solid ${theme.borderLight};
+          }
+          .app-center {
+            flex: 1;
+            overflow-y: auto;
+          }
+          .app-left-tabs {
+            display: flex;
+            flex-direction: column;
+          }
+          .app-left-tab {
+            border: none;
+            background: transparent;
+            color: rgba(255, 255, 255, 0.45);
+            font-size: 0.75rem;
+            padding: 0.45rem 0.5rem;
+            text-align: left;
+            border-bottom: 1px solid ${theme.borderLight};
+            &:hover {
+              cursor: pointer;
+              color: white;
+              background: rgba(255, 255, 255, 0.03);
+            }
+            &.active {
+              color: white;
+            }
+          }
+          .app-right {
+            width: 14rem;
+            flex-shrink: 0;
+            overflow-y: auto;
+            border-left: 1px solid ${theme.borderLight};
+          }
+          .app-toggles {
+            padding: 0.5rem;
+            border-bottom: 1px solid ${theme.borderLight};
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.25rem;
+            justify-items: center;
           }
           .app-toggle {
             width: 2rem;
@@ -322,32 +334,16 @@ export function App({ world, hidden }) {
               color: #434556;
             }
           }
-          .app-transforms {
-            border-bottom: 1px solid ${theme.borderLight};
-          }
-          .app-transforms-btn {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 0.4rem;
-            &:hover {
-              cursor: pointer;
-            }
-          }
-          .app-content {
-            flex: 1;
-            overflow-y: auto;
-          }
           .app-variants {
             display: flex;
             flex-direction: column;
             gap: 0.5rem;
-            padding: 0.75rem 1rem;
+            padding: 0.75rem 0.5rem;
           }
           .app-variant-row {
             display: flex;
             align-items: center;
-            gap: 0.75rem;
+            gap: 0.5rem;
             padding: 0.45rem 0.6rem;
             border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: ${theme.radiusSmall};
@@ -434,72 +430,69 @@ export function App({ world, hidden }) {
             </div>
           )}
         </div>
-        <div className='app-tabs'>
-          <button
-            type='button'
-            className={cls('app-tab', { active: appTab === 'settings' })}
-            onClick={() => setAppTab('settings')}
-          >
-            Settings
-          </button>
-          <button
-            type='button'
-            className={cls('app-tab', { active: appTab === 'variants' })}
-            onClick={() => setAppTab('variants')}
-          >
-            Variants
-          </button>
-        </div>
-        {appTab === 'settings' && !blueprint.scene && (
-          <div className='app-toggles'>
-            <div
-              className={cls('app-toggle', { active: blueprint.disabled })}
-              onClick={() => toggleKey('disabled')}
-              onPointerEnter={() => setHint('Disable this app so that it is no longer active in the world.')}
-              onPointerLeave={() => setHint(null)}
-            >
-              <OctagonXIcon size='1.125rem' />
-            </div>
-            <div
-              className={cls('app-toggle', { active: pinned })}
-              onClick={() => togglePinned()}
-              onPointerEnter={() => setHint("Pin this app so it can't accidentally be moved.")}
-              onPointerLeave={() => setHint(null)}
-            >
-              <PinIcon size='1.125rem' />
-            </div>
-            <div
-              className={cls('app-toggle', { active: blueprint.preload })}
-              onClick={() => toggleKey('preload')}
-              onPointerEnter={() => setHint('Preload this app before entering the world.')}
-              onPointerLeave={() => setHint(null)}
-            >
-              <LoaderPinwheelIcon size='1.125rem' />
-            </div>
-            <div
-              className={cls('app-toggle', { active: blueprint.unique })}
-              onClick={() => toggleKey('unique')}
-              onPointerEnter={() => setHint('When enabled, duplicates fork this template automatically.')}
-              onPointerLeave={() => setHint(null)}
-            >
-              <SparkleIcon size='1.125rem' />
-            </div>
-          </div>
-        )}
-        <div className='app-content noscrollbar'>
-          {appTab === 'settings' ? (
-            <>
-              {!blueprint.scene && (
-                <div className='app-transforms'>
-                  <div className='app-transforms-btn' onClick={() => setTransforms(!transforms)}>
-                    <ChevronsUpDownIcon size='1rem' />
-                  </div>
-                  {transforms && <AppTransformFields app={app} />}
+        <div className='app-body noscrollbar'>
+          {!blueprint.scene && (
+            <div className='app-left noscrollbar'>
+              <div className='app-toggles'>
+                <div
+                  className={cls('app-toggle', { active: blueprint.disabled })}
+                  onClick={() => toggleKey('disabled')}
+                  onPointerEnter={() => setHint('Disable this app so that it is no longer active in the world.')}
+                  onPointerLeave={() => setHint(null)}
+                >
+                  <OctagonXIcon size='1.125rem' />
                 </div>
-              )}
+                <div
+                  className={cls('app-toggle', { active: pinned })}
+                  onClick={() => togglePinned()}
+                  onPointerEnter={() => setHint("Pin this app so it can't accidentally be moved.")}
+                  onPointerLeave={() => setHint(null)}
+                >
+                  <PinIcon size='1.125rem' />
+                </div>
+                <div
+                  className={cls('app-toggle', { active: blueprint.preload })}
+                  onClick={() => toggleKey('preload')}
+                  onPointerEnter={() => setHint('Preload this app before entering the world.')}
+                  onPointerLeave={() => setHint(null)}
+                >
+                  <LoaderPinwheelIcon size='1.125rem' />
+                </div>
+                <div
+                  className={cls('app-toggle', { active: blueprint.unique })}
+                  onClick={() => toggleKey('unique')}
+                  onPointerEnter={() => setHint('When enabled, duplicates fork this template automatically.')}
+                  onPointerLeave={() => setHint(null)}
+                >
+                  <SparkleIcon size='1.125rem' />
+                </div>
+              </div>
+              <div className='app-left-tabs'>
+                <button
+                  type='button'
+                  className={cls('app-left-tab', { active: centerTab === 'props' })}
+                  onClick={() => setCenterTab('props')}
+                >
+                  Props
+                </button>
+                <button
+                  type='button'
+                  className={cls('app-left-tab', { active: centerTab === 'transforms' })}
+                  onClick={() => setCenterTab('transforms')}
+                >
+                  Transforms
+                </button>
+              </div>
+            </div>
+          )}
+          <div className='app-center noscrollbar'>
+            {centerTab === 'transforms' && !blueprint.scene ? (
+              <AppTransformFields app={app} />
+            ) : (
               <AppFields world={world} app={app} blueprint={blueprint} />
-            </>
-          ) : (
+            )}
+          </div>
+          <div className='app-right noscrollbar'>
             <div className='app-variants'>
               {visibleVariants.length ? (
                 visibleVariants.map(variant => {
@@ -535,7 +528,7 @@ export function App({ world, hidden }) {
                 <div className='app-variant-empty'>No variants found.</div>
               )}
             </div>
-          )}
+          </div>
         </div>
       </div>
     </Pane>
