@@ -59,23 +59,15 @@ function resolveLobbyIdentityIssuer() {
   return null
 }
 
-function resolveLobbyIdentityVerifyUrls(verifyUrl) {
+function resolveLobbyIdentityVerifyUrl(verifyUrl) {
   const explicit = typeof verifyUrl === 'string' ? verifyUrl.trim() : ''
-  if (explicit) return [explicit]
+  if (explicit) return explicit
 
   const base = process.env.PUBLIC_AUTH_URL?.trim()
-  if (!base) return []
+  if (!base) return null
 
   const normalizedBase = base.replace(/\/+$/, '')
-  if (/\/api$/i.test(normalizedBase)) {
-    return [`${normalizedBase}/auth/exchange/verify`]
-  }
-
-  // Support both proxy-style (/api/*) and direct world-service routes.
-  return [
-    `${normalizedBase}/api/auth/exchange/verify`,
-    `${normalizedBase}/auth/exchange/verify`,
-  ]
+  return `${normalizedBase}/auth/exchange/verify`
 }
 
 export function createJWT(data, { worldId } = {}) {
@@ -136,43 +128,37 @@ export function readJWT(token, { worldId } = {}) {
 
 export async function verifyIdentityExchangeTokenWithLobby(token, { verifyUrl, timeoutMs } = {}) {
   if (typeof token !== 'string' || !token.trim()) return null
-  const endpoints = resolveLobbyIdentityVerifyUrls(verifyUrl)
-  if (!endpoints.length) return null
+  const endpoint = resolveLobbyIdentityVerifyUrl(verifyUrl)
+  if (!endpoint) return null
   const resolvedTimeoutMs = parsePositiveInt(timeoutMs, DEFAULT_VERIFY_TIMEOUT_MS)
-  for (const endpoint of endpoints) {
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), resolvedTimeoutMs)
-    try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'application/json',
-        },
-        body: JSON.stringify({ token: token.trim() }),
-        signal: controller.signal,
-      })
-      if (response.status === 404) {
-        continue
-      }
-      if (!response.ok) return null
-      const payload = await response.json().catch(() => null)
-      if (payload?.valid !== true || !payload?.claims || typeof payload.claims !== 'object') {
-        return null
-      }
-      const claims = payload.claims
-      if (claims.typ !== IDENTITY_EXCHANGE_TYP) return null
-      if (claims.aud !== IDENTITY_EXCHANGE_AUDIENCE) return null
-      if (typeof claims.userId !== 'string' || !claims.userId.trim()) return null
-      if (typeof claims.sub !== 'string' || claims.sub !== claims.userId) return null
-      const expectedIssuer = resolveLobbyIdentityIssuer()
-      if (expectedIssuer && claims.iss !== expectedIssuer) return null
-      return claims
-    } catch {
-      continue
-    } finally {
-      clearTimeout(timeoutId)
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), resolvedTimeoutMs)
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json',
+      },
+      body: JSON.stringify({ token: token.trim() }),
+      signal: controller.signal,
+    })
+    if (!response.ok) return null
+    const payload = await response.json().catch(() => null)
+    if (payload?.valid !== true || !payload?.claims || typeof payload.claims !== 'object') {
+      return null
     }
+    const claims = payload.claims
+    if (claims.typ !== IDENTITY_EXCHANGE_TYP) return null
+    if (claims.aud !== IDENTITY_EXCHANGE_AUDIENCE) return null
+    if (typeof claims.userId !== 'string' || !claims.userId.trim()) return null
+    if (typeof claims.sub !== 'string' || claims.sub !== claims.userId) return null
+    const expectedIssuer = resolveLobbyIdentityIssuer()
+    if (expectedIssuer && claims.iss !== expectedIssuer) return null
+    return claims
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timeoutId)
   }
-  return null
 }

@@ -51,13 +51,10 @@ function resolveStandaloneWsUrl(apiUrl) {
   return `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`
 }
 
-function buildAuthEndpointCandidates(authBaseUrl, pathSuffix) {
+function resolveAuthEndpoint(authBaseUrl, pathSuffix) {
   const base = authBaseUrl.replace(/\/+$/, '')
   const suffix = pathSuffix.replace(/^\/+/, '')
-  if (/\/api$/i.test(base)) {
-    return [`${base}/${suffix}`]
-  }
-  return [`${base}/api/${suffix}`, `${base}/${suffix}`]
+  return `${base}/${suffix}`
 }
 
 function createAuthError(message, status, { skipAuth = false } = {}) {
@@ -138,62 +135,49 @@ async function requestWalletAddress(provider) {
 }
 
 async function requestSiweNonce(authBaseUrl, address, { onStatus } = {}) {
-  const endpoints = buildAuthEndpointCandidates(authBaseUrl, 'auth/nonce')
-  for (const endpoint of endpoints) {
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        accept: 'application/json',
-      },
-      body: JSON.stringify({ address }),
-    })
-    if (res.status === 404) {
-      continue
-    }
-    if (!res.ok) {
-      const error = await res.json().catch(() => ({ error: 'Unable to request SIWE nonce' }))
-      throw createAuthError(error.message || error.error || 'Unable to request SIWE nonce', res.status)
-    }
-    const data = await res.json()
-    const nonce = typeof data?.nonce === 'string' ? data.nonce.trim() : ''
-    if (!nonce) {
-      throw createAuthError('Missing SIWE nonce', 401)
-    }
-    onStatus?.('auth', 'Sign-in nonce received...')
-    return nonce
+  const endpoint = resolveAuthEndpoint(authBaseUrl, 'auth/nonce')
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json',
+    },
+    body: JSON.stringify({ address }),
+  })
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ error: 'Unable to request SIWE nonce' }))
+    throw createAuthError(error.message || error.error || 'Unable to request SIWE nonce', res.status)
   }
-  throw createAuthError('Unable to request SIWE nonce', 404)
+  const data = await res.json()
+  const nonce = typeof data?.nonce === 'string' ? data.nonce.trim() : ''
+  if (!nonce) {
+    throw createAuthError('Missing SIWE nonce', 401)
+  }
+  onStatus?.('auth', 'Sign-in nonce received...')
+  return nonce
 }
 
 async function verifySiweMessage(authBaseUrl, message, signature, { onStatus } = {}) {
-  const endpoints = buildAuthEndpointCandidates(authBaseUrl, 'auth/verify')
-  for (const endpoint of endpoints) {
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        accept: 'application/json',
-      },
-      body: JSON.stringify({ message, signature }),
-      credentials: 'include',
-    })
-    if (res.status === 404) {
-      continue
-    }
-    if (!res.ok) {
-      const error = await res.json().catch(() => ({ error: 'Unable to verify SIWE signature' }))
-      const statusError = createAuthError(
-        error.message || error.error || 'Unable to verify SIWE signature',
-        res.status
-      )
-      if (res.status === 401) statusError.skipAuth = true
-      throw statusError
-    }
-    onStatus?.('auth', 'Wallet signature verified...')
-    return
+  const endpoint = resolveAuthEndpoint(authBaseUrl, 'auth/verify')
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json',
+    },
+    body: JSON.stringify({ message, signature }),
+    credentials: 'include',
+  })
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ error: 'Unable to verify SIWE signature' }))
+    const statusError = createAuthError(
+      error.message || error.error || 'Unable to verify SIWE signature',
+      res.status
+    )
+    if (res.status === 401) statusError.skipAuth = true
+    throw statusError
   }
-  throw createAuthError('Unable to verify SIWE signature', 404)
+  onStatus?.('auth', 'Wallet signature verified...')
 }
 
 async function signSiwePayload(provider, address, message, { onStatus } = {}) {
@@ -234,67 +218,49 @@ async function performSiweLoginWithProvider(provider, authBaseUrl, onStatus) {
 }
 
 async function fetchIdentityExchangeToken(authBaseUrl) {
-  const endpoints = buildAuthEndpointCandidates(authBaseUrl, 'auth/exchange')
-  for (const endpoint of endpoints) {
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      credentials: 'include',
-    })
-    if (res.status === 404) {
-      continue
-    }
-    if (!res.ok) {
-      const error = await res.json().catch(() => ({ error: 'Unable to authenticate' }))
-      const err = new Error(error.message || error.error || 'Unable to authenticate')
-      err.status = res.status
-      throw err
-    }
-    const data = await res.json()
-    const token = typeof data?.token === 'string' ? data.token.trim() : ''
-    if (!token) {
-      throw new Error('Missing identity exchange token')
-    }
-    return token
+  const endpoint = resolveAuthEndpoint(authBaseUrl, 'auth/exchange')
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    credentials: 'include',
+  })
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ error: 'Unable to authenticate' }))
+    const err = new Error(error.message || error.error || 'Unable to authenticate')
+    err.status = res.status
+    throw err
   }
-  throw new Error('Unable to authenticate')
+  const data = await res.json()
+  const token = typeof data?.token === 'string' ? data.token.trim() : ''
+  if (!token) {
+    throw new Error('Missing identity exchange token')
+  }
+  return token
 }
 
 async function fetchAuthMe(authBaseUrl) {
-  const endpoints = buildAuthEndpointCandidates(authBaseUrl, 'auth/me')
-  for (const endpoint of endpoints) {
-    const res = await fetch(endpoint, {
-      method: 'GET',
-      credentials: 'include',
-    })
-    if (res.status === 404) {
-      continue
-    }
-    if (!res.ok) {
-      const error = await res.json().catch(() => ({ error: 'Unable to fetch session' }))
-      throw createAuthError(error.message || error.error || 'Unable to fetch session', res.status)
-    }
-    return res.json()
+  const endpoint = resolveAuthEndpoint(authBaseUrl, 'auth/me')
+  const res = await fetch(endpoint, {
+    method: 'GET',
+    credentials: 'include',
+  })
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ error: 'Unable to fetch session' }))
+    throw createAuthError(error.message || error.error || 'Unable to fetch session', res.status)
   }
-  throw createAuthError('Unable to fetch session', 404)
+  return res.json()
 }
 
 async function logoutAuthSession(authBaseUrl) {
-  const endpoints = buildAuthEndpointCandidates(authBaseUrl, 'auth/logout')
-  for (const endpoint of endpoints) {
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      credentials: 'include',
-    })
-    if (res.status === 404) {
-      continue
-    }
-    if (!res.ok) {
-      const error = await res.json().catch(() => ({ error: 'Unable to logout' }))
-      throw createAuthError(error.message || error.error || 'Unable to logout', res.status)
-    }
-    return true
+  const endpoint = resolveAuthEndpoint(authBaseUrl, 'auth/logout')
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    credentials: 'include',
+  })
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ error: 'Unable to logout' }))
+    throw createAuthError(error.message || error.error || 'Unable to logout', res.status)
   }
-  return false
+  return true
 }
 
 function clearRuntimeAuthState() {
