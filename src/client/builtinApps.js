@@ -47,6 +47,30 @@ export const BUILTIN_APP_TEMPLATES = [
     disabled: false,
   },
   {
+    name: 'Mirror',
+    image: {
+      url: 'asset://Model.png',
+    },
+    model: 'asset://Model.glb',
+    script: 'asset://Mirror.js',
+    scriptEntry: 'index.js',
+    scriptFiles: {
+      'index.js': 'asset://Mirror.js',
+    },
+    scriptFormat: 'module',
+    props: {
+      width: 2,
+      height: 2,
+    },
+    preload: false,
+    public: false,
+    locked: false,
+    frozen: false,
+    unique: true,
+    scene: false,
+    disabled: false,
+  },
+  {
     name: 'Spawn',
     image: {
       url: 'asset://Model.png',
