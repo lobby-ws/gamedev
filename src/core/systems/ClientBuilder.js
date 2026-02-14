@@ -552,7 +552,7 @@ export class ClientBuilder extends System {
     // inspect in pointer-lock
     if (this.beam.active && this.control.mouseRight.pressed) {
       const entity = this.getEntityAtBeam()
-      if (entity?.isApp) {
+      if (entity?.isApp && !entity.blueprint.scene) {
         this.select(null)
         this.control.pointer.unlock()
         this.world.ui.setApp(entity)
@@ -566,7 +566,7 @@ export class ClientBuilder extends System {
     // inspect out of pointer-lock
     else if (!this.beam.active && this.control.mouseRight.pressed) {
       const entity = this.getEntityAtCursor()
-      if (entity?.isApp) {
+      if (entity?.isApp && !entity.blueprint.scene) {
         this.select(null)
         this.control.pointer.unlock()
         this.world.ui.setApp(entity)
