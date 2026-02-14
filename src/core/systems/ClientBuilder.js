@@ -448,6 +448,10 @@ export class ClientBuilder extends System {
     if (this.selected?.destroyed) {
       this.select(null)
     }
+    // clear UI app if destroyed externally
+    if (this.world.ui.state.app?.destroyed) {
+      this.world.ui.setApp(null)
+    }
     // deselect if stolen
     if (this.selected && this.selected?.data.mover !== this.world.network.id) {
       this.select(null)
@@ -729,6 +733,9 @@ export class ClientBuilder extends System {
           name: 'add-entity',
           data: cloneDeep(entity.data),
         })
+        if (this.world.ui.state.app === entity) {
+          this.world.ui.setApp(null)
+        }
         entity?.destroy(true)
         // Then clear selection without sending mover updates/rebuilds
         this.select(null)
