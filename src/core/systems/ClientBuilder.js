@@ -35,10 +35,42 @@ function splitBlueprintId(id) {
   return { prefix: '', base: id || 'blueprint' }
 }
 
+function stripVariantSuffix(base) {
+  if (typeof base !== 'string') return base
+  const match = base.match(/^(.*)_([1-9]\d*)$/)
+  if (!match) return base
+  const stem = match[1]
+  const index = Number.parseInt(match[2], 10)
+  if (!stem || !Number.isFinite(index) || index < 2) return base
+  return stem
+}
+
+function hasVariantFamily(world, prefix, base) {
+  const baseId = `${prefix}${base}`
+  if (world?.blueprints?.get?.(baseId)) return true
+  const items = world?.blueprints?.items
+  if (!Array.isArray(items)) return false
+  const variantPrefix = `${baseId}_`
+  for (const blueprint of items) {
+    const id = typeof blueprint?.id === 'string' ? blueprint.id : ''
+    if (!id.startsWith(variantPrefix)) continue
+    const suffix = id.slice(variantPrefix.length)
+    if (/^[1-9]\d*$/.test(suffix)) return true
+  }
+  return false
+}
+
+function normalizeVariantBase(world, prefix, base) {
+  const safe = typeof base === 'string' && base ? base : 'blueprint'
+  const stripped = stripVariantSuffix(safe)
+  if (stripped === safe) return safe
+  return hasVariantFamily(world, prefix, stripped) ? stripped : safe
+}
+
 function getNextBlueprintVariant(world, sourceBlueprint) {
   const sourceId = typeof sourceBlueprint === 'string' ? sourceBlueprint : sourceBlueprint?.id
   const { prefix, base } = splitBlueprintId(sourceId)
-  let safeBase = base || 'blueprint'
+  let safeBase = normalizeVariantBase(world, prefix, base || 'blueprint')
   if (sourceBlueprint && typeof sourceBlueprint === 'object') {
     const scriptKey = typeof sourceBlueprint.script === 'string' ? sourceBlueprint.script.trim() : ''
     if (scriptKey) {
@@ -47,7 +79,7 @@ function getNextBlueprintVariant(world, sourceBlueprint) {
       const mainName = typeof main?.name === 'string' && main.name.trim() ? main.name.trim() : main?.id
       if (mainName) {
         const { base: mainBase } = splitBlueprintId(mainName)
-        safeBase = mainBase || mainName
+        safeBase = normalizeVariantBase(world, prefix, mainBase || mainName)
       }
     }
   }

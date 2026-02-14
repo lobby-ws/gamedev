@@ -1199,10 +1199,13 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
     const groupSize = group?.items?.length || 0
     const targetId = typeof targetBlueprint?.id === 'string' ? targetBlueprint.id : null
     const scriptRootId = typeof scriptRoot?.id === 'string' ? scriptRoot.id : null
-    const shouldFork =
-      !!app &&
-      (groupSize > 1 || (!!targetId && !!scriptRootId && targetId !== scriptRootId))
-    return { mode: shouldFork ? 'fork' : 'group', group, targetBlueprint }
+    if (app && targetId && scriptRootId && targetId !== scriptRootId) {
+      return { mode: 'detach', group, targetBlueprint }
+    }
+    if (app && groupSize > 1) {
+      return { mode: 'fork', group, targetBlueprint }
+    }
+    return { mode: 'group', group, targetBlueprint }
   }, [world, scriptRoot])
 
   const applyScriptUpdate = useCallback(
@@ -1244,7 +1247,13 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
         err.code = 'admin_required'
         throw err
       }
-      const scope = normalizeScope(scriptRoot?.scope)
+      const isDetach = updateMode.mode === 'detach'
+      const detachTarget =
+        updateMode?.targetBlueprint && typeof updateMode.targetBlueprint.id === 'string'
+          ? updateMode.targetBlueprint
+          : null
+      const targetBlueprint = (isDetach ? detachTarget : null) || scriptRoot
+      const scope = normalizeScope(targetBlueprint?.scope) || normalizeScope(scriptRoot?.scope)
       if (!scope) {
         const err = new Error('scope_required')
         err.code = 'scope_required'
@@ -1258,11 +1267,12 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
           scope,
         })
         lockToken = result?.token || world.admin.deployLockToken
-        const nextVersion = rootVersion + 1
+        const nextVersion = (targetBlueprint?.version || 0) + 1
         const change = {
-          id: scriptRoot.id,
+          id: targetBlueprint.id,
           version: nextVersion,
           ...scriptUpdate,
+          ...(isDetach ? { scriptRef: null } : {}),
         }
         await world.admin.blueprintModify(change, {
           ignoreNetworkId: world.network.id,
@@ -1271,7 +1281,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
         })
 
         const siblingChanges = []
-        if (updateMode.group?.items?.length) {
+        if (!isDetach && updateMode.group?.items?.length) {
           for (const sibling of updateMode.group.items) {
             if (!sibling?.id || sibling.id === scriptRoot.id) continue
             const siblingChange = {
@@ -1307,7 +1317,7 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
         }
       }
     },
-    [resolveScriptUpdateMode, world, scriptRoot, rootVersion]
+    [resolveScriptUpdateMode, world, scriptRoot]
   )
   applyScriptUpdateRef.current = applyScriptUpdate
 
@@ -1659,7 +1669,13 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
         setError('Admin connection required.')
         return
       }
-      const scope = normalizeScope(scriptRoot.scope)
+      const isDetach = updateMode.mode === 'detach'
+      const detachTarget =
+        updateMode?.targetBlueprint && typeof updateMode.targetBlueprint.id === 'string'
+          ? updateMode.targetBlueprint
+          : null
+      const targetBlueprint = (isDetach ? detachTarget : null) || scriptRoot
+      const scope = normalizeScope(targetBlueprint?.scope) || normalizeScope(scriptRoot?.scope)
       if (!scope) {
         setError('Script scope metadata is missing.')
         return
@@ -1669,18 +1685,19 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
         scope,
       })
       lockToken = result?.token || world.admin.deployLockToken
-      const nextVersion = rootVersion + 1
+      const nextVersion = (targetBlueprint?.version || 0) + 1
       const change = {
-        id: scriptRoot.id,
+        id: targetBlueprint.id,
         version: nextVersion,
         ...scriptUpdate,
+        ...(isDetach ? { scriptRef: null } : {}),
       }
       world.blueprints.modify(change)
       world.admin.blueprintModify(change, {
         ignoreNetworkId: world.network.id,
         lockToken,
       })
-      if (updateMode.group?.items?.length) {
+      if (!isDetach && updateMode.group?.items?.length) {
         for (const sibling of updateMode.group.items) {
           if (!sibling?.id || sibling.id === scriptRoot.id) continue
           const siblingChange = {
@@ -1735,7 +1752,6 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
     scriptRoot,
     scriptFiles,
     entryPath,
-    rootVersion,
     world,
     getStateStaleReason,
     resolveScriptUpdateMode,
@@ -1849,7 +1865,13 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
           setError('Admin connection required.')
           return false
         }
-        const scope = normalizeScope(scriptRoot.scope)
+        const isDetach = updateMode.mode === 'detach'
+        const detachTarget =
+          updateMode?.targetBlueprint && typeof updateMode.targetBlueprint.id === 'string'
+            ? updateMode.targetBlueprint
+            : null
+        const targetBlueprint = (isDetach ? detachTarget : null) || scriptRoot
+        const scope = normalizeScope(targetBlueprint?.scope) || normalizeScope(scriptRoot?.scope)
         if (!scope) {
           setError('Script scope metadata is missing.')
           return false
@@ -1859,18 +1881,19 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
           scope,
         })
         lockToken = result?.token || world.admin.deployLockToken
-        const nextVersion = rootVersion + 1
+        const nextVersion = (targetBlueprint?.version || 0) + 1
         const change = {
-          id: scriptRoot.id,
+          id: targetBlueprint.id,
           version: nextVersion,
           ...scriptUpdate,
+          ...(isDetach ? { scriptRef: null } : {}),
         }
         world.blueprints.modify(change)
         world.admin.blueprintModify(change, {
           ignoreNetworkId: world.network.id,
           lockToken,
         })
-        if (updateMode.group?.items?.length) {
+        if (!isDetach && updateMode.group?.items?.length) {
           for (const sibling of updateMode.group.items) {
             if (!sibling?.id || sibling.id === scriptRoot.id) continue
             const siblingChange = {
@@ -1936,7 +1959,6 @@ export function ScriptFilesEditor({ world, scriptRoot, onHandle, aiLocked = fals
       scriptRoot,
       scriptFiles,
       entryPath,
-      rootVersion,
       world,
       saving,
       resolveScriptUpdateMode,
