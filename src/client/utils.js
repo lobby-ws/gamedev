@@ -13,6 +13,21 @@ export function cls(...args) {
   return str
 }
 
+function normalizeAssetBase(value) {
+  if (typeof value !== 'string') return ''
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  return trimmed.replace(/\/+$/, '')
+}
+
+export function assetPath(value) {
+  if (typeof value !== 'string' || !value.trim()) return ''
+  const pathname = value.startsWith('/') ? value : `/${value}`
+  const base = normalizeAssetBase(globalThis?.env?.PUBLIC_ASSET_BASE)
+  if (!base) return pathname
+  return `${base}${pathname}`
+}
+
 // export const isTouch = !!navigator.userAgent.match(/OculusBrowser|iPhone|iPad|iPod|Android/i)
 
 // if at least two indicators point to touch, consider it primarily touch-based:

@@ -7,6 +7,8 @@ import { fileURLToPath } from 'url'
 import { polyfillNode } from 'esbuild-plugin-polyfill-node'
 
 const dev = process.argv.includes('--dev')
+const clientOnly = process.argv.includes('--client-only')
+const platformClient = process.argv.includes('--platform-client')
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.join(dirname, '../')
 const buildDir = path.join(rootDir, 'build')
@@ -24,6 +26,12 @@ const clientHtmlSrc = path.join(rootDir, 'src/client/public/index.html')
 const clientHtmlDest = path.join(rootDir, 'build/public/index.html')
 const adminHtmlSrc = path.join(rootDir, 'src/client/public/admin.html')
 const adminHtmlDest = path.join(rootDir, 'build/public/admin.html')
+
+const resolveClientImportPath = value => {
+  if (!platformClient) return value
+  const normalized = (value || '').replace(/^\/+/, '')
+  return `./${normalized}`
+}
 
 {
   const clientCtx = await esbuild.context({
@@ -72,20 +80,23 @@ const adminHtmlDest = path.join(rootDir, 'build/public/admin.html')
             const adminJsPath = outputFiles
               .find(file => file.includes('/admin-') && file.endsWith('.js'))
               .split('build/public')[1]
+            const resolvedJsPath = resolveClientImportPath(jsPath)
+            const resolvedParticlesPath = resolveClientImportPath(particlesPath)
+            const resolvedAdminJsPath = resolveClientImportPath(adminJsPath)
             // write stable aliases to avoid hardcoding hashes in other services
-            await fs.writeFile(path.join(clientBuildDir, 'index.js'), `import '${jsPath}';\n`)
-            await fs.writeFile(path.join(clientBuildDir, 'particles.js'), `import '${particlesPath}';\n`)
-            await fs.writeFile(path.join(clientBuildDir, 'admin.js'), `import '${adminJsPath}';\n`)
+            await fs.writeFile(path.join(clientBuildDir, 'index.js'), `import '${resolvedJsPath}';\n`)
+            await fs.writeFile(path.join(clientBuildDir, 'particles.js'), `import '${resolvedParticlesPath}';\n`)
+            await fs.writeFile(path.join(clientBuildDir, 'admin.js'), `import '${resolvedAdminJsPath}';\n`)
             // inject into html and copy over
             let htmlContent = await fs.readFile(clientHtmlSrc, 'utf-8')
-            htmlContent = htmlContent.replace('{jsPath}', jsPath)
-            htmlContent = htmlContent.replace('{particlesPath}', particlesPath)
+            htmlContent = htmlContent.replace('{jsPath}', resolvedJsPath)
+            htmlContent = htmlContent.replace('{particlesPath}', resolvedParticlesPath)
             htmlContent = htmlContent.replaceAll('{buildId}', Date.now())
             await fs.writeFile(clientHtmlDest, htmlContent)
             if (await fs.pathExists(adminHtmlSrc)) {
               let adminHtml = await fs.readFile(adminHtmlSrc, 'utf-8')
-              adminHtml = adminHtml.replace('{jsPath}', adminJsPath)
-              adminHtml = adminHtml.replace('{particlesPath}', particlesPath)
+              adminHtml = adminHtml.replace('{jsPath}', resolvedAdminJsPath)
+              adminHtml = adminHtml.replace('{particlesPath}', resolvedParticlesPath)
               adminHtml = adminHtml.replaceAll('{buildId}', Date.now())
               await fs.writeFile(adminHtmlDest, adminHtml)
             }
@@ -101,6 +112,12 @@ const adminHtmlDest = path.join(rootDir, 'build/public/admin.html')
   }
   const buildResult = await clientCtx.rebuild()
   fs.writeFileSync(path.join(buildDir, 'meta.json'), JSON.stringify(buildResult.metafile, null, 2))
+  if (!dev) {
+    await clientCtx.dispose()
+  }
+  if (!dev && clientOnly) {
+    process.exit(0)
+  }
 }
 
 /**
@@ -109,7 +126,7 @@ const adminHtmlDest = path.join(rootDir, 'build/public/admin.html')
 
 let spawn
 
-{
+if (!clientOnly) {
   const serverCtx = await esbuild.context({
     entryPoints: ['src/server/index.js'],
     outfile: 'build/index.js',
@@ -166,7 +183,7 @@ let spawn
  * Build Node Client
  */
 
-{
+if (!clientOnly) {
   const nodeClientCtx = await esbuild.context({
     entryPoints: ['src/node-client/index.js'],
     outfile: 'build/world-node-client.js',

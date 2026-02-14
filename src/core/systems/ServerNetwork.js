@@ -3,7 +3,7 @@ import { writePacket } from '../packets'
 import { Socket } from '../Socket'
 import { uuid } from '../utils'
 import { System } from './System'
-import { createJWT, readJWT } from '../utils-server'
+import { createJWT, readJWT, verifyWorldConnectionToken } from '../utils-server'
 import { isNumber } from 'lodash-es'
 import * as THREE from '../extras/three'
 import { Ranks } from '../extras/ranks'
@@ -23,6 +23,39 @@ const SCRIPT_BLUEPRINT_FIELDS = new Set([
 
 const HEALTH_MAX = 100
 const PUBLIC_ADMIN_URL = process.env.PUBLIC_ADMIN_URL || ''
+const WORLD_CONNECTION_AUDIENCE = 'runtime:connect'
+const EXPECTED_GAMESERVER_NAME = process.env.GAMESERVER_NAME || process.env.POD_NAME || null
+
+function parsePositiveInt(value, fallback) {
+  const parsed = Number.parseInt(value || '', 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+const WORLD_SERVICE_HEARTBEAT_INTERVAL_MS = parsePositiveInt(process.env.WORLD_SERVICE_HEARTBEAT_INTERVAL_MS, 15000)
+const WORLD_SERVICE_RETRY_BASE_MS = parsePositiveInt(process.env.WORLD_SERVICE_RETRY_BASE_MS, 400)
+const WORLD_SERVICE_MAX_RETRIES = parsePositiveInt(process.env.WORLD_SERVICE_MAX_RETRIES, 3)
+const WORLD_SERVICE_SERVER_ID =
+  process.env.GAMESERVER_NAME
+  || process.env.POD_NAME
+  || process.env.WORLD_ID
+  || 'runtime'
+const ROLE_TO_RANK = {
+  admin: Ranks.ADMIN,
+  builder: Ranks.BUILDER,
+  visitor: Ranks.VISITOR,
+}
+
+function rankFromWorldRole(role) {
+  if (typeof role !== 'string') return Ranks.VISITOR
+  return ROLE_TO_RANK[role] ?? Ranks.VISITOR
+}
+
+function normalizeUserName(value) {
+  if (typeof value !== 'string') return 'Anonymous'
+  const trimmed = value.trim()
+  if (!trimmed || trimmed.startsWith('anon_')) return 'Anonymous'
+  return trimmed
+}
 
 function normalizeForwardedPrefix(value) {
   if (typeof value !== 'string') return ''
@@ -205,33 +238,37 @@ export class ServerNetwork extends System {
     this.isServer = true
     this.queue = []
     this.logSubscribers = new Set()
+    this.authMode = 'standalone'
+    this.usesLobbyIdentity = false
+    this.worldServiceClient = null
+    this.worldServiceHeartbeatTimerId = null
+    this.worldServiceHeartbeatInFlight = false
   }
 
-  init({ db, deploymentId }) {
+  init({ db, authConfig, worldServiceClient } = {}) {
     this.db = db
-    this.deploymentId = deploymentId
+    this.authMode = authConfig?.authMode || 'standalone'
+    this.usesLobbyIdentity = !!authConfig?.usesLobbyIdentity
+    this.worldServiceClient = worldServiceClient || null
   }
 
   async start() {
     // get spawn
-    const spawnRow = await this.db('config').where({ deployment_id: this.deploymentId, key: 'spawn' }).first()
+    const spawnRow = await this.db('config').where({ key: 'spawn' }).first()
     this.spawn = JSON.parse(spawnRow?.value || defaultSpawn)
     // get worldId
-    const worldIdRow = await this.db('config').where({ deployment_id: this.deploymentId, key: 'worldId' }).first()
-    let worldId = worldIdRow?.value
-    if (!worldId) {
-      worldId = process.env.WORLD_ID || uuid()
-      await this.db('config')
-        .insert({ deployment_id: this.deploymentId, key: 'worldId', value: worldId })
-        .onConflict(['deployment_id', 'key'])
-        .merge({ value: worldId })
+    const envWorldId = process.env.WORLD_ID?.trim()
+    if (!envWorldId) {
+      throw new Error('[envs] WORLD_ID not set')
     }
-    if (process.env.WORLD_ID && process.env.WORLD_ID !== worldId) {
-      throw new Error(`[envs] WORLD_ID mismatch: env=${process.env.WORLD_ID} db=${worldId}`)
+    const worldIdRow = await this.db('config').where({ key: 'worldId' }).first()
+    const dbWorldId = worldIdRow?.value?.trim()
+    if (dbWorldId && dbWorldId !== envWorldId) {
+      throw new Error(`[envs] WORLD_ID mismatch: env=${envWorldId} db=${dbWorldId}`)
     }
-    this.worldId = worldId
+    this.worldId = envWorldId
     // hydrate blueprints
-    const blueprints = await this.db('blueprints').where('deployment_id', this.deploymentId)
+    const blueprints = await this.db('blueprints')
     for (const blueprint of blueprints) {
       const data = JSON.parse(blueprint.data)
       if (blueprint?.createdAt) data.createdAt = blueprint.createdAt
@@ -245,7 +282,7 @@ export class ServerNetwork extends System {
       this.world.blueprints.add(data, true)
     }
     // hydrate entities
-    const entities = await this.db('entities').where('deployment_id', this.deploymentId)
+    const entities = await this.db('entities')
     for (const entity of entities) {
       const data = JSON.parse(entity.data)
       const blueprintScope =
@@ -261,7 +298,7 @@ export class ServerNetwork extends System {
       this.world.entities.add(data, true)
     }
     // hydrate settings
-    let settingsRow = await this.db('config').where({ deployment_id: this.deploymentId, key: 'settings' }).first()
+    let settingsRow = await this.db('config').where({ key: 'settings' }).first()
     try {
       const settings = JSON.parse(settingsRow?.value || '{}')
       this.world.settings.deserialize(settings)
@@ -284,6 +321,12 @@ export class ServerNetwork extends System {
     // queue first save
     if (SAVE_INTERVAL) {
       this.saveTimerId = setTimeout(this.save, SAVE_INTERVAL * 1000)
+    }
+    if (this.authMode === 'platform' && this.worldServiceClient?.heartbeat) {
+      this.worldServiceHeartbeatTimerId = setInterval(() => {
+        void this.flushWorldServiceHeartbeat()
+      }, WORLD_SERVICE_HEARTBEAT_INTERVAL_MS)
+      void this.flushWorldServiceHeartbeat()
     }
   }
 
@@ -392,8 +435,8 @@ export class ServerNetwork extends System {
           data: JSON.stringify(blueprint),
         }
         await this.db('blueprints')
-          .insert({ deployment_id: this.deploymentId, ...record, createdAt, updatedAt: now })
-          .onConflict(['deployment_id', 'id'])
+          .insert({ ...record, createdAt, updatedAt: now })
+          .onConflict('id')
           .merge({ ...record, updatedAt: now })
         counts.upsertedBlueprints++
         this.dirtyBlueprints.delete(id)
@@ -425,8 +468,8 @@ export class ServerNetwork extends System {
             data: JSON.stringify(entity.data),
           }
           await this.db('entities')
-            .insert({ deployment_id: this.deploymentId, ...record, createdAt: now, updatedAt: now })
-            .onConflict(['deployment_id', 'id'])
+            .insert({ ...record, createdAt: now, updatedAt: now })
+            .onConflict('id')
             .merge({ ...record, updatedAt: now })
           counts.upsertedApps++
           this.dirtyApps.delete(id)
@@ -436,7 +479,7 @@ export class ServerNetwork extends System {
         }
       } else {
         // it was removed
-        await this.db('entities').where({ deployment_id: this.deploymentId, id }).delete()
+        await this.db('entities').where({ id }).delete()
         counts.deletedApps++
         this.dirtyApps.delete(id)
       }
@@ -457,14 +500,82 @@ export class ServerNetwork extends System {
     const value = JSON.stringify(data)
     await this.db('config')
       .insert({
-        deployment_id: this.deploymentId,
         key: 'settings',
         value,
       })
-      .onConflict(['deployment_id', 'key'])
+      .onConflict('key')
       .merge({
         value,
       })
+  }
+
+  hasWorldServiceIntegration() {
+    return this.authMode === 'platform' && !!this.worldServiceClient
+  }
+
+  sleep(ms) {
+    return new Promise(resolve => {
+      setTimeout(resolve, ms)
+    })
+  }
+
+  runWorldServiceWithRetry = async (
+    label,
+    operation,
+    { maxRetries = WORLD_SERVICE_MAX_RETRIES, baseDelayMs = WORLD_SERVICE_RETRY_BASE_MS } = {}
+  ) => {
+    if (!this.hasWorldServiceIntegration()) return false
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        await operation()
+        return true
+      } catch (err) {
+        const done = attempt >= maxRetries
+        console.warn('[world-service] request failed', {
+          label,
+          attempt: attempt + 1,
+          maxAttempts: maxRetries + 1,
+          error: err?.message || String(err),
+        })
+        if (done) return false
+        const delayMs = baseDelayMs * 2 ** attempt
+        await this.sleep(delayMs)
+      }
+    }
+    return false
+  }
+
+  notifyWorldServicePlayerJoin(userId) {
+    if (!this.hasWorldServiceIntegration()) return
+    if (!userId || !this.worldServiceClient?.playerJoin) return
+    void this.runWorldServiceWithRetry('player_join', () => this.worldServiceClient.playerJoin(userId))
+  }
+
+  notifyWorldServicePlayerLeave(userId) {
+    if (!this.hasWorldServiceIntegration()) return
+    if (!userId || !this.worldServiceClient?.playerLeave) return
+    void this.runWorldServiceWithRetry('player_leave', () => this.worldServiceClient.playerLeave(userId))
+  }
+
+  flushWorldServiceHeartbeat = async () => {
+    if (!this.hasWorldServiceIntegration()) return
+    if (!this.worldServiceClient?.heartbeat) return
+    if (this.worldServiceHeartbeatInFlight) return
+    this.worldServiceHeartbeatInFlight = true
+    try {
+      await this.runWorldServiceWithRetry(
+        'heartbeat',
+        () =>
+          this.worldServiceClient.heartbeat({
+            playerCount: this.sockets.size,
+            address: process.env.PUBLIC_WS_URL,
+            serverId: WORLD_SERVICE_SERVER_ID,
+          }),
+        { maxRetries: 2 }
+      )
+    } finally {
+      this.worldServiceHeartbeatInFlight = false
+    }
   }
 
   async onConnection(ws, params, req) {
@@ -482,18 +593,131 @@ export class ServerNetwork extends System {
       let authToken = params.authToken
       let name = params.name
       let avatar = params.avatar
+      if (typeof authToken === 'string') {
+        authToken = authToken.trim()
+      } else {
+        authToken = ''
+      }
 
       // get or create user
       let user
-      if (authToken) {
+      let invalidStandaloneToken = false
+      if (this.authMode === 'platform') {
+        const claims = verifyWorldConnectionToken(authToken, {
+          worldId: this.worldId,
+          gameServer: EXPECTED_GAMESERVER_NAME,
+          audience: WORLD_CONNECTION_AUDIENCE,
+        })
+        const userId = claims?.userId
+        if (!userId || typeof userId !== 'string') {
+          const packet = writePacket('kick', 'invalid_auth')
+          ws.send(packet)
+          ws.close()
+          return
+        }
+        if (!this.worldServiceClient?.getUserAccess) {
+          console.error('[auth] platform mode is missing world-service internal client')
+          const packet = writePacket('kick', 'invalid_auth')
+          ws.send(packet)
+          ws.close()
+          return
+        }
+        let worldUser
         try {
-          const { userId } = await readJWT(authToken)
-          user = await this.db('users').where('id', userId).first()
+          worldUser = await this.worldServiceClient.getUserAccess(userId)
         } catch (err) {
+          const status = err?.status
+          const reason =
+            status === 401 || status === 403 || status === 404
+              ? 'invalid_auth'
+              : 'auth_unavailable'
+          console.error('[auth] failed to resolve user from world-service', {
+            userId,
+            status: status || null,
+            error: err?.message || String(err),
+          })
+          const packet = writePacket('kick', reason)
+          ws.send(packet)
+          ws.close()
+          return
+        }
+        if (!worldUser?.access) {
+          const packet = writePacket('kick', 'access_denied')
+          ws.send(packet)
+          ws.close()
+          return
+        }
+        if (!worldUser?.user || worldUser.user.id !== userId) {
+          const packet = writePacket('kick', 'invalid_auth')
+          ws.send(packet)
+          ws.close()
+          return
+        }
+
+        const projectedUser = {
+          id: worldUser.user.id,
+          name: normalizeUserName(worldUser.user.name),
+          avatar: worldUser.user.avatar || null,
+          rank: rankFromWorldRole(worldUser.role),
+          createdAt: moment().toISOString(),
+        }
+        await this.db('users')
+          .insert(projectedUser)
+          .onConflict('id')
+          .merge({
+            name: projectedUser.name,
+            avatar: projectedUser.avatar,
+            rank: projectedUser.rank,
+          })
+        user = await this.db('users').where('id', projectedUser.id).first()
+        if (!user) {
+          user = projectedUser
+        }
+      } else if (authToken) {
+        try {
+          const tokenData = await readJWT(authToken, {
+            worldId: this.usesLobbyIdentity ? this.worldId : undefined,
+          })
+          const userId = tokenData?.userId
+          if (!userId) {
+            throw new Error('invalid_auth_token')
+          }
+          user = await this.db('users').where('id', userId).first()
+          if (!user && this.usesLobbyIdentity) {
+            user = {
+              id: userId,
+              name: 'Anonymous',
+              avatar: null,
+              rank: 0,
+              createdAt: moment().toISOString(),
+            }
+            await this.db('users').insert(user).onConflict('id').ignore()
+          }
+        } catch (err) {
+          invalidStandaloneToken = true
           console.error('failed to read authToken:', authToken)
         }
       }
+      if (!user && this.authMode === 'platform') {
+        const packet = writePacket('kick', 'invalid_auth')
+        ws.send(packet)
+        ws.close()
+        return
+      }
+      if (
+        !user &&
+        this.authMode === 'standalone' &&
+        this.usesLobbyIdentity &&
+        invalidStandaloneToken
+      ) {
+        const packet = writePacket('kick', 'invalid_auth')
+        ws.send(packet)
+        ws.close()
+        return
+      }
       if (!user) {
+        const isStandaloneLobbyGuest =
+          this.authMode === 'standalone' && this.usesLobbyIdentity
         user = {
           id: uuid(),
           name: 'Anonymous',
@@ -501,8 +725,12 @@ export class ServerNetwork extends System {
           rank: 0,
           createdAt: moment().toISOString(),
         }
-        await this.db('users').insert(user)
-        authToken = await createJWT({ userId: user.id })
+        if (!isStandaloneLobbyGuest) {
+          await this.db('users').insert(user)
+          authToken = await createJWT({ userId: user.id, worldId: this.worldId })
+        } else {
+          authToken = null
+        }
       }
 
       // disconnect if user already in this world
@@ -518,6 +746,10 @@ export class ServerNetwork extends System {
 
       // create socket
       const socket = new Socket({ id: user.id, ws, network: this })
+      const playerName =
+        this.authMode === 'platform'
+          ? user.name
+          : name || user.name
 
       // spawn player
       socket.player = this.world.entities.add(
@@ -528,7 +760,7 @@ export class ServerNetwork extends System {
           quaternion: this.spawn.quaternion.slice(),
           owner: socket.id, // deprecated, same as userId
           userId: user.id, // deprecated, same as userId
-          name: name || user.name,
+          name: playerName,
           health: HEALTH_MAX,
           avatar: user.avatar || this.world.settings.avatar?.url || 'asset://avatar.vrm',
           sessionAvatar: avatar || null,
@@ -566,6 +798,8 @@ export class ServerNetwork extends System {
       if (joined) {
         this.emit('playerJoined', joined)
       }
+      this.notifyWorldServicePlayerJoin(socket.id)
+      void this.flushWorldServiceHeartbeat()
     } catch (err) {
       console.error(err)
     }
@@ -584,6 +818,16 @@ export class ServerNetwork extends System {
     const [cmd, arg1, arg2] = args
     // become admin command
     if (cmd === 'admin') {
+      if (this.authMode === 'platform') {
+        socket.send('chatAdded', {
+          id: uuid(),
+          from: null,
+          fromId: null,
+          body: 'Admin code escalation is disabled in platform mode.',
+          createdAt: moment().toISOString(),
+        })
+        return
+      }
       const code = arg1
       if (process.env.ADMIN_CODE && process.env.ADMIN_CODE === code) {
         const id = player.data.id
@@ -812,7 +1056,7 @@ export class ServerNetwork extends System {
     this.world.blueprints.remove(id)
     this.send('blueprintRemoved', { id }, ignoreNetworkId)
     this.dirtyBlueprints.delete(id)
-    await this.db('blueprints').where({ deployment_id: this.deploymentId, id }).delete()
+    await this.db('blueprints').where({ id }).delete()
     this.emit('blueprintRemoved', { id })
     this.emitOperation({
       ...operation,
@@ -989,11 +1233,10 @@ export class ServerNetwork extends System {
     const value = JSON.stringify(this.spawn)
     await this.db('config')
       .insert({
-        deployment_id: this.deploymentId,
         key: 'spawn',
         value,
       })
-      .onConflict(['deployment_id', 'key'])
+      .onConflict('key')
       .merge({
         value,
       })
@@ -1021,11 +1264,10 @@ export class ServerNetwork extends System {
     const value = JSON.stringify(this.spawn)
     await this.db('config')
       .insert({
-        deployment_id: this.deploymentId,
         key: 'spawn',
         value,
       })
-      .onConflict(['deployment_id', 'key'])
+      .onConflict('key')
       .merge({
         value,
       })
@@ -1141,6 +1383,21 @@ export class ServerNetwork extends System {
     socket.send('pong', time)
   }
 
+  destroy() {
+    if (this.socketIntervalId) {
+      clearInterval(this.socketIntervalId)
+      this.socketIntervalId = null
+    }
+    if (this.saveTimerId) {
+      clearTimeout(this.saveTimerId)
+      this.saveTimerId = null
+    }
+    if (this.worldServiceHeartbeatTimerId) {
+      clearInterval(this.worldServiceHeartbeatTimerId)
+      this.worldServiceHeartbeatTimerId = null
+    }
+  }
+
   onDisconnect = (socket, code) => {
     this.logSubscribers.delete(socket.id)
     this.world.livekit.clearModifiers(socket.id)
@@ -1149,6 +1406,8 @@ export class ServerNetwork extends System {
     const playerId = socket.player?.data?.id
     if (playerId) {
       this.emit('playerLeft', { id: playerId })
+      this.notifyWorldServicePlayerLeave(playerId)
     }
+    void this.flushWorldServiceHeartbeat()
   }
 }
