@@ -19,7 +19,6 @@ import { cleaner } from './cleaner'
 import { admin } from './admin'
 import { createRegistryState, getRegistryPublicStatus, registerWithRegistry } from './registry'
 import { resolveAuthRuntimeConfig } from './authModes'
-import { createWorldServiceInternalClient } from './worldServiceClient'
 import { createJWT, verifyIdentityExchangeTokenWithLobby } from '../core/utils-server'
 
 const rootDir = path.join(__dirname, '../')
@@ -104,11 +103,8 @@ if (!process.env.PORT) {
 if (!process.env.JWT_SECRET) {
   throw new Error('[envs] JWT_SECRET not set')
 }
-if (authConfig.isPlatformMode && !process.env.WORLD_SERVICE_API_KEY) {
-  throw new Error('[envs] WORLD_SERVICE_API_KEY must be set when AUTH_MODE=platform')
-}
-if (!process.env.ADMIN_CODE && !authConfig.isPlatformMode) {
-  console.warn('[envs] ADMIN_CODE not set - all users will have admin permissions!')
+if (!process.env.ADMIN_CODE) {
+  console.warn('[envs] ADMIN_CODE not set - admin privileges are open to all players')
 }
 if (!process.env.SAVE_INTERVAL) {
   throw new Error('[envs] SAVE_INTERVAL not set')
@@ -123,21 +119,12 @@ if (process.env.PUBLIC_WS_URL) {
   if (!process.env.PUBLIC_WS_URL.startsWith('ws')) {
     throw new Error('[envs] PUBLIC_WS_URL must start with ws:// or wss://')
   }
-} else if (authConfig.isStandaloneMode) {
+} else {
   const derivedPublicWsUrl = derivePublicWsUrlFromApiUrl(process.env.PUBLIC_API_URL)
   if (!derivedPublicWsUrl) {
     throw new Error('[envs] PUBLIC_WS_URL could not be derived from PUBLIC_API_URL')
   }
   process.env.PUBLIC_WS_URL = derivedPublicWsUrl
-}
-const worldServiceInternalUrl =
-  (typeof process.env.WORLD_SERVICE_INTERNAL_URL === 'string' && process.env.WORLD_SERVICE_INTERNAL_URL.trim()) ||
-  process.env.PUBLIC_API_URL
-if (authConfig.isPlatformMode && !worldServiceInternalUrl) {
-  throw new Error('[envs] WORLD_SERVICE_INTERNAL_URL could not be resolved')
-}
-if (!process.env.WORLD_SERVICE_INTERNAL_URL && worldServiceInternalUrl) {
-  process.env.WORLD_SERVICE_INTERNAL_URL = worldServiceInternalUrl
 }
 if (!process.env.ASSETS) {
   throw new Error(`[envs] ASSETS must be set to 'local' or 's3'`)
@@ -148,13 +135,6 @@ if (!process.env.ASSETS_BASE_URL) {
 if (process.env.ASSETS === 's3' && !process.env.ASSETS_S3_URI) {
   throw new Error(`[envs] ASSETS_S3_URI must be set when using ASSETS=s3`)
 }
-
-const worldServiceClient = authConfig.isPlatformMode
-  ? createWorldServiceInternalClient({
-      baseUrl: worldServiceInternalUrl,
-      apiKey: process.env.WORLD_SERVICE_API_KEY,
-    })
-  : null
 
 const tlsConfig =
   process.env.TLS_CERT_PATH && process.env.TLS_KEY_PATH
@@ -190,14 +170,13 @@ const storage = new Storage(path.join(worldDir, '/storage.json'))
 // create world
 const world = createServerWorld()
 await world.init({
-  assetsDir: assets.dir,
-  assetsUrl: assets.url,
-  db,
-  assets,
-  storage,
-  authConfig,
-  worldServiceClient,
-})
+    assetsDir: assets.dir,
+    assetsUrl: assets.url,
+    db,
+    assets,
+    storage,
+    authConfig,
+  })
 
 const registryState = createRegistryState()
 
@@ -268,9 +247,6 @@ for (const key in process.env) {
     publicEnvs[key] = value
   }
 }
-if (!publicEnvs.PUBLIC_AUTH_MODE) {
-  publicEnvs.PUBLIC_AUTH_MODE = authConfig.authMode
-}
 const envsCode = `
   if (!globalThis.env) globalThis.env = {}
   globalThis.env = ${JSON.stringify(publicEnvs)}
@@ -288,7 +264,7 @@ fastify.get('/api/upload-check', async (req, reply) => {
 })
 
 fastify.post('/api/auth/exchange', async (req, reply) => {
-  if (!authConfig.isStandaloneMode || !authConfig.usesLobbyIdentity) {
+  if (!authConfig.usesLobbyIdentity) {
     return reply.code(404).send({ error: 'not_found' })
   }
 
@@ -297,7 +273,15 @@ fastify.post('/api/auth/exchange', async (req, reply) => {
     return reply.code(400).send({ error: 'invalid_payload', message: 'token is required' })
   }
 
-  const claims = await verifyIdentityExchangeTokenWithLobby(identityToken)
+  const verification = await verifyIdentityExchangeTokenWithLobby(identityToken)
+  if (!verification?.ok) {
+    if (verification?.reason === 'unreachable') {
+      return reply.code(503).send({ error: 'identity_verifier_unreachable' })
+    }
+    return reply.code(401).send({ error: 'invalid_exchange_token' })
+  }
+
+  const claims = verification.claims
   const userId = typeof claims?.userId === 'string' ? claims.userId.trim() : ''
   if (!userId) {
     return reply.code(401).send({ error: 'invalid_exchange_token' })

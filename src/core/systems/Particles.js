@@ -19,7 +19,11 @@ const billboardModeInts = {
 let worker = null
 function getWorker() {
   if (!worker) {
-    worker = new Worker(window.PARTICLES_PATH)
+    try {
+      worker = new Worker(window.PARTICLES_PATH, { type: 'module' })
+    } catch (err) {
+      worker = new Worker(window.PARTICLES_PATH)
+    }
   }
   return worker
 }

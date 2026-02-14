@@ -61,10 +61,9 @@ const worldServiceApiUrl = normalizeUrl(
     || 'https://dev.lobby.ws/api'
 )
 const lobbySessionCookie = process.env.SMOKE_LOBBY_SESSION_COOKIE?.trim() || ''
-const worldSlug = process.env.SMOKE_WORLD_SLUG?.trim() || ''
 const timeoutMs = Number.parseInt(process.env.SMOKE_TIMEOUT_MS || '10000', 10)
 
-async function runStandaloneLocal() {
+async function runLocalIdentity() {
   const health = await requestJson(`${runtimeApiUrl.replace(/\/api$/, '')}/health`, { timeoutMs })
   assert(health.ok, `runtime health failed (${health.status})`)
   assert(health.payload?.ok === true, 'runtime health payload is not ok=true')
@@ -91,7 +90,7 @@ async function requestIdentityExchangeToken() {
   return token
 }
 
-async function runStandaloneLobby() {
+async function runLobbyIdentity() {
   const identityToken = await requestIdentityExchangeToken()
   const exchange = await requestJson(`${runtimeApiUrl}/auth/exchange`, {
     method: 'POST',
@@ -109,36 +108,9 @@ async function runStandaloneLobby() {
   assert(claims?.aud === 'runtime:ws', 'runtime session aud mismatch')
 }
 
-async function runPlatformLobby() {
-  if (!worldSlug) {
-    throw new SkipError('SMOKE_WORLD_SLUG is required')
-  }
-  if (!lobbySessionCookie) {
-    throw new SkipError('SMOKE_LOBBY_SESSION_COOKIE is required')
-  }
-  const join = await requestJson(`${worldServiceApiUrl}/worlds/${encodeURIComponent(worldSlug)}/join`, {
-    method: 'POST',
-    headers: {
-      cookie: `session=${lobbySessionCookie}`,
-    },
-    timeoutMs,
-  })
-  assert(join.ok, `world-service /worlds/:slug/join failed (${join.status})`)
-  const status = join.payload?.status
-  assert(['ready', 'starting', 'provisioning'].includes(status), `unexpected join status: ${status}`)
-  if (status === 'ready') {
-    const token = join.payload?.connection?.token
-    const claims = decodeJwtClaims(token)
-    assert(claims?.typ === 'world_connection', 'world connection typ mismatch')
-    assert(claims?.aud === 'runtime:connect', 'world connection aud mismatch')
-    assert(claims?.worldSlug === worldSlug, 'world connection slug mismatch')
-  }
-}
-
 const checks = [
-  { name: 'standalone + local identity', run: runStandaloneLocal },
-  { name: 'standalone + lobby identity', run: runStandaloneLobby },
-  { name: 'platform + lobby identity', run: runPlatformLobby },
+  { name: 'local identity', run: runLocalIdentity },
+  { name: 'lobby identity', run: runLobbyIdentity },
 ]
 
 const results = []

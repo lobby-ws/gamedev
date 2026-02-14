@@ -20,7 +20,7 @@ import { Script } from './sidebar/Script'
 import { Nodes } from './sidebar/Nodes'
 import { Meta } from './sidebar/Meta'
 
-export function Sidebar({ world, ui, onOpenMenu }) {
+export function Sidebar({ world, ui, onOpenMenu, walletAuth, onConnectWallet, onDisconnectWallet }) {
   const player = world.entities.player
   const { isBuilder } = useRank(world, player)
   const activePane = ui.active ? ui.pane : null
@@ -154,6 +154,8 @@ export function Sidebar({ world, ui, onOpenMenu }) {
       >
         <div className='sidebar-topbar'>
           <LogoBtn onClick={onOpenMenu} />
+          <WalletBtn auth={walletAuth} onClick={onConnectWallet} />
+          <WalletDisconnectBtn auth={walletAuth} onClick={onDisconnectWallet} />
         </div>
         {isBuilder && (
           <div className={cls('sidebar-center', { open })}>
@@ -398,6 +400,103 @@ function LogoBtn({ onClick }) {
       onClick={onClick}
     >
       <img src={assetPath('/logo.png')} />
+    </div>
+  )
+}
+
+function formatWalletAddress(address) {
+  if (!address) return ''
+  return `${address.slice(0, 6)}...${address.slice(-4)}`
+}
+
+function WalletBtn({ auth, onClick }) {
+  if (!auth?.enabled) return null
+  const providerUnavailable = !auth.providerAvailable
+  const providerLoading = auth.mode === 'privy' && providerUnavailable
+  const disabled = auth.pending || auth.connected || providerUnavailable
+  const label = auth.pending
+    ? 'Connecting...'
+    : auth.connected
+      ? formatWalletAddress(auth.address)
+      : providerLoading
+        ? 'Loading Auth...'
+        : providerUnavailable
+        ? 'No Wallet'
+        : 'Connect Wallet'
+  return (
+    <div
+      className={cls('sidebar-wallet', { disabled })}
+      css={css`
+        min-width: 7.5rem;
+        height: 2.75rem;
+        padding: 0 0.75rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        border: 1px solid ${theme.border};
+        border-radius: ${theme.radius};
+        color: rgba(255, 255, 255, 0.9);
+        font-size: 0.75rem;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+        cursor: pointer;
+        user-select: none;
+        &:hover {
+          background: ${theme.bgHover};
+        }
+        &.disabled {
+          cursor: default;
+          color: rgba(255, 255, 255, 0.55);
+          background: transparent;
+        }
+      `}
+      onClick={() => {
+        if (disabled) return
+        onClick?.()
+      }}
+    >
+      {label}
+    </div>
+  )
+}
+
+function WalletDisconnectBtn({ auth, onClick }) {
+  if (!auth?.enabled || !auth.connected) return null
+  const disabled = auth.pending
+  return (
+    <div
+      className={cls('sidebar-wallet-disconnect', { disabled })}
+      css={css`
+        height: 2.75rem;
+        padding: 0 0.75rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        border: 1px solid rgba(255, 125, 125, 0.45);
+        border-radius: ${theme.radius};
+        color: rgba(255, 185, 185, 0.95);
+        font-size: 0.75rem;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+        cursor: pointer;
+        user-select: none;
+        &:hover {
+          background: rgba(255, 90, 90, 0.12);
+        }
+        &.disabled {
+          cursor: default;
+          color: rgba(255, 185, 185, 0.55);
+          background: transparent;
+        }
+      `}
+      onClick={() => {
+        if (disabled) return
+        onClick?.()
+      }}
+    >
+      Disconnect
     </div>
   )
 }

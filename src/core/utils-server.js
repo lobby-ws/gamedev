@@ -21,8 +21,6 @@ export async function hashFile(file) {
  */
 
 const jwtSecret = process.env.JWT_SECRET
-const WORLD_CONNECTION_TYP = 'world_connection'
-const WORLD_CONNECTION_AUDIENCE = 'runtime:connect'
 const RUNTIME_SESSION_TYP = 'runtime_session'
 const RUNTIME_SESSION_AUDIENCE = 'runtime:ws'
 const IDENTITY_EXCHANGE_TYP = 'identity_exchange'
@@ -61,23 +59,15 @@ function resolveLobbyIdentityIssuer() {
   return null
 }
 
-function resolveLobbyIdentityVerifyUrls(verifyUrl) {
+function resolveLobbyIdentityVerifyUrl(verifyUrl) {
   const explicit = typeof verifyUrl === 'string' ? verifyUrl.trim() : ''
-  if (explicit) return [explicit]
+  if (explicit) return explicit
 
   const base = process.env.PUBLIC_AUTH_URL?.trim()
-  if (!base) return []
+  if (!base) return null
 
   const normalizedBase = base.replace(/\/+$/, '')
-  if (/\/api$/i.test(normalizedBase)) {
-    return [`${normalizedBase}/auth/exchange/verify`]
-  }
-
-  // Support both proxy-style (/api/*) and direct world-service routes.
-  return [
-    `${normalizedBase}/api/auth/exchange/verify`,
-    `${normalizedBase}/auth/exchange/verify`,
-  ]
+  return `${normalizedBase}/exchange/verify`
 }
 
 export function createJWT(data, { worldId } = {}) {
@@ -137,70 +127,47 @@ export function readJWT(token, { worldId } = {}) {
 }
 
 export async function verifyIdentityExchangeTokenWithLobby(token, { verifyUrl, timeoutMs } = {}) {
-  if (typeof token !== 'string' || !token.trim()) return null
-  const endpoints = resolveLobbyIdentityVerifyUrls(verifyUrl)
-  if (!endpoints.length) return null
-  const resolvedTimeoutMs = parsePositiveInt(timeoutMs, DEFAULT_VERIFY_TIMEOUT_MS)
-  for (const endpoint of endpoints) {
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), resolvedTimeoutMs)
-    try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'application/json',
-        },
-        body: JSON.stringify({ token: token.trim() }),
-        signal: controller.signal,
-      })
-      if (response.status === 404) {
-        continue
-      }
-      if (!response.ok) return null
-      const payload = await response.json().catch(() => null)
-      if (payload?.valid !== true || !payload?.claims || typeof payload.claims !== 'object') {
-        return null
-      }
-      const claims = payload.claims
-      if (claims.typ !== IDENTITY_EXCHANGE_TYP) return null
-      if (claims.aud !== IDENTITY_EXCHANGE_AUDIENCE) return null
-      if (typeof claims.userId !== 'string' || !claims.userId.trim()) return null
-      if (typeof claims.sub !== 'string' || claims.sub !== claims.userId) return null
-      const expectedIssuer = resolveLobbyIdentityIssuer()
-      if (expectedIssuer && claims.iss !== expectedIssuer) return null
-      return claims
-    } catch {
-      continue
-    } finally {
-      clearTimeout(timeoutId)
-    }
+  if (typeof token !== 'string' || !token.trim()) {
+    return { ok: false, reason: 'invalid' }
   }
-  return null
-}
-
-function resolveWorldConnectionIssuer() {
-  const fromPublicApi = process.env.PUBLIC_API_URL?.trim()
-  if (fromPublicApi) return fromPublicApi.replace(/\/api\/?$/, '')
-  const fromPublicAuth = process.env.PUBLIC_AUTH_URL?.trim()
-  if (fromPublicAuth) return fromPublicAuth
-  return null
-}
-
-export function verifyWorldConnectionToken(token, { worldId, gameServer, audience } = {}) {
-  if (typeof token !== 'string' || !token.trim()) return null
+  const endpoint = resolveLobbyIdentityVerifyUrl(verifyUrl)
+  if (!endpoint) {
+    return { ok: false, reason: 'unreachable' }
+  }
+  const resolvedTimeoutMs = parsePositiveInt(timeoutMs, DEFAULT_VERIFY_TIMEOUT_MS)
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), resolvedTimeoutMs)
   try {
-    const issuer = resolveWorldConnectionIssuer()
-    const claims = jwt.verify(token, jwtSecret, {
-      audience: audience || WORLD_CONNECTION_AUDIENCE,
-      ...(issuer ? { issuer } : {}),
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json',
+      },
+      body: JSON.stringify({ token: token.trim() }),
+      signal: controller.signal,
     })
-    if (!claims || typeof claims !== 'object') return null
-    if (claims.typ !== WORLD_CONNECTION_TYP) return null
-    if (worldId && claims.worldId !== worldId) return null
-    if (gameServer && claims.gameServer !== gameServer) return null
-    return claims
+    if (!response.ok) {
+      if (response.status === 400 || response.status === 401 || response.status === 403 || response.status === 422) {
+        return { ok: false, reason: 'invalid' }
+      }
+      return { ok: false, reason: 'unreachable' }
+    }
+    const payload = await response.json().catch(() => null)
+    if (payload?.valid !== true || !payload?.claims || typeof payload.claims !== 'object') {
+      return { ok: false, reason: 'unreachable' }
+    }
+    const claims = payload.claims
+    if (claims.typ !== IDENTITY_EXCHANGE_TYP) return { ok: false, reason: 'invalid' }
+    if (claims.aud !== IDENTITY_EXCHANGE_AUDIENCE) return { ok: false, reason: 'invalid' }
+    if (typeof claims.userId !== 'string' || !claims.userId.trim()) return { ok: false, reason: 'invalid' }
+    if (typeof claims.sub !== 'string' || claims.sub !== claims.userId) return { ok: false, reason: 'invalid' }
+    const expectedIssuer = resolveLobbyIdentityIssuer()
+    if (expectedIssuer && claims.iss !== expectedIssuer) return { ok: false, reason: 'invalid' }
+    return { ok: true, claims }
   } catch {
-    return null
+    return { ok: false, reason: 'unreachable' }
+  } finally {
+    clearTimeout(timeoutId)
   }
 }
